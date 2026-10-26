@@ -25,7 +25,7 @@ function standardRate(fy) {
   };
 }
 
-const STATE_NAMES = {
+export const STATE_NAMES = {
   AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut',
   DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois',
   IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
@@ -42,7 +42,7 @@ const wordRe = (s) => new RegExp(`(^|[^a-z])${s.replace(/[.*+?^${}()|[\]\\]/g, '
 const covered = (county) => String(county || '').split(/\b(?:less|excluding)\b/i)[0];
 
 // Common cities GSA covers only by county name (the location form doesn't ask for county).
-const CITY_COUNTY = {
+export const CITY_COUNTY = {
   'MD|bethesda': 'Montgomery', 'MD|rockville': 'Montgomery', 'MD|silver spring': 'Montgomery', 'MD|gaithersburg': 'Montgomery',
   'MD|germantown': 'Montgomery', 'MD|chevy chase': 'Montgomery', 'MD|college park': 'Prince George', 'MD|largo': 'Prince George',
   'MD|greenbelt': 'Prince George', 'MD|bowie': 'Prince George', 'MD|laurel': 'Prince George', 'MD|joint base andrews': 'Prince George',

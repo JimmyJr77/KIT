@@ -90,6 +90,9 @@ function flightInput(a, trip) {
     tripType: a.tripType,
     origin: a.origin || placeLabel(trip.location_from),
     destination: a.destination || placeLabel(trip.location_to),
+    // Structured locations let the flight search resolve the right airports.
+    originPlace: a.origin || trip.location_from,
+    destinationPlace: a.destination || trip.location_to,
     departDate: a.departDate || trip.date_from,
     returnDate: a.returnDate || trip.date_to,
     intl: !!(trip.location_from?.intl || trip.location_to?.intl),

@@ -191,11 +191,11 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
                     </div>
                     <div>
                       <label className="label">Origin</label>
-                      <input className="input" placeholder={locationLabel(trip.location_from) || 'City or airport'} value={trip.airfare.origin} onChange={(e) => patchIn('airfare', { origin: e.target.value })} />
+                      <input className="input" placeholder={locationLabel(trip.location_from) || 'City or airport code'} value={trip.airfare.origin} onChange={(e) => patchIn('airfare', { origin: e.target.value })} />
                     </div>
                     <div className="sm:col-span-2">
                       <label className="label">Destination</label>
-                      <input className="input" placeholder={locationLabel(trip.location_to) || 'City or airport'} value={trip.airfare.destination} onChange={(e) => patchIn('airfare', { destination: e.target.value })} />
+                      <input className="input" placeholder={locationLabel(trip.location_to) || 'City or airport code'} value={trip.airfare.destination} onChange={(e) => patchIn('airfare', { destination: e.target.value })} />
                     </div>
                     <DateField label="Depart" value={trip.airfare.departDate} onChange={(v) => patchIn('airfare', { departDate: v, datesCustom: true })} />
                     {trip.airfare.tripType === 'round-trip' && (
@@ -208,7 +208,9 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
                       <>
                         <div className="text-2xl font-bold">{usd(e.lowestPrice)}<span className="ml-2 text-xs font-normal text-slate-500">lowest · {e.itinerary && e.itinerary !== 'unknown' ? e.itinerary : 'itinerary n/a'}</span></div>
                         {e.averageLow != null && <div className="text-sm text-slate-600">Typical range {usd(e.averageLow)} – {usd(e.averageHigh)}</div>}
+                        {e.searched && <div className="text-xs text-slate-400">Airports searched: {e.searched}</div>}
                         {e.airlines?.length > 0 && <div className="text-sm text-slate-600">Airlines: {e.airlines.join(', ')}</div>}
+                        {e.bookingUrl && <a href={e.bookingUrl} target="_blank" rel="noreferrer" className="text-sm text-brand-600 hover:underline">View cheapest fare on {e.provider || 'provider'} ↗</a>}
                       </>
                     )}
                   </EstimateCard>
@@ -494,7 +496,7 @@ function EstimateCard({ loading, onRefresh, estimate, children }) {
           {estimate?.summary && <p className="text-sm text-slate-600">{estimate.summary}</p>}
           {estimate && (
             <p className="flex items-center gap-1 text-xs text-slate-400">
-              <Info size={12} /> {SOURCE_LABEL[estimate.source]} · updated {new Date(estimate.updatedAt).toLocaleString()}
+              <Info size={12} /> {estimate.provider ? `Live · ${estimate.provider}` : SOURCE_LABEL[estimate.source]} · updated {new Date(estimate.updatedAt).toLocaleString()}
             </p>
           )}
           {estimate?.error && <p className="text-xs text-amber-600">Live lookup failed: {estimate.error}</p>}

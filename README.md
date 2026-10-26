@@ -72,11 +72,21 @@ All integrations are configured in `.env`. **Profile → Integrations** shows wh
 | Integration | Env vars | Notes |
 |---|---|---|
 | Gemini | `GEMINI_API_KEY`, `GEMINI_MODEL` | Key from [Google AI Studio](https://aistudio.google.com/apikey). Turns raw MCP results into structured estimates; `/api/ai/ask` is a general endpoint. |
-| Airfare MCP | `AIRFARE_MCP_URL`, `AIRFARE_MCP_TOOL` (`search_flights`), `AIRFARE_MCP_HEADERS` | Any remote MCP server (Streamable HTTP or SSE). Queries follow the blueprint in `server/prompts/airfare.md`. |
-| Rental Car MCP | `RENTALCAR_MCP_URL`, `RENTALCAR_MCP_TOOL` (`find_car_rental_offerings`), `RENTALCAR_MCP_HEADERS` | Blueprint in `server/prompts/rentalCar.md`. |
+| Airfare MCP | `AIRFARE_MCP_URL`, `AIRFARE_MCP_TOOL`, `AIRFARE_MCP_HEADERS` | **Configured by default:** Kiwi.com's official server (`https://mcp.kiwi.com`, tool `search-flight`). It's free and needs no key. Any other MCP server also works. |
+| Rental Car MCP | `RENTALCAR_MCP_URL`, `RENTALCAR_MCP_TOOL`, `RENTALCAR_MCP_HEADERS` | **Not configured.** No free rental-car MCP with US coverage has been found yet (see below). |
 | GSA Per Diem API | `GSA_API_KEY` | Optional; the CSV import is enough on its own. |
 
-How an estimate is produced: the query is built from the prompt's blueprint (e.g. *"Find a round-trip flight from Washington, DC to Denver, CO departing on November 10, 2026 and returning on November 13, 2026."*). The server then calls the MCP tool, and Gemini, using your prompt as its system instruction, pulls out the lowest price, price band, airlines, and non-stop/layover (or, for cars, the total, daily rate, suppliers, and what's included). Code: `server/services/estimators.js`.
+**How airfare is estimated (Kiwi.com):** the trip's cities are converted to airport codes. Denver, CO becomes DEN and its other airfields. Washington, DC and its suburbs (Arlington, Bethesda, Tysons and others) become DCA, IAD and BWI. London becomes LHR, LGW, STN and the rest. Cities with no airport of their own use the airports within 120 km. You can also type codes such as `DCA` into Origin/Destination. KIT runs two searches in parallel, the cheapest fares and non-stops only. It reports the lowest fare, the typical price band, airlines, non-stop vs layover, whether a carry-on is included, and a booking link. Kiwi doesn't sell every airline (for example, it lacks British Airways' IAD–LHR non-stops), so treat its non-stop price as a floor.
+
+The airport data is `server/data/airports.json`, built from [mwgg/Airports](https://github.com/mwgg/Airports) (MIT) by `server/scripts/buildAirports.js`.
+
+**Other MCP servers:** for any other airfare or rental-car server, KIT builds the natural-language query from your prompt's blueprint. Gemini then reads the tool's response, using your prompt as its system instruction. Code: `server/services/estimators.js`.
+
+**Safety:** KIT only calls search tools. `server/services/mcp.js` refuses any tool whose name suggests booking, payment or sending messages. That covers Kiwi's `feedback-to-devs` and Upfront Rentals' `create_reservation` and `contact_upfront_rentals`.
+
+**Rental cars:** [Upfront Rentals' MCP](https://mcpservers.org/servers/upfront-rentals-mcp) was evaluated and rejected. Its 121 pickup locations are all in Greece, Mexico, Italy, and Eastern Europe, and test searches returned no offers. Until a US-capable provider is added, car estimates are labelled placeholders, or you can enter a booked amount.
+
+**Cloud sessions only:** Node's `fetch` ignores `HTTPS_PROXY`. Inside a proxied cloud container, start the app with `NODE_USE_ENV_PROXY=1 npm run dev`. This isn't needed on a normal computer.
 
 ### Google Workspace + Gemini: feasibility
 This can be done, in stages:

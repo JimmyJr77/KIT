@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import { Type } from '@google/genai';
 import { callMcpTool } from './mcp.js';
+import { airportCodes } from './airports.js';
 import { generateJson, geminiConfigured } from './gemini.js';
 
 const prompt = (f) => fs.readFileSync(new URL(`../prompts/${f}`, import.meta.url), 'utf8');
@@ -55,16 +56,95 @@ const FLIGHT_SCHEMA = {
   required: ['lowestPrice', 'summary'],
 };
 
+// Kiwi.com's official MCP server (https://mcp.kiwi.com, tool "search-flight") takes
+// structured fields and returns structured itineraries, so no LLM parsing is needed.
+const KIWI_TOOL = 'search-flight';
+const ddmmyyyy = (iso) => iso.split('-').reverse().join('/');
+
+// Kiwi resolves "Denver" or "DEN" but not "Denver, CO". Airport codes are sent when the
+// location resolves (see airports.js); otherwise just the city name.
+const kiwiPlace = (s) => String(s).split(',')[0].trim();
+
+export function kiwiArgs({ tripType = 'round-trip', origin, destination, originPlace, destinationPlace, departDate, returnDate }) {
+  return {
+    flyFrom: airportCodes(originPlace ?? origin) || kiwiPlace(origin),
+    flyTo: airportCodes(destinationPlace ?? destination) || kiwiPlace(destination),
+    departureDate: ddmmyyyy(departDate),
+    ...(tripType !== 'one-way' && returnDate ? { returnDate: ddmmyyyy(returnDate) } : {}),
+    adults: 1,
+    cabinClass: 'M',
+    currency: 'USD',
+    locale: 'en',
+  };
+}
+
+/** Lowest fare, the middle-50% price band, airlines, and non-stop vs layover, per the Airfare prompt. */
+const kiwiItineraries = ({ text, structured }) =>
+  ((structured?.itineraries ? structured : JSON.parse(text)).itineraries || [])
+    .filter((i) => Number.isFinite(i.price))
+    .sort((a, b) => a.price - b.price);
+
+/**
+ * Lowest fare, the middle-50% price band, airlines, and non-stop vs layover, per the Airfare prompt.
+ * `nonstopResult` is a separate non-stop-only search: Kiwi returns just the ~15 cheapest
+ * itineraries, so non-stops rarely appear in the main results.
+ */
+export function summarizeKiwi(result, tripType, nonstopResult) {
+  const its = kiwiItineraries(result);
+  if (!its.length) throw new Error('No flights found for this route and dates');
+  const legs = (i) => [i.outbound, i.inbound].filter(Boolean);
+  const isNonstop = (i) => legs(i).every((l) => l.stops === 0);
+  const prices = its.map((i) => i.price);
+  const pct = (p) => prices[Math.round(p * (prices.length - 1))];
+  const cheapest = its[0];
+  const nonstop = (nonstopResult ? kiwiItineraries(nonstopResult) : []).find(isNonstop) || its.find(isNonstop);
+  const itinerary = isNonstop(cheapest) ? 'non-stop' : 'layover';
+  const route = legs(cheapest).map((l) => l.route.join(' → ')).join(' / ');
+  const noCarryOn = cheapest.baggage && cheapest.baggage.cabinBag === 0;
+  const money = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
+  return {
+    lowestPrice: cheapest.price,
+    averageLow: pct(0.25),
+    averageHigh: pct(0.75),
+    airlines: [...new Set(its.flatMap((i) => legs(i).flatMap((l) => l.segments.map((s) => s.carrierName))))].slice(0, 6),
+    itinerary,
+    nonstopPrice: nonstop?.price ?? null,
+    bookingUrl: cheapest.bookingUrl,
+    resultsCount: its.length,
+    summary: `Lowest ${tripType === 'one-way' ? 'one-way' : 'round-trip'} economy fare ${money(cheapest.price)} (${itinerary}: ${route})` +
+      `${noCarryOn ? ', carry-on bag not included' : ''}. ` +
+      (nonstop ? `Cheapest non-stop: ${money(nonstop.price)}.` : 'No non-stop fares found on Kiwi.com (it does not sell every airline).'),
+  };
+}
+
 export async function estimateFlight(input) {
   const query = flightQuery(input);
   const base = { query, updatedAt: new Date().toISOString() };
+  const tool = process.env.AIRFARE_MCP_TOOL || 'search_flights';
 
   if (process.env.AIRFARE_MCP_URL) {
     try {
-      const payload = await callMcpTool({
+      if (tool === KIWI_TOOL) {
+        const args = kiwiArgs(input);
+        const call = (a) => callMcpTool({ url: process.env.AIRFARE_MCP_URL, headers: process.env.AIRFARE_MCP_HEADERS, tool, args: a });
+        const [result, nonstopResult] = await Promise.all([
+          call(args),
+          call({ ...args, max_sector_stopovers: 0 }).catch(() => null),
+        ]);
+        return {
+          ...base,
+          source: 'mcp',
+          provider: 'Kiwi.com',
+          searched: `${args.flyFrom} → ${args.flyTo}`,
+          ...summarizeKiwi(result, input.tripType, nonstopResult),
+        };
+      }
+      // Any other server: send the natural-language blueprint query and let Gemini
+      // extract the estimate using the Airfare prompt.
+      const { text: payload } = await callMcpTool({
         url: process.env.AIRFARE_MCP_URL,
         headers: process.env.AIRFARE_MCP_HEADERS,
-        tool: process.env.AIRFARE_MCP_TOOL || 'search_flights',
+        tool,
         args: { query },
       });
       if (!geminiConfigured()) {
@@ -73,13 +153,18 @@ export async function estimateFlight(input) {
         return { ...base, source: 'mcp', lowestPrice: Math.min(...prices), summary: `Lowest fare found: $${Math.min(...prices)}` };
       }
       const est = await generateJson(
-        `Tool query: ${query}\n\nTool payload from search_flights:\n${payload.slice(0, 60000)}\n\nExtract the estimate.`,
+        `Tool query: ${query}\n\nTool payload from ${tool}:\n${payload.slice(0, 60000)}\n\nExtract the estimate.`,
         FLIGHT_SCHEMA,
         { system: AIRFARE_PROMPT },
       );
       return { ...base, source: 'mcp', ...est };
     } catch (e) {
-      return { ...base, ...placeholderFlight(input), error: e.message };
+      return {
+        ...base,
+        ...placeholderFlight(input),
+        summary: 'Live fare search returned nothing, so this is a placeholder. Try airport codes (e.g. DCA → DEN) in Origin / Destination.',
+        error: e.message,
+      };
     }
   }
   return { ...base, ...placeholderFlight(input) };
@@ -127,7 +212,7 @@ export async function estimateCar(input) {
 
   if (process.env.RENTALCAR_MCP_URL) {
     try {
-      const payload = await callMcpTool({
+      const { text: payload } = await callMcpTool({
         url: process.env.RENTALCAR_MCP_URL,
         headers: process.env.RENTALCAR_MCP_HEADERS,
         tool: process.env.RENTALCAR_MCP_TOOL || 'find_car_rental_offerings',
@@ -141,7 +226,7 @@ export async function estimateCar(input) {
       );
       return { ...base, source: 'mcp', days, ...est };
     } catch (e) {
-      return { ...base, ...placeholderCar(input, days), error: e.message };
+      return { ...base, ...placeholderCar(input, days), summary: 'Live rental search failed, so this is a placeholder estimate.', error: e.message };
     }
   }
   return { ...base, ...placeholderCar(input, days) };
