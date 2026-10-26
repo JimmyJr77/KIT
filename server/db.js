@@ -14,10 +14,10 @@ db.pragma('foreign_keys = ON');
 export const TEAMS = ['BD', 'Operations', 'Technical Solutioning', 'Marketing', 'Admin'];
 
 export const DEFAULT_SETTINGS = {
-  // GSA FY2027 values. Verify against gsa.gov/perdiem and update via the
-  // Travel > GSA Rates panel (admin) or the settings table.
+  // GSA FY2027 standard CONUS rate (overwritten by the GSA file on import).
+  // The POV mileage rate is set per calendar year; verify the 2027 rate.
   gsa_fiscal_year: '2027',
-  conus_lodging: '110',
+  conus_lodging: '113',
   conus_mie: '68',
   pov_mileage_rate: '0.725',
 };

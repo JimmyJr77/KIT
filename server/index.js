@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import './db.js';
 import { requireAuth } from './auth.js';
+import { ensureGsaRates } from './services/gsa.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import teamRoutes from './routes/teams.js';
@@ -12,6 +13,8 @@ import travelRoutes from './routes/travel.js';
 import gsaRoutes from './routes/gsa.js';
 import priorityRoutes from './routes/priorities.js';
 import aiRoutes from './routes/ai.js';
+
+ensureGsaRates();
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));

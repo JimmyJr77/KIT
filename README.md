@@ -44,10 +44,12 @@ First name, last name, email, phone (formatted as `xxx-xxx-xxxx` while you type)
 - **Refresh:** every page load and every click of **Refresh estimates** re-prices all estimated airfare and rental cars on upcoming trips.
 
 #### GSA rates
-Open **Travel → GSA rates**. Rates are looked up in this order:
-1. **The imported GSA master file.** Download the FY2027 per diem master rates file from [gsa.gov per diem files](https://www.gsa.gov/travel/plan-book/per-diem-rates/per-diem-files) and save it as CSV. Then upload it in the panel (admin), or run `npm run gsa:import -- path/to/file.csv 2027`.
-2. **The GSA Per Diem API**, if `GSA_API_KEY` is set. A free key is available from [api.data.gov](https://api.data.gov/signup). Results are cached for 30 days.
-3. **The standard CONUS rate** from settings. The seed values are $110 lodging, $68 M&IE, and $0.725/mi POV. **Confirm these against the published FY2027 and CY2027 rates** and update them in the panel.
+The FY2027 GSA per diem file (`server/data/gsa/FY2027_PerDiemRates.csv`) ships with the repo. It **loads automatically** the first time the server starts, covering 641 rate rows plus the standard CONUS rate ($113 lodging / $68 M&IE). Lookups go in this order:
+1. **The GSA file.** It matches on destination city first, then on the counties GSA lists. It also handles cross-state coverage (e.g. Arlington and Fairfax, VA and Montgomery and Prince George's, MD use the District of Columbia rate) and common DC-metro suburbs such as Bethesda, Tysons and Reston. Seasonal rates are applied per night. For a future year, upload the new CSV in **Travel → GSA rates** (admin) or run `npm run gsa:import -- path/to/file.csv 2028`.
+2. **The GSA Per Diem API**, if `GSA_API_KEY` is set. It's optional and cached for 30 days.
+3. **The standard CONUS rate.**
+
+The POV mileage rate is set separately each calendar year and is seeded at $0.725/mi. **Confirm the 2027 rate** and update it in the panel.
 
 GSA doesn't cover international (OCONUS) locations, so those take a manual rate (State Department rates).
 
