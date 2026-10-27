@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MoreHorizontal, Pencil, Copy, Trash2, Check, Loader2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName, stamp, fullStamp } from '../lib/format.js';
+import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx';
 const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad)/.test(navigator.platform);
 const SAVE_KEY = isMac ? '⌘↵' : 'Ctrl+↵';
 
@@ -97,8 +98,8 @@ function Composer({ local, onSave, onDirty }) {
 
   return (
     <div className={`rounded-lg border bg-white transition focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-100 ${error ? 'border-red-300' : 'border-slate-300'}`}>
-      <textarea ref={ref} rows={2} className="block w-full resize-none rounded-t-lg border-0 bg-transparent px-3 py-2 text-sm placeholder:text-slate-400 focus:ring-0 focus:outline-none"
-        placeholder="Add a note…" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} disabled={saving} />
+      <MentionTextarea inputRef={ref} rows={2} className="block w-full resize-none rounded-t-lg border-0 bg-transparent px-3 py-2 text-sm placeholder:text-slate-400 focus:ring-0 focus:outline-none"
+        placeholder="Add a note… (@ to mention someone)" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} disabled={saving} />
       {(!blank || error) && (
         <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-3 py-1.5">
           <span className={`text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>
@@ -205,7 +206,7 @@ function NoteItem({ note, readOnly, canChange, onSave, onDelete, onDirty }) {
     }`}>
       {mode === 'edit' ? (
         <>
-          <textarea ref={ref} className="block w-full resize-none border-0 bg-transparent p-0 text-sm focus:ring-0 focus:outline-none"
+          <MentionTextarea inputRef={ref} className="block w-full resize-none border-0 bg-transparent p-0 text-sm focus:ring-0 focus:outline-none"
             value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKeyDown} disabled={busy} />
           <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
             <span className={`flex items-center gap-1.5 text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>
@@ -224,7 +225,7 @@ function NoteItem({ note, readOnly, canChange, onSave, onDelete, onDirty }) {
         </>
       ) : (
         <>
-          <p className="pr-7 text-sm break-words whitespace-pre-wrap text-slate-800">{note.body}</p>
+          <p className="pr-7 text-sm break-words whitespace-pre-wrap text-slate-800"><MentionText text={note.body} /></p>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-400">
             {note.pending ? (
               <span className="italic">Not saved yet · saves with the priority</span>

@@ -67,7 +67,7 @@ export default function Dashboard() {
           </div>
 
           <Section title="Weekly close-out by person"
-            note="Close-out is the share of a week’s planned priorities marked complete. Work tickets are only counted in weeks where at least one priority stayed incomplete.">
+            note="Close-out is the share of a week’s planned priorities marked complete. Work (work tickets plus additional work logged while planning was closed) is only counted in weeks where at least one priority stayed incomplete.">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[46rem] text-sm">
                 <thead>

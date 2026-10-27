@@ -14,6 +14,7 @@ import gsaRoutes from './routes/gsa.js';
 import priorityRoutes from './routes/priorities.js';
 import ticketRoutes from './routes/tickets.js';
 import dashboardRoutes from './routes/dashboard.js';
+import alertRoutes from './routes/alerts.js';
 import aiRoutes from './routes/ai.js';
 
 ensureGsaRates();
@@ -30,6 +31,7 @@ app.use('/api/gsa', requireAuth, gsaRoutes);
 app.use('/api/priorities', requireAuth, priorityRoutes);
 app.use('/api/tickets', requireAuth, ticketRoutes);
 app.use('/api/dashboard', requireAuth, dashboardRoutes);
+app.use('/api/alerts', requireAuth, alertRoutes);
 app.use('/api/ai', requireAuth, aiRoutes);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

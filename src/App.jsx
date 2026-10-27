@@ -7,6 +7,7 @@ import Travel from './pages/Travel.jsx';
 import WeeklyPriorities from './pages/WeeklyPriorities.jsx';
 import Tickets from './pages/Tickets.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import Alerts from './pages/Alerts.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/travel" element={<Travel />} />
         <Route path="/priorities" element={<WeeklyPriorities />} />
         <Route path="/tickets" element={<Tickets />} />
+        <Route path="/alerts" element={<Alerts />} />
         <Route path="*" element={<Navigate to="/priorities" replace />} />
       </Route>
     </Routes>

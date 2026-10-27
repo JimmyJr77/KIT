@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Search, Ticket } from 'lucide-react';
+import { X, Plus, Trash2, Search, Ticket, ArrowLeft } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName } from '../lib/format.js';
@@ -10,7 +10,7 @@ import CardNotes from './CardNotes.jsx';
 const EMPTY_TICKET = { opportunity_title: '', organization: '', pipeline_status: '', value: '' };
 
 /** Slide-out panel for creating or editing a priority card (and its ticket). */
-export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, readOnly, asWork, onClose: close, onSaved, onNotesChanged }) {
+export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, readOnly, asWork, onBack: back, onClose: close, onSaved, onNotesChanged }) {
   const { user } = useAuth();
   const isNew = !card;
   const [ticketMode, setTicketMode] = useState('new'); // 'new' | 'existing' (new cards only)
@@ -37,6 +37,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
     if (notesDirty.current && !confirm('You have an unsaved note. Close and discard it?')) return;
     close();
   }, [close]);
+  const onBack = back && (() => { if (!notesDirty.current || confirm('You have an unsaved note. Go back and discard it?')) back(); });
 
   useEffect(() => {
     const h = (e) => e.key === 'Escape' && onClose();
@@ -89,6 +90,11 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
       <div className="fixed inset-0 z-40 bg-slate-900/20" onClick={onClose} />
       <aside className="fixed top-0 right-0 z-50 flex h-full w-full max-w-md flex-col bg-white shadow-2xl animate-[slidein_.2s_ease-out]">
         <style>{'@keyframes slidein{from{transform:translateX(100%)}to{transform:none}}'}</style>
+        {onBack && (
+          <button type="button" onClick={onBack} className="flex items-center gap-1.5 border-b border-slate-200 bg-slate-50 px-5 py-2 text-left text-xs font-medium text-brand-700 hover:bg-brand-50">
+            <ArrowLeft size={14} /> Back to master ticket
+          </button>
+        )}
         <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <h2 className="font-semibold">{isNew ? (asWork ? 'New work' : 'New priority') : card.is_planned ? 'Priority details' : 'Work details'}</h2>

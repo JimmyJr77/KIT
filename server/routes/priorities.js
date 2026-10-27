@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { db, json } from '../db.js';
 import { loadThreads } from './tickets.js';
+import { recordWork, loadWorkLog } from '../worklog.js';
+import { notifyMentions } from '../mentions.js';
 
 const r = Router();
 
@@ -72,10 +74,11 @@ function allTeamWeeks(date) {
 function allTeamsBoard(date) {
   const { weekStart, currentWeekStart, teamWeeks } = allTeamWeeks(date);
   const cards = Object.entries(teamWeeks).flatMap(([id, week]) => loadCards(Number(id), week));
+  const work = Object.entries(teamWeeks).flatMap(([id, week]) => loadWorkLog(Number(id), week));
   const members = db.prepare(`SELECT u.id, u.first_name, u.last_name, u.username, u.title, u.team_id, t.name AS team_name
     FROM users u LEFT JOIN teams t ON t.id = u.team_id WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all();
   const weeks = Object.entries(teamWeeks).map(([id, week]) => [Number(id), week]);
-  return { team: { id: 'all', name: 'All' }, weekStart, currentWeekStart, teamWeeks, members, cards, threads: threadsFor(cards), planning: planningFor(weeks) };
+  return { team: { id: 'all', name: 'All' }, weekStart, currentWeekStart, teamWeeks, members, cards, work, threads: threadsFor(cards), planning: planningFor(weeks) };
 }
 
 // ---- Planning lock
@@ -131,6 +134,7 @@ r.get('/', (req, res) => {
     currentWeekStart: weekStartFor(localToday(), t.checkin_dow),
     members,
     cards,
+    work: loadWorkLog(t.id, weekStart),
     threads: threadsFor(cards),
     planning: planningFor([[t.id, weekStart]]),
   });
@@ -230,6 +234,14 @@ r.post('/cards', (req, res) => {
   }
 });
 
+/** One card, with whether its week can still be edited. */
+r.get('/cards/:id', (req, res) => {
+  const card = loadCard(req.params.id);
+  if (!card) return res.status(404).json({ error: 'Not found' });
+  const t = team(card.team_id);
+  res.json({ card, editable: card.week_start >= weekStartFor(localToday(), t.checkin_dow), planningClosed: planningClosed(t.id, card.week_start) });
+});
+
 r.put('/cards/:id', (req, res) => {
   const b = req.body || {};
   const card = db.prepare('SELECT * FROM priority_cards WHERE id = ?').get(req.params.id);
@@ -245,6 +257,10 @@ r.put('/cards/:id', (req, res) => {
     }
     if (Array.isArray(b.assignees) && b.assignees.length) setAssignees(card.id, b.assignees, card.team_id, card.week_start);
   })();
+  const wasDone = new Set(json.parse(card.checklist, []).filter((i) => i.done).map((i) => i.text));
+  json.parse(cardFields(b).checklist, []).filter((i) => i.done && !wasDone.has(i.text))
+    .forEach((i) => recordWork(req.user, { kind: 'task', ticket_id: card.ticket_id, card_id: card.id, summary: i.text }));
+  if (b.completed && !card.completed) recordWork(req.user, { kind: 'completed', ticket_id: card.ticket_id, card_id: card.id, summary: card.title });
   res.json({ card: loadCard(card.id) });
 });
 
@@ -258,6 +274,7 @@ r.put('/cards/:id/checklist/:index', (req, res) => {
   const [item] = list.splice(i, 1);
   list.push({ ...item, done: !!req.body?.done });
   db.prepare("UPDATE priority_cards SET checklist = ?, updated_at = datetime('now') WHERE id = ?").run(json.str(list), card.id);
+  if (req.body?.done && !item.done) recordWork(req.user, { kind: 'task', ticket_id: card.ticket_id, card_id: card.id, summary: item.text });
   res.json({ card: loadCard(card.id) });
 });
 
@@ -271,8 +288,11 @@ r.delete('/cards/:id', (req, res) => {
 r.post('/cards/:id/notes', (req, res) => {
   const body = String(req.body?.body || '').trim();
   if (!body) return res.status(400).json({ error: 'Note is empty' });
-  if (!db.prepare('SELECT 1 FROM priority_cards WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'Not found' });
-  const id = db.prepare('INSERT INTO card_notes (card_id, body, author_id) VALUES (?, ?, ?)').run(req.params.id, body, req.user.id).lastInsertRowid;
+  const card = db.prepare('SELECT * FROM priority_cards WHERE id = ?').get(req.params.id);
+  if (!card) return res.status(404).json({ error: 'Not found' });
+  const id = db.prepare('INSERT INTO card_notes (card_id, body, author_id) VALUES (?, ?, ?)').run(card.id, body, req.user.id).lastInsertRowid;
+  recordWork(req.user, { kind: 'note', ticket_id: card.ticket_id, card_id: card.id, ref_id: id, summary: body });
+  notifyMentions(req.user, body, { ticket_id: card.ticket_id, card_id: card.id, note_id: id });
   res.json({ note: loadNote(id) });
 });
 
@@ -288,7 +308,11 @@ r.put('/notes/:id', (req, res) => {
   if (!n) return;
   const body = String(req.body?.body || '').trim();
   if (!body) return res.status(400).json({ error: 'Note is empty' });
-  if (body !== n.body) db.prepare("UPDATE card_notes SET body = ?, updated_at = datetime('now') WHERE id = ?").run(body, n.id);
+  if (body !== n.body) {
+    db.prepare("UPDATE card_notes SET body = ?, updated_at = datetime('now') WHERE id = ?").run(body, n.id);
+    const c = db.prepare('SELECT ticket_id FROM priority_cards WHERE id = ?').get(n.card_id);
+    notifyMentions(req.user, body, { ticket_id: c?.ticket_id, card_id: n.card_id, note_id: n.id }, n.body);
+  }
   res.json({ note: loadNote(n.id) });
 });
 

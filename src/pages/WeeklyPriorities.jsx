@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, pointerWithin, useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, horizontalListSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
@@ -13,7 +14,7 @@ import MultiSelect from '../components/MultiSelect.jsx';
 import PriorityPanel from './PriorityPanel.jsx';
 import PriorityCard from './PriorityCard.jsx';
 import CommentPanel from './CommentPanel.jsx';
-import { ViewSwitcher, TicketsView, TasksView, ThreadsView } from './LaneViews.jsx';
+import { ViewSwitcher, TicketsView, TasksView, ThreadsView, WorkEntry } from './LaneViews.jsx';
 
 // Prefer the card under the pointer, then the lane under the pointer, then the nearest target.
 const collision = (args) => {
@@ -27,6 +28,7 @@ const writePref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ign
 
 export default function WeeklyPriorities() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const teams = useApi('/teams');
   const allUsers = useApi('/users');
   const meta = useApi('/priorities/meta');
@@ -135,19 +137,22 @@ export default function WeeklyPriorities() {
     try {
       const r = await api.put(`/priorities/cards/${card.id}/checklist/${index}`, { done });
       setBoard((b) => ({ ...b, cards: b.cards.map((c) => (c.id === card.id ? r.card : c)) }));
+      if (done && board.planning?.closed_count) load(); // a finished task may be logged as additional work
     } catch {
       load();
     }
   };
 
-  // A member's threads: anything on one of their priorities, or on one of their master tickets as a whole.
-  const threadsFor = (cardIds) => {
+  // A member's threads are comments about one of their priorities: this week's, or an earlier one they're
+  // assigned to on the same master ticket. Comments about a master ticket as a whole stay on the ticket.
+  const threadsFor = (member, cardIds) => {
     const cards = cardIds.map((id) => cardsById[id]).filter(Boolean);
     const ids = new Set(cards.map((c) => c.id));
     const tickets = new Set(cards.map((c) => c.ticket_id));
-    return (board?.threads || []).filter((m) => (m.card_id ? ids.has(m.card_id) : tickets.has(m.ticket_id)));
+    return (board?.threads || []).filter((m) => m.card_id
+      && (ids.has(m.card_id) || (tickets.has(m.ticket_id) && m.card_assignee_ids.includes(member.id))));
   };
-  // What a new question or comment can be about: each master ticket, and each priority on it.
+  // What a new comment can be about: each of the member's priorities, grouped by master ticket.
   const aboutOptions = (cardIds) => {
     const byTicket = new Map();
     cardIds.map((id) => cardsById[id]).filter(Boolean).forEach((c) => {
@@ -155,6 +160,13 @@ export default function WeeklyPriorities() {
       byTicket.get(c.ticket_id).cards.push({ id: c.id, title: c.title || 'Untitled priority' });
     });
     return [...byTicket.values()];
+  };
+
+  // Open what an additional-work entry points at: its thread, its priority, or the ticket timeline.
+  const openWork = (w) => {
+    if (['question', 'comment', 'reply'].includes(w.kind) && w.ref_id) return setThread({ id: w.ref_id });
+    if (w.card_id && cardsById[w.card_id]) return setPanel({ card: cardsById[w.card_id] });
+    if (w.ticket_id) navigate(`/tickets?open=${w.ticket_id}`);
   };
 
   const activeCard = activeId ? cardsById[Number(String(activeId).split('::')[1])] : null;
@@ -219,8 +231,9 @@ export default function WeeklyPriorities() {
               <Lane key={m.id} member={m} orientation={orientation} asWork={planningClosedFor(m)} cardIds={lanes[m.id] || []} cardsById={cardsById}
                 usersById={usersById} editable={editable && (board.team.id !== 'all' || !!m.team_id)} draggable={draggable}
                 onOpen={(card) => setPanel({ card })} onNew={() => setPanel({ newFor: m.id })}
-                onToggleTask={toggleTask} threads={threadsFor(lanes[m.id] || [])}
+                onToggleTask={toggleTask} threads={threadsFor(m, lanes[m.id] || [])}
                 onOpenThread={(t) => setThread({ id: t.id })}
+                work={(board.work || []).filter((w) => w.user_id === m.id)} onOpenWork={openWork}
                 onNewThread={(lanes[m.id] || []).length ? () => setThread({ options: aboutOptions(lanes[m.id]), member: m }) : null} />
             ))}
           </div>
@@ -315,7 +328,7 @@ function WeekStrip({ weekStart, current, onPick }) {
   );
 }
 
-function Lane({ member, asWork, orientation, cardIds, cardsById, usersById, editable, draggable, onOpen, onNew, onToggleTask, threads, onOpenThread, onNewThread }) {
+function Lane({ member, asWork, work = [], onOpenWork, orientation, cardIds, cardsById, usersById, editable, draggable, onOpen, onNew, onToggleTask, threads, onOpenThread, onNewThread }) {
   const [view, setViewState] = useState(() => readPref(`kit.priorities.view.${member.id}`, 'priorities'));
   const setView = (v) => { setViewState(v); writePref(`kit.priorities.view.${member.id}`, v); };
   const sortable = draggable && view === 'priorities';
@@ -327,7 +340,7 @@ function Lane({ member, asWork, orientation, cardIds, cardsById, usersById, edit
       <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700">{initials(member)}</div>
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold">{fullName(member)}</div>
-        <div className="truncate text-xs text-slate-500">{member.title}{member.team_name && ` · ${member.team_name}`} · {cardIds.length} priorit{cardIds.length === 1 ? 'y' : 'ies'}</div>
+        <div className="truncate text-xs text-slate-500">{member.title}{member.team_name && ` · ${member.team_name}`} · {cardIds.length} priorit{cardIds.length === 1 ? 'y' : 'ies'}{work.length > 0 && ` · ${work.length} additional`}</div>
       </div>
     </div>
   );
@@ -344,6 +357,11 @@ function Lane({ member, asWork, orientation, cardIds, cardsById, usersById, edit
             {cardIds.map((id, i) => cardsById[id] && (
               <SortableCard key={id} id={`${member.id}::${id}`} userId={member.id} card={cardsById[id]} rank={i + 1} usersById={usersById} onOpen={onOpen} rows={rows} />
             ))}
+            {work.length > 0 && (
+              <div className={`flex shrink-0 gap-3 ${rows ? 'border-l-2 border-dashed border-amber-200 pl-3' : 'flex-col border-t-2 border-dashed border-amber-200 pt-3'}`}>
+                {work.map((w) => <WorkEntry key={w.id} entry={w} rows={rows} onOpen={onOpenWork} />)}
+              </div>
+            )}
             {editable && (
               <button onClick={onNew}
                 className={`flex shrink-0 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-brand-500 hover:text-brand-600 ${rows ? 'w-40' : 'py-3'}`}>

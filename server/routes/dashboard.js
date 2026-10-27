@@ -37,6 +37,15 @@ r.get('/', (req, res) => {
     }
   });
 
+  // Additional work logged while planning was closed counts as work for that week.
+  db.prepare('SELECT user_id, team_id, week_start, COUNT(*) AS n FROM work_log GROUP BY user_id, team_id, week_start').all().forEach((l) => {
+    const u = byUser.get(l.user_id);
+    if (!u || l.week_start > (currentWeek[l.team_id] || localToday())) return;
+    const key = `${l.team_id}|${l.week_start}`;
+    if (!u.weeks.has(key)) u.weeks.set(key, { week_start: l.week_start, current: l.week_start === currentWeek[l.team_id], planned: 0, completed: 0, work: 0 });
+    u.weeks.get(key).work += l.n;
+  });
+
   const people = [...byUser.values()].map(({ weeks, tickets, ...u }) => ({
     ...u,
     weeks: [...weeks.values()].sort((a, b) => (a.week_start < b.week_start ? 1 : -1)),

@@ -170,6 +170,22 @@ CREATE TABLE IF NOT EXISTS week_planning (
   PRIMARY KEY (team_id, week_start)
 );
 
+-- Additional work: actions someone took while their team's planning for the week
+-- was closed (notes, documents, questions, comments, replies, finished tasks...).
+CREATE TABLE IF NOT EXISTS work_log (
+  id INTEGER PRIMARY KEY,
+  team_id INTEGER NOT NULL REFERENCES teams(id),
+  week_start TEXT NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL, -- note | file | question | comment | reply | task | completed
+  ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+  card_id INTEGER REFERENCES priority_cards(id) ON DELETE SET NULL,
+  ref_id INTEGER, -- the note, file or comment the action created
+  summary TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS work_log_week ON work_log(team_id, week_start);
+
 -- Documents uploaded to a master ticket. Files live in server/data/uploads.
 CREATE TABLE IF NOT EXISTS ticket_files (
   id INTEGER PRIMARY KEY,
@@ -181,6 +197,33 @@ CREATE TABLE IF NOT EXISTS ticket_files (
   uploaded_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+`);
+
+// Columns added after the first release of a table.
+function addColumn(table, column, type) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+// A comment can sit under any timeline item: a priority card, note, file, or the ticket itself.
+addColumn('ticket_comments', 'target_type', 'TEXT');
+addColumn('ticket_comments', 'target_id', 'INTEGER');
+addColumn('ticket_comments', 'updated_at', 'TEXT');
+
+db.exec(`
+-- Notifications for a user, e.g. someone @mentioned them.
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  actor_id INTEGER REFERENCES users(id),
+  kind TEXT NOT NULL DEFAULT 'mention',
+  ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+  card_id INTEGER REFERENCES priority_cards(id) ON DELETE SET NULL,
+  comment_id INTEGER REFERENCES ticket_comments(id) ON DELETE CASCADE,
+  note_id INTEGER REFERENCES card_notes(id) ON DELETE CASCADE,
+  excerpt TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  read_at TEXT
+);
+CREATE INDEX IF NOT EXISTS alerts_user ON alerts(user_id, created_at);
 `);
 
 // Move the old single notes field on each card into its first note entry.

@@ -1,5 +1,6 @@
-import { Package, CheckSquare, Plus, MessageSquare } from 'lucide-react';
+import { Package, CheckSquare, Plus, MessageSquare, StickyNote, FileText, CheckCircle2 } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
+import { MentionText } from '../components/MentionTextarea.jsx';
 import { ago, fullName, fullStamp } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PriorityCard from './PriorityCard.jsx';
@@ -155,18 +156,16 @@ export function ThreadsView({ threads, rows, onOpenThread, onNew }) {
   return (
     <>
       {threads.map((m) => {
-        const k = KIND[m.kind] || KIND.comment;
         return (
           <button key={m.id} type="button" onClick={() => onOpenThread(m)}
             className={`flex shrink-0 flex-col rounded-lg border border-slate-200 bg-white p-3 text-left text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md ${rows ? 'w-64' : 'w-full'}`}>
             <div className="mb-1.5 flex items-center gap-1.5">
-              <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold whitespace-nowrap ${k.chip}`}>{k.glyph} {k.label}</span>
               <span className="flex min-w-0 items-center gap-1 truncate text-[11px] font-medium text-slate-600" title={m.ticket_title}>
                 <Package size={11} className="shrink-0 text-brand-600" /> <span className="truncate">{m.ticket_title}</span>
               </span>
             </div>
             {m.card_title && <div className="-mt-1 mb-1 truncate text-[11px] text-slate-400" title={m.card_title}>Priority: {m.card_title}</div>}
-            <p className="line-clamp-3 flex-1 text-slate-700">{m.body}</p>
+            <p className="line-clamp-3 flex-1 text-slate-700"><MentionText text={m.body} /></p>
             <div className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-400">
               <Avatar user={m.author} size="xs" />
               <span className="truncate">{fullName(m.author) || 'Unknown'}</span>
@@ -182,9 +181,40 @@ export function ThreadsView({ threads, rows, onOpenThread, onNew }) {
       {onNew && (
         <button type="button" onClick={onNew}
           className={`flex shrink-0 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-brand-500 hover:text-brand-600 ${rows ? 'w-40' : 'py-3'}`}>
-          <Plus size={16} /> Ask or comment
+          <Plus size={16} /> Add a comment
         </button>
       )}
     </>
+  );
+}
+
+/** What each kind of additional work looks like. */
+export const WORK_KINDS = {
+  note: { label: 'Note', icon: <StickyNote size={12} /> },
+  file: { label: 'Document', icon: <FileText size={12} /> },
+  question: { label: 'Question', icon: <Glyph>?</Glyph> },
+  comment: { label: 'Comment', icon: <Glyph>!</Glyph> },
+  reply: { label: 'Reply', icon: <MessageSquare size={12} /> },
+  task: { label: 'Task completed', icon: <CheckSquare size={12} /> },
+  completed: { label: 'Priority completed', icon: <CheckCircle2 size={12} /> },
+};
+
+/** An action recorded while planning was closed, shown as a work ticket in the person's lane. */
+export function WorkEntry({ entry, rows, onOpen }) {
+  const k = WORK_KINDS[entry.kind] || { label: entry.kind, icon: null };
+  return (
+    <button type="button" onClick={() => onOpen(entry)} title={fullStamp(entry.created_at)}
+      className={`flex shrink-0 flex-col rounded-lg border border-l-4 border-amber-200 border-l-amber-500 bg-amber-50 p-3 text-left text-sm shadow-sm transition hover:shadow-md ${rows ? 'w-56' : 'w-full'}`}>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1 rounded bg-white px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200">
+          {k.icon} {k.label}
+        </span>
+        <span className="shrink-0 text-[11px] text-amber-700/70">{ago(entry.created_at)}</span>
+      </div>
+      <div className="truncate font-semibold text-slate-800" title={entry.ticket_title}>{entry.ticket_title || 'Deleted ticket'}</div>
+      {entry.card_title && <div className="truncate text-[11px] text-slate-500" title={entry.card_title}>Priority: {entry.card_title}</div>}
+      {entry.summary && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{entry.summary}</p>}
+      <div className="mt-auto pt-2 text-[10px] font-semibold tracking-wide text-amber-700 uppercase">Additional work</div>
+    </button>
   );
 }
