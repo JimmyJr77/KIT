@@ -13,6 +13,8 @@ import CommentPanel, { TicketSummary } from './CommentPanel.jsx';
 export const alertsChanged = () => window.dispatchEvent(new Event('kit:alerts'));
 
 const isSupport = (a) => a.kind === 'support_request' || a.kind === 'support_accepted';
+/** What a support request is about: its event, or its own title when asked for from the Marketing page. */
+const supportSubject = (a) => (a.event_id ? a.event_name : a.request_title || (a.request_id ? 'a request' : 'a deleted request'));
 const isDelivery = (a) => a.kind === 'delivery_pm' || a.kind === 'delivery_team';
 
 /** Where an alert's "Go to comment" lands: the ticket timeline, scrolled to the item. */
@@ -56,7 +58,7 @@ export default function Alerts() {
       {alerts && !alerts.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <Bell size={28} className="mx-auto mb-2 text-slate-300" />
-          No alerts yet. You’ll see one here when someone @mentions you, asks Marketing for event support, or puts you on a contract in Delivery.
+          No alerts yet. You’ll see one here when someone @mentions you, asks Marketing for support, or puts you on a contract in Delivery.
         </div>
       )}
 
@@ -79,8 +81,8 @@ export default function Alerts() {
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
                   <span className={a.read ? 'text-slate-600' : 'text-slate-900'}>
                     <span className="font-semibold">{fullName(a.actor) || 'Someone'}</span>{' '}
-                    {a.kind === 'support_request' ? <>requested marketing support for <span className="font-semibold">{a.event_name || 'a deleted event'}</span></>
-                      : a.kind === 'support_accepted' ? <>created a work ticket for your marketing support request on <span className="font-semibold">{a.event_name || 'a deleted event'}</span></>
+                    {a.kind === 'support_request' ? <>requested marketing support{a.event_id ? ' for' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>
+                      : a.kind === 'support_accepted' ? <>created a work ticket for your marketing support request{a.event_id ? ' on' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>
                         : a.kind === 'delivery_pm' ? <>made you Program Manager for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
                           : a.kind === 'delivery_team' ? <>added you to the delivery team for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
                         : <>mentioned you in {a.note_id ? 'a note' : 'a comment'} on <span className="font-semibold">{a.ticket_title || 'a deleted ticket'}</span></>}
@@ -133,7 +135,7 @@ function SupportActions({ alert: a, onDone, markRead, full }) {
     setBusy(true);
     setError('');
     try {
-      const r = await api.post(`/events/support/${a.request_id}/accept`, {});
+      const r = await api.post(`/marketing/requests/${a.request_id}/accept`, {});
       markRead(a);
       alertsChanged();
       navigate(`/tickets?open=${r.ticket_id}`);
@@ -155,6 +157,11 @@ function SupportActions({ alert: a, onDone, markRead, full }) {
           {busy ? <><Loader2 size={13} className="animate-spin" /> Creating…</> : <><Ticket size={13} /> Create work ticket</>}
         </button>
       )}
+      {!a.event_id && a.request_id && (
+        <button type="button" onClick={(e) => go(e, '/marketing?tab=requests')} className={full ? 'btn' : 'flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline'}>
+          {full ? <Megaphone size={15} /> : null} Go to Marketing {!full && <ArrowRight size={12} />}
+        </button>
+      )}
       {a.event_id && (
         <button type="button" onClick={(e) => go(e, `/events?open=${a.event_id}`)} className={full ? 'btn' : 'flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline'}>
           {full ? <CalendarDays size={15} /> : null} Go to event {!full && <ArrowRight size={12} />}
@@ -173,11 +180,21 @@ function SupportPane({ alert: a, onClose, onDone, markRead }) {
     <SidePanel title="Marketing support" subtitle={a.kind === 'support_accepted' ? 'Your request has a work ticket' : 'A request for the Marketing team'} onClose={onClose}
       footer={<SupportActions alert={a} onDone={onDone} markRead={markRead} full />}>
       <div className="space-y-4">
-        <section className="rounded-lg bg-slate-50 p-4">
-          <span className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><CalendarDays size={13} /> Event</span>
-          <div className="mt-1 font-semibold text-slate-900">{a.event_name || 'A deleted event'}</div>
-          {dates && <div className="text-xs text-slate-500">{dates}</div>}
-        </section>
+        {a.event_id ? (
+          <section className="rounded-lg bg-slate-50 p-4">
+            <span className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><CalendarDays size={13} /> Event</span>
+            <div className="mt-1 font-semibold text-slate-900">{a.event_name || 'A deleted event'}</div>
+            {dates && <div className="text-xs text-slate-500">{dates}</div>}
+          </section>
+        ) : (
+          <section className="rounded-lg bg-slate-50 p-4">
+            <span className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Megaphone size={13} /> Request</span>
+            <div className="mt-1 font-semibold text-slate-900">{supportSubject(a)}</div>
+            {(a.request_category || a.request_due_date) && (
+              <div className="text-xs text-slate-500">{[a.request_category, a.request_due_date && `Needed by ${shortDate(a.request_due_date, { month: 'short', day: 'numeric', year: 'numeric' })}`].filter(Boolean).join(' · ')}</div>
+            )}
+          </section>
+        )}
         <section className="flex gap-3 rounded-lg p-3 ring-1 ring-slate-200">
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-50 text-brand-700"><Megaphone size={15} /></span>
           <div className="min-w-0">

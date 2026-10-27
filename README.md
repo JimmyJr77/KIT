@@ -33,7 +33,7 @@ Use Node 22 (`nvm use`). Vercel hosts the React frontend; Render runs Express wi
 
 Render stores the database at `/var/data/kit.db` and attachments at `/var/data/uploads`. Keep the service at one instance because SQLite and the disk are local to that instance. The disk does not cover bundled source data, so airport and GSA datasets continue to update with deploys. Back up SQLite with its backup API (or stop writes before copying the database and its WAL files) and preserve uploaded files alongside it. A new deployment starts with an empty database; it does **not** copy local users, tickets, or attachments automatically.
 
-Optional integration secrets (`GEMINI_API_KEY`, `GSA_API_KEY`, rental-car settings and MCP authentication headers) belong only in Render environment variables. Do not put secrets in `VITE_*` variables or commit `.env`. API responses are marked `private, no-store` to keep authenticated data out of shared caches.
+Integration secrets (`GEMINI_API_KEY`, `GSA_API_KEY`, and any MCP authentication headers) belong only in Render environment variables. `render.yaml` declares `GEMINI_API_KEY` and `GSA_API_KEY` without values (`sync: false`): add their values in the Render dashboard under the service's **Environment**. Rental cars use OctoTrip's free rental-car MCP server (`RENTALCAR_MCP_URL=https://mcp.octotrip.app/rental-cars/mcp`, tool `search`), which needs no key; KIT asks for USD prices and spaces searches about a second apart to stay under its rate limit. Do not put secrets in `VITE_*` variables or commit `.env`. API responses are marked `private, no-store` to keep authenticated data out of shared caches.
 
 To check the frontend deployment output locally:
 

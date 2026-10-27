@@ -355,7 +355,25 @@ CREATE TABLE IF NOT EXISTS ticket_steps (
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS ticket_steps_ticket ON ticket_steps(ticket_id);
+
+-- Process flow on a bid ticket: RFI, RFP, gate reviews, ROM, proposal and so on, in the order they happen.
+-- reviews is JSON keyed by review area (technical, pricing, strategy, support): { people: [user ids], notes }.
+CREATE TABLE IF NOT EXISTS ticket_process_steps (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  step_type TEXT NOT NULL,
+  step_date TEXT,
+  reviews TEXT,
+  notes TEXT,
+  author_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT,
+  updated_by INTEGER REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS ticket_process_steps_ticket ON ticket_process_steps(ticket_id);
 `);
+// Documents uploaded to a process step are still ticket documents; this says which step they belong to.
+addColumn('ticket_files', 'process_step_id', 'INTEGER REFERENCES ticket_process_steps(id) ON DELETE SET NULL');
 
 db.exec(`
 -- Notifications for a user, e.g. someone @mentioned them.
@@ -378,6 +396,61 @@ CREATE INDEX IF NOT EXISTS alerts_user ON alerts(user_id, created_at);
 // Alerts about an event's marketing support request.
 addColumn('alerts', 'event_id', 'INTEGER REFERENCES events(id) ON DELETE CASCADE');
 addColumn('alerts', 'request_id', 'INTEGER REFERENCES event_support_requests(id) ON DELETE CASCADE');
+
+// Marketing support can be asked for from the Marketing page too, not only from an event, so event_id may be null.
+// SQLite can't drop NOT NULL in place: rebuild the table, with foreign keys off so alerts pointing at it aren't cascaded away.
+if (db.prepare('PRAGMA table_info(event_support_requests)').all().find((c) => c.name === 'event_id')?.notnull) {
+  db.pragma('foreign_keys = OFF');
+  db.transaction(() => {
+    db.exec(`CREATE TABLE event_support_requests_new (
+      id INTEGER PRIMARY KEY,
+      event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+      details TEXT NOT NULL,
+      requested_by INTEGER REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'open',
+      ticket_id INTEGER REFERENCES tickets(id) ON DELETE SET NULL,
+      accepted_by INTEGER REFERENCES users(id),
+      accepted_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO event_support_requests_new (id, event_id, details, requested_by, status, ticket_id, accepted_by, accepted_at, created_at)
+      SELECT id, event_id, details, requested_by, status, ticket_id, accepted_by, accepted_at, created_at FROM event_support_requests;
+    DROP TABLE event_support_requests;
+    ALTER TABLE event_support_requests_new RENAME TO event_support_requests;`);
+  })();
+  db.pragma('foreign_keys = ON');
+}
+addColumn('event_support_requests', 'title', 'TEXT');
+addColumn('event_support_requests', 'category', 'TEXT');
+addColumn('event_support_requests', 'due_date', 'TEXT');
+
+db.exec(`
+-- Marketing library: logos, images, and files anyone can download. Marketing keeps it up to date.
+CREATE TABLE IF NOT EXISTS marketing_assets (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,  -- logo | image | file
+  title TEXT NOT NULL,
+  description TEXT,
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  mime_type TEXT,
+  size INTEGER,
+  uploaded_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+-- Approved text copy: boilerplate, taglines, bios, capability blurbs, ready to paste.
+CREATE TABLE IF NOT EXISTS marketing_copy (
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  category TEXT,
+  body TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id),
+  updated_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+`);
 
 // These tables were first named ops_*; carry over anything saved under the old names.
 for (const [from, to] of [['ops_programs', 'delivery_programs'], ['ops_program_team', 'delivery_team']]) {

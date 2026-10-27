@@ -13,6 +13,7 @@ import Events from './pages/Events.jsx';
 import Crm from './pages/Crm.jsx';
 import TechnicalSolutions from './pages/TechnicalSolutions.jsx';
 import Delivery from './pages/Delivery.jsx';
+import Marketing from './pages/Marketing.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="/delivery" element={<Delivery />} />
         <Route path="/crm" element={<Crm />} />
         <Route path="/solutions" element={<TechnicalSolutions />} />
+        <Route path="/marketing" element={<Marketing />} />
         <Route path="/alerts" element={<Alerts />} />
         <Route path="*" element={<Navigate to="/priorities" replace />} />
       </Route>

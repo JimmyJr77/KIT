@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, ContactRound, ArrowLeft, Search, Link2, Unlink, Footprints, GripVertical, Flag, Pencil, ArrowUp, ArrowDown } from 'lucide-react';
+import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, ContactRound, ArrowLeft, Search, Link2, Unlink, Footprints, GripVertical, Flag, Pencil, ArrowUp, ArrowDown, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users } from 'lucide-react';
 import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -8,6 +8,8 @@ import Avatar from '../components/Avatar.jsx';
 import { api } from '../lib/api.js';
 import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
+import MultiSelect from '../components/MultiSelect.jsx';
+import { PROCESS_TYPES, REVIEW_AREAS } from '../lib/process.js';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
 /** The menu items along the ticket pane's left edge. Strategy and the win assessment are for bid tickets only. */
@@ -17,6 +19,7 @@ export const PLAN_TOOLS = [
   { key: 'tasks', label: 'Tasks', icon: SquareCheck },
   { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
   { key: 'people', label: 'People', icon: ContactRound },
+  { key: 'process', label: 'Process flow', icon: Workflow, bidOnly: true },
 ];
 
 export function PlanRail({ ticket, active, onSelect }) {
@@ -34,6 +37,7 @@ export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty }) {
   if (tool === 'people') return <PeopleDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
   if (tool === 'steps') return <StepsDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'strategy') return <StrategyDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
+  if (tool === 'process') return <ProcessDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'assessment') return <AssessmentDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   return null;
 }
@@ -389,6 +393,239 @@ function IconButton({ label, onClick, active, danger, children }) {
       className={`rounded p-1 ${active ? 'text-brand-700' : 'text-slate-500'} ${danger ? 'hover:bg-red-50 hover:text-red-600' : 'hover:bg-slate-100 hover:text-brand-700'}`}>
       {children}
     </button>
+  );
+}
+
+// ---- Process flow
+
+const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+const today = () => new Date().toLocaleDateString('en-CA');
+const stepForm = (s) => ({ step_type: s.step_type, step_date: s.step_date || '', notes: s.notes, reviews: s.reviews });
+
+/**
+ * A timeline of the formal process steps on a bid (RFI, RFP, gate reviews, ROM, proposal…), oldest first.
+ * Steps can be added at any time. Each records who was involved in its reviews, notes, and documents.
+ */
+function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
+  const [steps, setSteps] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [type, setType] = useState(PROCESS_TYPES[0]);
+  const [date, setDate] = useState(today());
+  const [openId, setOpenId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const dirty = useRef(false);
+  const setDirty = (v) => { dirty.current = v; onDirty?.(v); };
+  useEffect(() => {
+    api.get(`/tickets/${ticket.id}/process`).then((d) => setSteps(d.steps)).catch((e) => setError(e.message));
+    api.get('/users').then((d) => setUsers(d.users));
+  }, [ticket.id]);
+
+  const apply = (p) => p.then((d) => { setSteps(d.steps); onChanged(); return d; });
+  const toggle = (id) => {
+    if (dirty.current && !confirm('You have unsaved changes to this step. Discard them?')) return;
+    setDirty(false);
+    setOpenId(openId === id ? null : id);
+  };
+  const add = async () => {
+    if (busy || (dirty.current && !confirm('You have unsaved changes to a step. Discard them?'))) return;
+    setBusy(true);
+    setError('');
+    try {
+      const d = await apply(api.post(`/tickets/${ticket.id}/process`, { step_type: type, step_date: date }));
+      setDirty(false);
+      setOpenId(d.id);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const userOptions = users.map((u) => ({ value: u.id, label: fullName(u), sub: u.team_name }));
+  const byId = (id) => users.find((u) => u.id === id);
+
+  return (
+    <DrawerShell title="Process flow" subtitle="The formal steps of this pursuit, with their reviews and documents" onClose={onClose}>
+      <div className="space-y-4">
+        <section className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+          <span className="text-xs font-semibold tracking-wide text-slate-600 uppercase">New process step</span>
+          <div className="flex gap-2">
+            <select className="input flex-1 text-sm" value={type} onChange={(e) => setType(e.target.value)} aria-label="Step type">
+              {PROCESS_TYPES.map((t) => <option key={t}>{t}</option>)}
+            </select>
+            <input type="date" className="input w-36 text-sm" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Step date" />
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className={`text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>{error || 'Add steps in any order; the timeline sorts by date'}</span>
+            <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={add} disabled={busy}>{busy ? 'Adding…' : <><Plus size={13} /> Add step</>}</button>
+          </div>
+        </section>
+
+        {steps && !steps.length && <p className="text-sm text-slate-400">No process steps yet. Add the first one above.</p>}
+        {steps && steps.length > 0 && (
+          <ol className="relative space-y-3 before:absolute before:top-3 before:bottom-3 before:left-[11px] before:w-px before:bg-slate-200">
+            {steps.map((s) => (
+              <ProcessStep key={s.id} step={s} open={openId === s.id} onToggle={() => toggle(s.id)} byId={byId} userOptions={userOptions}
+                onDirty={setDirty} apply={apply}
+                onDeleted={() => { setDirty(false); setOpenId(null); }} />
+            ))}
+          </ol>
+        )}
+      </div>
+    </DrawerShell>
+  );
+}
+
+function ProcessStep({ step: s, open, onToggle, byId, userOptions, onDirty, apply, onDeleted }) {
+  const { user } = useAuth();
+  const involved = REVIEW_AREAS.filter((a) => s.reviews[a.key].people.length || s.reviews[a.key].notes);
+  const people = [...new Set(REVIEW_AREAS.flatMap((a) => s.reviews[a.key].people))].map(byId).filter(Boolean);
+  return (
+    <li className="relative flex gap-3">
+      <span className={`relative z-10 mt-2.5 grid h-6 w-6 shrink-0 place-items-center rounded-full ring-4 ring-slate-50 ${open ? 'bg-brand-600 text-white' : 'bg-brand-100 text-brand-700'}`}>
+        <Workflow size={12} />
+      </span>
+      <div className={`min-w-0 flex-1 rounded-lg border bg-white transition ${open ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200 hover:border-brand-500'}`}>
+        <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full items-start gap-2 p-2.5 text-left">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="text-sm font-semibold text-slate-800">{s.step_type}</span>
+              <span className="text-xs text-slate-500">{s.step_date ? shortDate(s.step_date) : 'No date'}</span>
+            </div>
+            {!open && (
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                {involved.map((a) => <span key={a.key} className="rounded bg-slate-100 px-1.5 py-0.5">{a.label}</span>)}
+                {s.files.length > 0 && <span className="flex items-center gap-0.5"><FileText size={11} /> {s.files.length}</span>}
+                {people.length > 0 && <span className="flex -space-x-1">{people.slice(0, 5).map((u) => <Avatar key={u.id} user={u} size="xs" className="ring-2 ring-white" />)}</span>}
+                {!involved.length && !s.files.length && !s.notes && <span className="text-slate-400">Nothing recorded yet</span>}
+              </div>
+            )}
+            {!open && s.notes && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{s.notes}</p>}
+          </div>
+          {open ? <ChevronDown size={15} className="mt-0.5 shrink-0 text-slate-400" /> : <ChevronRight size={15} className="mt-0.5 shrink-0 text-slate-300" />}
+        </button>
+        {open && <ProcessStepEditor step={s} user={user} userOptions={userOptions} onDirty={onDirty} apply={apply} onDeleted={onDeleted} />}
+      </div>
+    </li>
+  );
+}
+
+function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDeleted }) {
+  const [form, setForm] = useState(() => stepForm(s));
+  const [saved, setSaved] = useState(() => JSON.stringify(stepForm(s)));
+  const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const fileRef = useRef(null);
+  const dirty = JSON.stringify(form) !== saved;
+  useEffect(() => { onDirty(dirty); }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const setReview = (area, k, v) => setForm((f) => ({ ...f, reviews: { ...f.reviews, [area]: { ...f.reviews[area], [k]: v } } }));
+
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const d = await apply(api.put(`/tickets/process/${s.id}`, form));
+      const next = stepForm(d.steps.find((x) => x.id === s.id));
+      setForm(next);
+      setSaved(JSON.stringify(next));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    if (!confirm(`Delete this ${s.step_type} step? Its documents stay on the ticket.`)) return;
+    try { await apply(api.del(`/tickets/process/${s.id}`)); onDeleted(); } catch (e) { setError(e.message); }
+  };
+  const upload = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    setError('');
+    const fd = new FormData();
+    fd.append('file', file);
+    try { await apply(api.post(`/tickets/process/${s.id}/files`, fd)); } catch (e) { setError(e.message); }
+    setUploading(false);
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  return (
+    <div className="space-y-4 border-t border-slate-100 px-3 pt-3 pb-3">
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-type-${s.id}`}>Step</label>
+          <select id={`ps-type-${s.id}`} className="input py-1.5 text-sm" value={form.step_type} onChange={(e) => set('step_type', e.target.value)}>
+            {PROCESS_TYPES.map((t) => <option key={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-date-${s.id}`}>Date</label>
+          <input id={`ps-date-${s.id}`} type="date" className="input py-1.5 text-sm" value={form.step_date} onChange={(e) => set('step_date', e.target.value)} />
+        </div>
+      </div>
+
+      <section>
+        <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Users size={12} /> Who was involved</h4>
+        <div className="space-y-2.5">
+          {REVIEW_AREAS.map((a) => (
+            <div key={a.key} className="rounded-md bg-slate-50 p-2.5">
+              <div className="mb-1 text-xs font-semibold text-slate-700">{a.label}</div>
+              <MultiSelect compact options={userOptions} value={form.reviews[a.key].people} onChange={(v) => setReview(a.key, 'people', v)} placeholder="Add people…" />
+              <textarea rows={2} className="input mt-1.5 resize-y py-1.5 text-sm" placeholder={`${a.label} notes, outcome, or people outside KIT…`}
+                value={form.reviews[a.key].notes} onChange={(e) => setReview(a.key, 'notes', e.target.value)} aria-label={`${a.label} notes`} />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <label className="mb-1 block text-xs font-semibold tracking-wide text-slate-500 uppercase" htmlFor={`ps-notes-${s.id}`}>Notes</label>
+        <textarea id={`ps-notes-${s.id}`} rows={3} className="input resize-y text-sm" value={form.notes} onChange={(e) => set('notes', e.target.value)}
+          placeholder="Decisions, open questions, due dates…" />
+      </section>
+
+      <section>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Documents</span>
+          <label className={`btn cursor-pointer px-2.5 py-1 text-xs ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
+            {uploading ? <><Loader2 size={12} className="animate-spin" /> Uploading…</> : <><Upload size={12} /> Upload</>}
+            <input ref={fileRef} type="file" className="sr-only" onChange={(e) => upload(e.target.files[0])} />
+          </label>
+        </div>
+        {s.files.length ? (
+          <ul className="space-y-1">
+            {s.files.map((f) => (
+              <li key={f.id}>
+                <a href={`/api/tickets/files/${f.id}`} className="flex items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 text-sm hover:border-brand-500" title={`Uploaded ${fullStamp(f.created_at)}${f.uploaded_by ? ` by ${fullName(f.uploaded_by)}` : ''}`}>
+                  <FileText size={14} className="shrink-0 text-emerald-600" />
+                  <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                  <span className="shrink-0 text-[11px] text-slate-400">{bytes(f.size)}</span>
+                  <Download size={13} className="shrink-0 text-slate-400" />
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="text-xs text-slate-400">No documents yet. Uploads also appear on the ticket timeline.</p>}
+      </section>
+
+      <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
+        <span className={`text-[11px] ${error ? 'text-red-600' : dirty ? 'text-amber-700' : 'text-slate-400'}`}>
+          {error || (dirty ? 'Unsaved changes' : s.updated_at ? `Saved ${stamp(s.updated_at)}${s.updated_by ? ` by ${fullName(s.updated_by)}` : ''}` : `Added ${stamp(s.created_at)}${s.author ? ` by ${fullName(s.author)}` : ''}`)}
+        </span>
+        <span className="flex shrink-0 gap-1.5">
+          {(s.author?.id === user.id || user.role === 'admin') && (
+            <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500 hover:text-red-600" onClick={remove} aria-label="Delete step" title="Delete step"><Trash2 size={13} /></button>
+          )}
+          <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={save} disabled={!dirty || busy}>
+            {busy ? <><Loader2 size={12} className="animate-spin" /> Saving…</> : 'Save'}
+          </button>
+        </span>
+      </div>
+    </div>
   );
 }
 

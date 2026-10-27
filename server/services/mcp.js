@@ -34,3 +34,41 @@ export async function callMcpTool({ url, headers, tool, args }) {
     await client.close().catch(() => {});
   }
 }
+
+// Some servers rate-limit every HTTP request (OctoTrip: about 1 per second), so opening a new
+// connection per search uses up the allowance. These calls reuse one open connection per URL,
+// and retry once, after a pause, when the server says to slow down.
+const kept = new Map();
+
+async function keptClient(url, headers) {
+  if (!kept.has(url)) {
+    const client = new Client({ name: 'kit', version: '0.1.0' });
+    const ready = client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: headersFrom(headers) } }))
+      .then(() => client)
+      .catch((e) => { kept.delete(url); throw e; });
+    kept.set(url, ready);
+  }
+  return kept.get(url);
+}
+
+const isRateLimited = (e) => /429|rate.?limit/i.test(String(e?.message || e));
+
+export async function callMcpToolKeepAlive({ url, headers, tool, args }, { retryAfterMs = 2500 } = {}) {
+  if (UNSAFE_TOOL.test(tool)) throw new Error(`Refusing to call MCP tool "${tool}": KIT only calls search tools`);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const client = await keptClient(url, headers);
+      const result = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: 90_000 });
+      if (result.isError) throw new Error(`MCP tool ${tool} returned an error`);
+      return {
+        text: (result.content || []).map((c) => (c.type === 'text' ? c.text : JSON.stringify(c))).join('\n'),
+        structured: result.structuredContent ?? null,
+      };
+    } catch (e) {
+      // A dropped or refused connection is reopened on the next call.
+      if (!isRateLimited(e)) kept.delete(url);
+      if (attempt >= 1) throw e;
+      if (isRateLimited(e)) await new Promise((r) => setTimeout(r, retryAfterMs));
+    }
+  }
+}

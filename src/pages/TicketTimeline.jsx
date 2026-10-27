@@ -281,7 +281,7 @@ function Event({ event: e, ticket, onChanged, onOpenCard }) {
 
           {e.type === 'file' && (
             <>
-              <Meta event={e}>uploaded a document</Meta>
+              <Meta event={e}>uploaded a document{e.file.step_type && <> to <span className="font-medium text-slate-700">{e.file.step_type}</span></>}</Meta>
               <a href={`/api/tickets/files/${e.file.id}`} className="mt-1.5 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:border-brand-500">
                 <FileText size={16} className="shrink-0 text-emerald-600" />
                 <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{e.file.name}</span>

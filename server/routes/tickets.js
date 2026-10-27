@@ -11,6 +11,7 @@ import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
 import { recordWork } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
 import { PIPELINE_STATUSES, ticketFields } from './priorities.js';
+import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
 
 const r = Router();
 
@@ -434,10 +435,11 @@ r.get('/:id/timeline', (req, res) => {
     type: 'comment', at: m.created_at, author: m.author, comment: m, replies: comments.filter((x) => x.parent_id === m.id),
   }));
 
-  db.prepare(`SELECT f.*, u.first_name, u.last_name FROM ticket_files f LEFT JOIN users u ON u.id = f.uploaded_by WHERE f.ticket_id = ?`).all(t.id)
+  db.prepare(`SELECT f.*, u.first_name, u.last_name, p.step_type FROM ticket_files f LEFT JOIN users u ON u.id = f.uploaded_by
+    LEFT JOIN ticket_process_steps p ON p.id = f.process_step_id WHERE f.ticket_id = ?`).all(t.id)
     .forEach((f) => events.push({
       type: 'file', at: f.created_at, author: f.first_name ? { id: f.uploaded_by, first_name: f.first_name, last_name: f.last_name } : null,
-      file: { id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type },
+      file: { id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, step_type: f.step_type ?? null },
     }));
 
   const targetId = (e) => ({ ticket: t.id, card: e.card?.id, note: e.note?.id, file: e.file?.id })[e.type];
@@ -527,6 +529,88 @@ r.delete('/comments/:id', (req, res) => {
   // Its additional-work entries go with it (replies are removed along with their thread).
   db.prepare("DELETE FROM work_log WHERE kind IN ('question', 'comment', 'reply') AND ref_id NOT IN (SELECT id FROM ticket_comments)").run();
   res.json({ ok: true });
+});
+
+// ---- Process flow: RFI, RFP, gate reviews and so on, each with its reviews, notes and documents
+
+const fileOut = (f) => ({ id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, created_at: f.created_at,
+  uploaded_by: f.first_name ? { id: f.uploaded_by, first_name: f.first_name, last_name: f.last_name } : null });
+const processRow = (id) => db.prepare('SELECT * FROM ticket_process_steps WHERE id = ?').get(id);
+const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+
+function listProcess(ticketId) {
+  const files = db.prepare(`SELECT f.*, u.first_name, u.last_name FROM ticket_files f LEFT JOIN users u ON u.id = f.uploaded_by
+    WHERE f.ticket_id = ? AND f.process_step_id IS NOT NULL ORDER BY f.created_at, f.id`).all(ticketId);
+  return db.prepare(`SELECT p.*, a.first_name, a.last_name, e.first_name AS e_first_name, e.last_name AS e_last_name
+    FROM ticket_process_steps p LEFT JOIN users a ON a.id = p.author_id LEFT JOIN users e ON e.id = p.updated_by
+    WHERE p.ticket_id = ? ORDER BY COALESCE(p.step_date, substr(p.created_at, 1, 10)), p.created_at, p.id`).all(ticketId)
+    .map((p) => ({
+      id: p.id, step_type: p.step_type, step_date: p.step_date, notes: p.notes || '', reviews: cleanReviews(json.parse(p.reviews, {})),
+      created_at: p.created_at, updated_at: p.updated_at,
+      author: p.first_name ? { id: p.author_id, first_name: p.first_name, last_name: p.last_name } : null,
+      updated_by: p.e_first_name ? { id: p.updated_by, first_name: p.e_first_name, last_name: p.e_last_name } : null,
+      files: files.filter((f) => f.process_step_id === p.id).map(fileOut),
+    }));
+}
+
+r.get('/:id/process', (req, res) => {
+  if (!ticketRow(req.params.id)) return res.status(404).json({ error: 'Ticket not found' });
+  res.json({ steps: listProcess(req.params.id), types: PROCESS_TYPES });
+});
+
+/** Body: { step_type, step_date? }. Steps can be added in any order, at any time. */
+r.post('/:id/process', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const type = String(req.body?.step_type || '');
+  if (!PROCESS_TYPES.includes(type)) return res.status(400).json({ error: 'Choose a step type' });
+  const id = db.prepare('INSERT INTO ticket_process_steps (ticket_id, step_type, step_date, reviews, author_id) VALUES (?, ?, ?, ?, ?)')
+    .run(t.id, type, isoDate(req.body?.step_date), json.str(cleanReviews({})), req.user.id).lastInsertRowid;
+  recordWork(req.user, { kind: 'process', ticket_id: t.id, ref_id: id, summary: type });
+  touch(t.id);
+  res.json({ id, steps: listProcess(t.id) });
+});
+
+/** Body may hold step_type, step_date, reviews and notes. Anyone can update a step. */
+r.put('/process/:pid', (req, res) => {
+  const p = processRow(req.params.pid);
+  if (!p) return res.status(404).json({ error: 'Process step not found' });
+  const b = req.body || {};
+  if (b.step_type !== undefined && !PROCESS_TYPES.includes(b.step_type)) return res.status(400).json({ error: 'Choose a step type' });
+  db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`).run(
+    b.step_type ?? p.step_type,
+    b.step_date !== undefined ? isoDate(b.step_date) : p.step_date,
+    b.reviews !== undefined ? json.str(cleanReviews(b.reviews)) : p.reviews,
+    typeof b.notes === 'string' ? b.notes.trim() : p.notes,
+    req.user.id, p.id,
+  );
+  touch(p.ticket_id);
+  res.json({ steps: listProcess(p.ticket_id) });
+});
+
+/** Its documents stay on the ticket. */
+r.delete('/process/:pid', (req, res) => {
+  const p = processRow(req.params.pid);
+  if (!p) return res.status(404).json({ error: 'Process step not found' });
+  if (p.author_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only whoever added this step can delete it' });
+  db.prepare('DELETE FROM ticket_process_steps WHERE id = ?').run(p.id);
+  db.prepare("DELETE FROM work_log WHERE kind = 'process' AND ref_id = ?").run(p.id);
+  touch(p.ticket_id);
+  res.json({ steps: listProcess(p.ticket_id) });
+});
+
+r.post('/process/:pid/files', upload.single('file'), (req, res) => {
+  const p = processRow(req.params.pid);
+  if (!req.file) return res.status(400).json({ error: 'Choose a file to upload' });
+  if (!p) {
+    fs.rmSync(req.file.path, { force: true });
+    return res.status(404).json({ error: 'Process step not found' });
+  }
+  const id = db.prepare(`INSERT INTO ticket_files (ticket_id, original_name, stored_name, mime_type, size, uploaded_by, process_step_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(p.ticket_id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id, p.id).lastInsertRowid;
+  recordWork(req.user, { kind: 'file', ticket_id: p.ticket_id, ref_id: id, summary: req.file.originalname });
+  touch(p.ticket_id);
+  res.json({ steps: listProcess(p.ticket_id) });
 });
 
 // ---- Documents

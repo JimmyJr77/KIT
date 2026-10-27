@@ -32,3 +32,16 @@ services:
         value: https://mcp.kiwi.com
       - key: AIRFARE_MCP_TOOL
         value: search-flight
+      # Rental cars: OctoTrip's free rental-car MCP server (no key; prices in USD).
+      - key: RENTALCAR_MCP_URL
+        value: https://mcp.octotrip.app/rental-cars/mcp
+      - key: RENTALCAR_MCP_TOOL
+        value: search
+      # Gemini (Google AI Studio key). Secret: set the value in Render's dashboard, never here.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      # GSA Per Diem API (free key from https://api.data.gov/signup). Secret: set it in Render's dashboard.
+      - key: GSA_API_KEY
+        sync: false

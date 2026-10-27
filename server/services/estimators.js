@@ -7,7 +7,7 @@
 // estimate is returned so the rest of the app keeps working.
 import fs from 'node:fs';
 import { Type } from '@google/genai';
-import { callMcpTool } from './mcp.js';
+import { callMcpTool, callMcpToolKeepAlive } from './mcp.js';
 import { airportCodes } from './airports.js';
 import { generateJson, geminiConfigured } from './gemini.js';
 
@@ -203,6 +203,89 @@ const CAR_SCHEMA = {
   required: ['totalEstimate', 'summary'],
 };
 
+// OctoTrip's rental-car MCP server (free, no key): https://mcp.octotrip.app/rental-cars/mcp, tool "search".
+// It takes structured fields and returns offers by category, so no Gemini parsing is needed.
+const OCTOTRIP_TOOL = 'search';
+const isOctoTrip = () => /octotrip/i.test(process.env.RENTALCAR_MCP_URL || '') || process.env.RENTALCAR_MCP_TOOL === OCTOTRIP_TOOL;
+// Our vehicle classes, matched on OctoTrip's offers. Its `category` is only the car's size; the body type is the
+// 2nd letter of the industry SIPP code (F = SUV, J = all-terrain, V = van, T = convertible, P = pickup).
+const sippBody = (o) => String(o.sipp || '').toUpperCase()[1] || '';
+const bodyIn = (o, letters) => !!sippBody(o) && letters.includes(sippBody(o));
+const size = (o) => String(o.category || '').toLowerCase();
+const OCTOTRIP_CLASS = {
+  'Economy / Compact': (o) => /^(mini|economy|compact)/.test(size(o)) && !bodyIn(o, 'VPF'),
+  'Midsize / Full-size': (o) => /^(intermediate|standard|full ?size|midsize)/.test(size(o)) && !bodyIn(o, 'VPFJ'),
+  'SUV / Minivan': (o) => bodyIn(o, 'FJVGW') || /suv|van/.test(size(o)),
+  'Luxury / Convertible': (o) => (/luxury|premium/.test(size(o)) && !bodyIn(o, 'P')) || bodyIn(o, 'T'),
+};
+
+// OctoTrip allows about one search per second per server, so searches wait their turn.
+const OCTOTRIP_GAP_MS = 1200;
+let octoTripQueue = Promise.resolve();
+const octoTripTurn = () => {
+  const turn = octoTripQueue.then(() => new Promise((r) => setTimeout(r, OCTOTRIP_GAP_MS)));
+  octoTripQueue = turn.catch(() => {});
+  return octoTripQueue;
+};
+
+async function octoTripSearch(location, input) {
+  const run = async () => {
+    const { text } = await callMcpToolKeepAlive({
+      url: process.env.RENTALCAR_MCP_URL,
+      headers: process.env.RENTALCAR_MCP_HEADERS,
+      tool: process.env.RENTALCAR_MCP_TOOL || OCTOTRIP_TOOL,
+      args: {
+        location,
+        pickup_date: input.pickupDate,
+        dropoff_date: input.dropoffDate,
+        pickup_time: input.pickupTime || '12:00',
+        dropoff_time: input.dropoffTime || '12:00',
+        currency: 'USD',
+      },
+    });
+    return JSON.parse(text);
+  };
+  const wait = octoTripTurn();
+  await wait;
+  return run();
+}
+
+async function octoTripCar(input, days) {
+  // A city name resolves to its downtown branches, which often have little. "<City> airport" finds the main airport;
+  // airport codes alone are unreliable ("SAN" resolved to Rimini), so they go last and carry the word "airport".
+  const city = String(input.location || '').split(',')[0].trim();
+  const codes = String(airportCodes(input.location) || '').split(',').filter(Boolean).slice(0, 2);
+  const tries = [...new Set([input.location, city && `${city} airport`, ...codes.map((c) => `${c} airport`)].filter(Boolean))];
+  const matches = OCTOTRIP_CLASS[input.vehicleClass] || (() => true);
+  let data = null;
+  let offers = [];
+  let inClass = [];
+  let fallback = null; // the first place with any cars, in case none have the requested class
+  for (const location of tries) {
+    const found = await octoTripSearch(location, input);
+    const usable = (found.results || []).filter((o) => o.currency === 'USD' && Number.isFinite(o.price));
+    if (usable.length && !fallback) fallback = { data: found, offers: usable };
+    if (usable.some(matches)) { data = found; offers = usable; inClass = usable.filter(matches); break; }
+  }
+  if (!inClass.length && fallback) ({ data, offers } = fallback);
+  if (!offers.length) throw new Error('No rental cars found for that location and dates');
+  const pool = (inClass.length ? inClass : offers).sort((a, b) => a.price - b.price);
+  const best = pool[0];
+  const rentalDays = data.rental_days || days;
+  return {
+    source: 'mcp',
+    provider: 'OctoTrip',
+    days: rentalDays,
+    dailyRate: Math.round((best.price_per_day ?? best.price / rentalDays) * 100) / 100,
+    totalEstimate: Math.round(best.price),
+    suppliers: [...new Set(pool.slice(0, 5).map((o) => o.vendor).filter(Boolean))],
+    included: `${best.category} ${best.name} from ${best.vendor}, ${rentalDays} day(s), ${best.mileage || 'mileage per vendor'}${best.included_protections?.length ? `; includes ${best.included_protections.slice(0, 3).join(', ')}` : ''}`,
+    summary: `Cheapest ${inClass.length ? input.vehicleClass : 'available'} car near ${data.pickup_location_resolved || input.location}: `
+      + `${best.name} from ${best.vendor}, $${Math.round(best.price)} for ${rentalDays} day(s)`
+      + `${inClass.length ? '' : ` (no ${input.vehicleClass} offers, so the cheapest of any class)`}. ${offers.length} offers checked.`,
+  };
+}
+
 const PLACEHOLDER_DAILY = { 'Economy / Compact': 55, 'Midsize / Full-size': 70, 'SUV / Minivan': 95, 'Luxury / Convertible': 140 };
 
 export async function estimateCar(input) {
@@ -210,6 +293,13 @@ export async function estimateCar(input) {
   const days = daysBetween(input.pickupDate, input.dropoffDate);
   const base = { query, updatedAt: new Date().toISOString() };
 
+  if (process.env.RENTALCAR_MCP_URL && isOctoTrip()) {
+    try {
+      return { ...base, ...(await octoTripCar(input, days)) };
+    } catch (e) {
+      return { ...base, ...placeholderCar(input, days), summary: 'Live rental search failed, so this is a placeholder estimate.', error: e.message };
+    }
+  }
   if (process.env.RENTALCAR_MCP_URL) {
     try {
       const { text: payload } = await callMcpTool({
