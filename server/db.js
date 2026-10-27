@@ -372,6 +372,21 @@ CREATE TABLE IF NOT EXISTS ticket_process_steps (
 );
 CREATE INDEX IF NOT EXISTS ticket_process_steps_ticket ON ticket_process_steps(ticket_id);
 `);
+db.exec(`
+-- People asking for KIT access from the sign-in page. An admin approves (adding the email to approved_accounts) or declines.
+CREATE TABLE IF NOT EXISTS access_requests (
+  id INTEGER PRIMARY KEY,
+  first_name TEXT NOT NULL,
+  last_name TEXT NOT NULL,
+  email TEXT NOT NULL COLLATE NOCASE,
+  reason TEXT,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | declined
+  handled_by INTEGER REFERENCES users(id),
+  handled_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS access_requests_status ON access_requests(status);
+`);
 // Documents uploaded to a process step are still ticket documents; this says which step they belong to.
 addColumn('ticket_files', 'process_step_id', 'INTEGER REFERENCES ticket_process_steps(id) ON DELETE SET NULL');
 

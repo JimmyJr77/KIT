@@ -336,7 +336,7 @@ function SupportSection({ event, onUpdated }) {
           <span className={`text-[11px] ${error ? 'text-red-600' : note ? 'text-emerald-700' : 'text-slate-400'}`}>
             {error || note || (team && (team.team.length
               ? `Alerts ${team.team.map(fullName).join(', ')}`
-              : 'No one is on the Marketing team yet. Assign people to it in Profile.'))}
+              : 'No one is on the Marketing team yet. An admin can assign people to it under Admin Access.'))}
           </span>
           <button type="button" className="btn shrink-0 px-2.5 py-1 text-xs" onClick={request} disabled={!details.trim() || busy === 'request'}>
             <Megaphone size={13} /> {busy === 'request' ? 'Sending…' : 'Request marketing support'}

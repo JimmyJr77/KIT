@@ -100,4 +100,36 @@ r.delete('/approved/:email', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- Access requests from the sign-in page (admin) ----
+r.get('/access-requests', requireAdmin, (req, res) => {
+  const rows = db.prepare(`SELECT q.*, h.first_name AS h_first_name, h.last_name AS h_last_name FROM access_requests q
+    LEFT JOIN users h ON h.id = q.handled_by
+    WHERE q.status = 'pending' OR q.handled_at >= datetime('now', '-30 days')
+    ORDER BY q.status != 'pending', COALESCE(q.handled_at, q.created_at) DESC`).all();
+  res.json({
+    requests: rows.map(({ h_first_name, h_last_name, ...q }) => ({ ...q, handled_by: h_first_name ? { id: q.handled_by, first_name: h_first_name, last_name: h_last_name } : null })),
+    pending: rows.filter((q) => q.status === 'pending').length,
+  });
+});
+
+/** Approve adds the email to approved accounts so the person can activate it; decline just closes the request. */
+r.post('/access-requests/:id/:action', requireAdmin, (req, res) => {
+  const q = db.prepare('SELECT * FROM access_requests WHERE id = ?').get(req.params.id);
+  if (!q) return res.status(404).json({ error: 'Request not found' });
+  if (q.status !== 'pending') return res.status(409).json({ error: 'This request has already been handled' });
+  const action = req.params.action;
+  if (action !== 'approve' && action !== 'decline') return res.status(400).json({ error: 'Unknown action' });
+  db.transaction(() => {
+    if (action === 'approve') {
+      const role = req.body?.role === 'admin' ? 'admin' : 'member';
+      db.prepare(`INSERT INTO approved_accounts (email, role, added_by) VALUES (?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET role = excluded.role`).run(q.email, role, req.user.id);
+      db.prepare('UPDATE users SET active = 1 WHERE email = ?').run(q.email);
+    }
+    db.prepare("UPDATE access_requests SET status = ?, handled_by = ?, handled_at = datetime('now') WHERE id = ?")
+      .run(action === 'approve' ? 'approved' : 'declined', req.user.id, q.id);
+  })();
+  res.json({ ok: true });
+});
+
 export default r;

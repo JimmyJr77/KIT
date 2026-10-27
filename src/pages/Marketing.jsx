@@ -321,7 +321,7 @@ function Requests({ requests, meta, onChanged }) {
           ))}
         </div>
         <span className="text-xs text-slate-400">
-          {meta && (meta.team.length ? `Requests alert ${meta.team.map(fullName).join(', ')}` : 'No one is on the Marketing team yet. Assign people to it in Profile.')}
+          {meta && (meta.team.length ? `Requests alert ${meta.team.map(fullName).join(', ')}` : 'No one is on the Marketing team yet. An admin can assign people to it under Admin Access.')}
         </span>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}

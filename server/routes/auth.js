@@ -39,6 +39,32 @@ r.post('/register', (req, res) => {
   }
 });
 
+// Anyone can ask for access from the sign-in page; admins see it under Admin Access.
+// A light per-address limit keeps the open form from being flooded.
+const recentRequests = new Map();
+r.post('/request-access', (req, res) => {
+  const b = req.body || {};
+  const first = String(b.first_name || '').trim().slice(0, 80);
+  const last = String(b.last_name || '').trim().slice(0, 80);
+  const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
+  const reason = String(b.reason || '').trim().slice(0, 1000);
+  if (!first || !last) return res.status(400).json({ error: 'First and last name are required' });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email' });
+  const hourAgo = Date.now() - 3600000;
+  const hits = (recentRequests.get(req.ip) || []).filter((t) => t > hourAgo);
+  if (hits.length >= 5) return res.status(429).json({ error: 'Too many requests. Try again later.' });
+  recentRequests.set(req.ip, [...hits, Date.now()]);
+  if (isApproved(email)) return res.json({ ok: true, approved: true });
+  // One open request per email: asking again updates it.
+  const open = db.prepare("SELECT id FROM access_requests WHERE email = ? AND status = 'pending'").get(email);
+  if (open) {
+    db.prepare("UPDATE access_requests SET first_name = ?, last_name = ?, reason = ?, created_at = datetime('now') WHERE id = ?").run(first, last, reason, open.id);
+  } else {
+    db.prepare('INSERT INTO access_requests (first_name, last_name, email, reason) VALUES (?, ?, ?, ?)').run(first, last, email, reason);
+  }
+  res.json({ ok: true });
+});
+
 r.post('/logout', (req, res) => {
   clearSession(res);
   res.json({ ok: true });
