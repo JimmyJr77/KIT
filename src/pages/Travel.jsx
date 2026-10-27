@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Plus, RefreshCw, Upload, Settings2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -8,7 +9,7 @@ import { fullName, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import UserCombobox from '../components/UserCombobox.jsx';
 import { locationLabel } from '../components/LocationInput.jsx';
-import TripForm, { newTrip } from './TripForm.jsx';
+import TripForm, { newTrip, tripFromEvent } from './TripForm.jsx';
 
 export default function Travel() {
   const { user } = useAuth();
@@ -22,6 +23,16 @@ export default function Travel() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [editing, setEditing] = useState(null);
   const [outlook, setOutlook] = useState(null);
+
+  // Arriving from Events with an event: open a new trip filled in from it (once the mileage rate is known).
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const ev = location.state?.fromEvent;
+    if (!ev || !meta.data) return;
+    setEditing(tripFromEvent(ev, user.id, meta.data.mileageRate));
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, meta.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = () => {
     const qs = new URLSearchParams();

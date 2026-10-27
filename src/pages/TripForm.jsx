@@ -8,6 +8,23 @@ import LocationInput, { EMPTY_LOCATION, locationKey, locationLabel } from '../co
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
+/**
+ * A new trip filled in from an event: its dates, its city as the destination, and a Conference purpose.
+ * Flights, car, and lodging pick up those dates and that city on their own.
+ */
+export function tripFromEvent(event, userId, mileageRate) {
+  const fee = event.fee != null ? `Registration fee: $${Number(event.fee).toLocaleString('en-US')} (not included in this estimate)` : null;
+  return {
+    ...newTrip(userId, mileageRate),
+    event_id: event.id,
+    purposes: ['Conference'],
+    location_to: { ...EMPTY_LOCATION, ...event.location },
+    date_from: event.date_from,
+    date_to: event.date_to,
+    details: [event.name, event.address, fee, event.website].filter(Boolean).join('\n'),
+  };
+}
+
 export function newTrip(userId, mileageRate) {
   return {
     traveler_id: userId,

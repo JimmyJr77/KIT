@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { UserRound, LayoutDashboard, Plane, ListChecks, Ticket, SquareKanban, Bell, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { UserRound, LayoutDashboard, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, Bell, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
@@ -9,6 +9,7 @@ const NAV = [
   { to: '/profile', label: 'Profile', icon: UserRound },
   { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/events', label: 'Events', icon: CalendarDays },
   { to: '/travel', label: 'Travel', icon: Plane },
   { to: '/priorities', label: 'Weekly Priorities', icon: ListChecks },
   { to: '/tickets', label: 'Tickets', icon: Ticket },

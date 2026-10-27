@@ -199,6 +199,33 @@ CREATE TABLE IF NOT EXISTS ticket_files (
 );
 `);
 
+db.exec(`
+-- Conferences, industry days, and other events people may attend.
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  date_from TEXT NOT NULL,
+  date_to TEXT NOT NULL,
+  description TEXT,
+  goal TEXT,          -- goal or benefit of attending
+  fee REAL,
+  website TEXT,
+  poc_name TEXT,
+  poc_phone TEXT,
+  address TEXT,       -- street address
+  location TEXT NOT NULL DEFAULT '{}', -- { intl, city, state, country }, used for travel estimates
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS event_attendees (
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (event_id, user_id)
+);
+`);
+
 // Columns added after the first release of a table.
 function addColumn(table, column, type) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
@@ -218,6 +245,8 @@ addColumn('tickets', 'strategy_updated_by', 'INTEGER');
 addColumn('tickets', 'assessment', 'TEXT');
 addColumn('tickets', 'assessment_updated_at', 'TEXT');
 addColumn('tickets', 'assessment_updated_by', 'INTEGER');
+// A trip planned from an event links back to it.
+addColumn('trips', 'event_id', 'INTEGER REFERENCES events(id) ON DELETE SET NULL');
 
 db.exec(`
 -- To-dos on a ticket as a whole, not tied to any priority card.

@@ -9,6 +9,7 @@ import Tickets from './pages/Tickets.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Alerts from './pages/Alerts.jsx';
 import Pipeline from './pages/Pipeline.jsx';
+import Events from './pages/Events.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -26,6 +27,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route path="/profile" element={<Profile />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/events" element={<Events />} />
         <Route path="/travel" element={<Travel />} />
         <Route path="/priorities" element={<WeeklyPriorities />} />
         <Route path="/tickets" element={<Tickets />} />

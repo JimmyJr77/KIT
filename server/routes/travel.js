@@ -35,6 +35,7 @@ function toRow(b) {
     quarter: quarterFor(b.date_from),
     train: b.train === '' || b.train == null ? null : Number(b.train),
     total_estimate: tripCosts(b).total,
+    event_id: Number(b.event_id) || null,
   };
   for (const [k, d] of Object.entries(JSON_COLS)) row[k] = json.str(b[k] ?? d);
   return row;
