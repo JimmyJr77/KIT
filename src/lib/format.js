@@ -17,3 +17,20 @@ export function shortDate(iso, opts = { month: 'short', day: 'numeric' }) {
   if (!iso) return '';
   return new Date(`${iso}T12:00:00`).toLocaleDateString('en-US', opts);
 }
+
+// SQLite stores UTC timestamps as "YYYY-MM-DD HH:MM:SS".
+export const parseUtc = (s) => (s ? new Date(`${s.replace(' ', 'T')}Z`) : null);
+export const stamp = (s) => parseUtc(s)?.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+export const fullStamp = (s) => parseUtc(s)?.toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'long' });
+
+/** "just now", "5m ago", "3h ago", "2d ago", then a short date. */
+export function ago(s) {
+  const d = parseUtc(s);
+  if (!d) return '';
+  const m = Math.round((Date.now() - d.getTime()) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  if (m < 60 * 24) return `${Math.round(m / 60)}h ago`;
+  if (m < 60 * 24 * 7) return `${Math.round(m / 1440)}d ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}

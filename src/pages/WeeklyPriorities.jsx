@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, CheckSquare, Lock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, pointerWithin, useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, horizontalListSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi, DAYS } from '../lib/data.js';
-import { fullName, initials, shortDate, todayIso } from '../lib/format.js';
-import { addDays, usd } from '../lib/travelCalc.js';
+import { fullName, initials, shortDate, todayIso, stamp } from '../lib/format.js';
+import { addDays } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import PriorityPanel from './PriorityPanel.jsx';
+import PriorityCard from './PriorityCard.jsx';
+import CommentPanel from './CommentPanel.jsx';
+import { ViewSwitcher, TicketsView, TasksView, ThreadsView } from './LaneViews.jsx';
 
 // Prefer the card under the pointer, then the lane under the pointer, then the nearest target.
 const collision = (args) => {
@@ -34,8 +37,11 @@ export default function WeeklyPriorities() {
   const [filter, setFilter] = useState([]);
   const [orientation, setOrientation] = useState(readPref('kit.priorities.orientation', 'rows'));
   const [panel, setPanel] = useState(null); // { card } | { newFor: userId }
+  const [thread, setThread] = useState(null); // { id } | { options } for a new question or comment
   const [activeId, setActiveId] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
+  const isAll = teamId === 'all';
   const team = teams.data?.teams.find((t) => t.id === Number(teamId));
 
   const load = () => api.get(`/priorities?team=${teamId}&week=${weekDate}`).then(setBoard);
@@ -59,10 +65,27 @@ export default function WeeklyPriorities() {
   const cardsById = useMemo(() => Object.fromEntries((board?.cards || []).map((c) => [c.id, c])), [board]);
   const members = (board?.members || []).filter((m) => !filter.length || filter.includes(m.id));
   const editable = board && board.weekStart >= board.currentWeekStart;
+  const planning = board?.planning;
+  // On the All board each team has its own lock, so check the member's team.
+  const planningClosedFor = (m) => (board?.team.id === 'all' ? !!planning?.closed_teams.includes(m?.team_id) : !!planning?.closed);
+  const [planningBusy, setPlanningBusy] = useState(false);
+  const togglePlanning = async () => {
+    const closing = !planning.closed;
+    if (closing && !confirm('Close planning for this week? Anything added from now on is tracked as work, not priorities.')) return;
+    setPlanningBusy(true);
+    try {
+      const r = await api.put('/priorities/planning', { team: board.team.id, week: board.weekStart, closed: closing });
+      setBoard((b) => ({ ...b, planning: r.planning }));
+    } finally {
+      setPlanningBusy(false);
+    }
+  };
+  // Lane order is stored per team, so drag and drop is limited to single-team boards.
+  const draggable = editable && board.team.id !== 'all';
   const usersById = useMemo(() => Object.fromEntries((allUsers.data?.users || []).map((u) => [u.id, u])), [allUsers.data]);
 
-  const changeCheckin = async (dow) => {
-    await api.put(`/teams/${teamId}/checkin`, { checkin_dow: Number(dow) });
+  const changeCheckin = async (id, dow) => {
+    await api.put(`/teams/${id}/checkin`, { checkin_dow: Number(dow) });
     await teams.reload();
     load();
   };
@@ -75,7 +98,7 @@ export default function WeeklyPriorities() {
 
   const onDragEnd = async ({ active, over }) => {
     setActiveId(null);
-    if (!over || !editable) return;
+    if (!over || !draggable) return;
     const src = active.data.current;
     const dst = over.data.current;
     if (!src || !dst) return;
@@ -100,6 +123,40 @@ export default function WeeklyPriorities() {
     setBoard((b) => ({ ...b, cards: r.cards }));
   };
 
+  const newMember = panel?.newFor ? board?.members.find((m) => m.id === panel.newFor) : null;
+  // Check off a task right away, then save. The server moves it to the end of its list.
+  const toggleTask = async (card, index, done) => {
+    const move = (c) => {
+      const list = [...c.checklist];
+      const [item] = list.splice(index, 1);
+      return { ...c, checklist: [...list, { ...item, done }] };
+    };
+    setBoard((b) => ({ ...b, cards: b.cards.map((c) => (c.id === card.id ? move(c) : c)) }));
+    try {
+      const r = await api.put(`/priorities/cards/${card.id}/checklist/${index}`, { done });
+      setBoard((b) => ({ ...b, cards: b.cards.map((c) => (c.id === card.id ? r.card : c)) }));
+    } catch {
+      load();
+    }
+  };
+
+  // A member's threads: anything on one of their priorities, or on one of their master tickets as a whole.
+  const threadsFor = (cardIds) => {
+    const cards = cardIds.map((id) => cardsById[id]).filter(Boolean);
+    const ids = new Set(cards.map((c) => c.id));
+    const tickets = new Set(cards.map((c) => c.ticket_id));
+    return (board?.threads || []).filter((m) => (m.card_id ? ids.has(m.card_id) : tickets.has(m.ticket_id)));
+  };
+  // What a new question or comment can be about: each master ticket, and each priority on it.
+  const aboutOptions = (cardIds) => {
+    const byTicket = new Map();
+    cardIds.map((id) => cardsById[id]).filter(Boolean).forEach((c) => {
+      if (!byTicket.has(c.ticket_id)) byTicket.set(c.ticket_id, { ticket_id: c.ticket_id, title: c.opportunity_title, cards: [] });
+      byTicket.get(c.ticket_id).cards.push({ id: c.id, title: c.title || 'Untitled priority' });
+    });
+    return [...byTicket.values()];
+  };
+
   const activeCard = activeId ? cardsById[Number(String(activeId).split('::')[1])] : null;
 
   return (
@@ -109,25 +166,21 @@ export default function WeeklyPriorities() {
           <button className="btn" onClick={() => { const o = orientation === 'rows' ? 'columns' : 'rows'; setOrientation(o); writePref('kit.priorities.orientation', o); }}>
             <ArrowLeftRight size={15} /> {orientation === 'rows' ? 'Members as columns' : 'Members as rows'}
           </button>
+          <button className="btn" onClick={() => setSettingsOpen(true)}><Settings size={15} /> Settings</button>
         </PageHeader>
 
         <div className="flex flex-wrap items-end gap-4">
           <div className="w-52">
             <label className="label">Team</label>
-            <select className="input" value={teamId} onChange={(e) => setTeamId(Number(e.target.value))}>
+            <select className="input" value={teamId} onChange={(e) => setTeamId(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
+              <option value="all">All</option>
               {teams.data?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-          </div>
-          <div className="w-44">
-            <label className="label">Weekly check-in day</label>
-            <select className="input" value={team?.checkin_dow ?? 1} onChange={(e) => changeCheckin(e.target.value)}>
-              {DAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
             </select>
           </div>
           <div className="min-w-72 flex-1">
             <label className="label">Show members</label>
             <MultiSelect
-              options={(board?.members || []).map((m) => ({ value: m.id, label: fullName(m), sub: m.title }))}
+              options={(board?.members || []).map((m) => ({ value: m.id, label: fullName(m), sub: m.team_name ? `${m.title || ''} · ${m.team_name}` : m.title }))}
               value={filter}
               onChange={setFilter}
               placeholder="All members — type to filter…"
@@ -138,9 +191,23 @@ export default function WeeklyPriorities() {
         {board && <WeekStrip weekStart={board.weekStart} current={board.currentWeekStart} onPick={setWeekDate} />}
 
         <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
-          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-brand-600 bg-white ring-1 ring-slate-200" /> Planned at check-in</span>
-          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-amber-500 bg-amber-50 ring-1 ring-amber-200" /> New work added after check-in</span>
+          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-brand-600 bg-white ring-1 ring-slate-200" /> Priority (planned)</span>
+          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-amber-500 bg-amber-50 ring-1 ring-amber-200" /> Work (added after planning closed)</span>
           {board && !editable && <span className="flex items-center gap-1 text-slate-600"><Lock size={12} /> Past week — read only</span>}
+          {planning && (
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-[11px] text-slate-400">
+                {planning.closed
+                  ? `Planning closed${planning.closed_by ? ` by ${planning.closed_by}` : ''}${planning.closed_at ? ` · ${stamp(planning.closed_at)}` : ''}`
+                  : planning.closed_count > 0 ? `Planning closed for ${planning.closed_count} of ${planning.total} teams` : 'Planning open'}
+              </span>
+              {editable && (
+                <button className={planning.closed ? 'btn' : 'btn-primary'} onClick={togglePlanning} disabled={planningBusy}>
+                  {planning.closed ? <><LockOpen size={15} /> Open planning</> : <><Lock size={15} /> Close planning</>}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -149,14 +216,26 @@ export default function WeeklyPriorities() {
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={({ active }) => setActiveId(active.id)} onDragEnd={onDragEnd} onDragCancel={() => setActiveId(null)}>
           <div className={orientation === 'rows' ? 'inline-flex min-w-full flex-col gap-3' : 'flex items-start gap-4'}>
             {members.map((m) => (
-              <Lane key={m.id} member={m} orientation={orientation} cardIds={lanes[m.id] || []} cardsById={cardsById}
-                usersById={usersById} editable={editable}
-                onOpen={(card) => setPanel({ card })} onNew={() => setPanel({ newFor: m.id })} />
+              <Lane key={m.id} member={m} orientation={orientation} asWork={planningClosedFor(m)} cardIds={lanes[m.id] || []} cardsById={cardsById}
+                usersById={usersById} editable={editable && (board.team.id !== 'all' || !!m.team_id)} draggable={draggable}
+                onOpen={(card) => setPanel({ card })} onNew={() => setPanel({ newFor: m.id })}
+                onToggleTask={toggleTask} threads={threadsFor(lanes[m.id] || [])}
+                onOpenThread={(t) => setThread({ id: t.id })}
+                onNewThread={(lanes[m.id] || []).length ? () => setThread({ options: aboutOptions(lanes[m.id]), member: m }) : null} />
             ))}
           </div>
           <DragOverlay>{activeCard && <PriorityCard card={activeCard} usersById={usersById} rank={null} overlay />}</DragOverlay>
         </DndContext>
       </div>
+
+      {settingsOpen && (
+        <SettingsPanel teams={isAll ? teams.data?.teams || [] : team ? [team] : []} onChange={changeCheckin} onClose={() => setSettingsOpen(false)} />
+      )}
+
+      {thread && (
+        <CommentPanel key={thread.id ?? 'new'} threadId={thread.id} options={thread.options} member={thread.member}
+          onClose={() => setThread(null)} onPosted={(id) => { setThread({ id }); load(); }} onChanged={load} />
+      )}
 
       {panel && board && (
         <PriorityPanel
@@ -165,14 +244,42 @@ export default function WeeklyPriorities() {
           defaultAssignee={panel.newFor}
           users={allUsers.data?.users || []}
           statuses={meta.data?.pipelineStatuses || []}
-          teamId={board.team.id}
-          weekStart={board.weekStart}
+          teamId={board.team.id === 'all' ? newMember?.team_id : board.team.id}
+          weekStart={board.team.id === 'all' ? board.teamWeeks[newMember?.team_id] : board.weekStart}
           readOnly={!editable}
+          asWork={planningClosedFor(newMember)}
           onClose={() => setPanel(null)}
           onSaved={() => { setPanel(null); load(); }}
+          onNotesChanged={load}
         />
       )}
     </div>
+  );
+}
+
+/** Slide-out panel for board settings. On the All board, each team's check-in day is listed. */
+function SettingsPanel({ teams, onChange, onClose }) {
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-slate-900/20" onClick={onClose} />
+      <aside className="fixed top-0 right-0 z-50 flex h-full w-full max-w-md flex-col bg-white shadow-2xl animate-[slidein_.2s_ease-out]">
+        <style>{'@keyframes slidein{from{transform:translateX(100%)}to{transform:none}}'}</style>
+        <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+          <h2 className="font-semibold">Weekly Priorities settings</h2>
+          <button className="btn-ghost p-1.5" onClick={onClose}><X size={18} /></button>
+        </header>
+        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+          {teams.map((t) => (
+            <div key={t.id}>
+              <label className="label">{teams.length > 1 ? `${t.name} · weekly check-in day` : 'Weekly check-in day'}</label>
+              <select className="input" value={t.checkin_dow} onChange={(e) => onChange(t.id, e.target.value)}>
+                {DAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -208,8 +315,11 @@ function WeekStrip({ weekStart, current, onPick }) {
   );
 }
 
-function Lane({ member, orientation, cardIds, cardsById, usersById, editable, onOpen, onNew }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `lane::${member.id}`, data: { type: 'lane', userId: member.id }, disabled: !editable });
+function Lane({ member, asWork, orientation, cardIds, cardsById, usersById, editable, draggable, onOpen, onNew, onToggleTask, threads, onOpenThread, onNewThread }) {
+  const [view, setViewState] = useState(() => readPref(`kit.priorities.view.${member.id}`, 'priorities'));
+  const setView = (v) => { setViewState(v); writePref(`kit.priorities.view.${member.id}`, v); };
+  const sortable = draggable && view === 'priorities';
+  const { setNodeRef, isOver } = useDroppable({ id: `lane::${member.id}`, data: { type: 'lane', userId: member.id }, disabled: !sortable });
   const items = cardIds.map((id) => `${member.id}::${id}`);
   const rows = orientation === 'rows';
   const header = (
@@ -217,26 +327,35 @@ function Lane({ member, orientation, cardIds, cardsById, usersById, editable, on
       <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700">{initials(member)}</div>
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold">{fullName(member)}</div>
-        <div className="truncate text-xs text-slate-500">{member.title} · {cardIds.length} priorit{cardIds.length === 1 ? 'y' : 'ies'}</div>
+        <div className="truncate text-xs text-slate-500">{member.title}{member.team_name && ` · ${member.team_name}`} · {cardIds.length} priorit{cardIds.length === 1 ? 'y' : 'ies'}</div>
       </div>
     </div>
   );
+  const body = `flex gap-3 p-3 ${rows ? 'min-h-32 flex-1 items-stretch' : 'min-h-40 flex-col'}`;
   return (
-    <div className={`rounded-xl border bg-white shadow-sm ${isOver ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'} ${rows ? 'flex' : 'w-72 shrink-0'}`}>
+    <div className={`rounded-xl border bg-white shadow-sm ${isOver ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'} ${rows ? 'flex' : `${view === 'tasks' ? 'w-80' : 'w-72'} shrink-0`}`}>
       {header}
-      <SortableContext items={items} strategy={rows ? horizontalListSortingStrategy : verticalListSortingStrategy} disabled={!editable}>
-        <div ref={setNodeRef} className={`flex gap-3 p-3 ${rows ? 'min-h-32 flex-1 items-stretch' : 'min-h-40 flex-col'}`}>
-          {cardIds.map((id, i) => cardsById[id] && (
-            <SortableCard key={id} id={`${member.id}::${id}`} userId={member.id} card={cardsById[id]} rank={i + 1} usersById={usersById} onOpen={onOpen} rows={rows} />
-          ))}
-          {editable && (
-            <button onClick={onNew}
-              className={`flex shrink-0 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-brand-500 hover:text-brand-600 ${rows ? 'w-40' : 'py-3'}`}>
-              <Plus size={16} /> Add priority
-            </button>
-          )}
-        </div>
-      </SortableContext>
+      <div className={rows ? 'sticky left-52 z-10 flex self-stretch bg-white' : ''}>
+        <ViewSwitcher view={view} onChange={setView} rows={rows} counts={{ threads: threads.length }} />
+      </div>
+      {view === 'priorities' && (
+        <SortableContext items={items} strategy={rows ? horizontalListSortingStrategy : verticalListSortingStrategy} disabled={!sortable}>
+          <div ref={setNodeRef} className={body}>
+            {cardIds.map((id, i) => cardsById[id] && (
+              <SortableCard key={id} id={`${member.id}::${id}`} userId={member.id} card={cardsById[id]} rank={i + 1} usersById={usersById} onOpen={onOpen} rows={rows} />
+            ))}
+            {editable && (
+              <button onClick={onNew}
+                className={`flex shrink-0 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-brand-500 hover:text-brand-600 ${rows ? 'w-40' : 'py-3'}`}>
+                <Plus size={16} /> {asWork ? 'Add work' : 'Add priority'}
+              </button>
+            )}
+          </div>
+        </SortableContext>
+      )}
+      {view === 'tickets' && <div className={body}><TicketsView cardIds={cardIds} cardsById={cardsById} usersById={usersById} rows={rows} onOpen={onOpen} /></div>}
+      {view === 'tasks' && <div className={body}><TasksView cardIds={cardIds} cardsById={cardsById} rows={rows} editable={editable} onToggle={onToggleTask} onOpen={onOpen} /></div>}
+      {view === 'threads' && <div className={body}><ThreadsView threads={threads} rows={rows} onOpenThread={onOpenThread} onNew={onNewThread} /></div>}
     </div>
   );
 }
@@ -249,40 +368,6 @@ function SortableCard({ id, userId, card, rank, usersById, onOpen, rows }) {
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} {...attributes} {...listeners}
       className={`${rows ? 'w-64 shrink-0' : ''} ${isDragging ? 'opacity-30' : ''}`} onClick={() => onOpen(card)}>
       <PriorityCard card={card} rank={rank} usersById={usersById} />
-    </div>
-  );
-}
-
-export function PriorityCard({ card, rank, usersById, overlay }) {
-  const planned = !!card.is_planned;
-  const done = card.checklist.filter((c) => c.done).length;
-  return (
-    <div className={`h-full cursor-pointer rounded-lg border border-l-4 p-3 text-sm shadow-sm transition hover:shadow-md ${
-      planned ? 'border-slate-200 border-l-brand-600 bg-white' : 'border-amber-200 border-l-amber-500 bg-amber-50'
-    } ${card.completed ? 'opacity-60' : ''} ${overlay ? 'w-64 rotate-2 shadow-xl' : ''}`}>
-      <div className="mb-1 flex items-start justify-between gap-2">
-        <div className={`font-semibold leading-snug ${card.completed ? 'line-through' : ''}`}>{card.opportunity_title}</div>
-        {rank && <span className={`shrink-0 rounded px-1.5 text-xs font-bold ${planned ? 'bg-brand-50 text-brand-700' : 'bg-amber-100 text-amber-800'}`}>#{rank}</span>}
-      </div>
-      {card.title && <div className="mb-1 text-slate-700">{card.title}</div>}
-      {card.organization && <div className="text-xs text-slate-500">{card.organization}</div>}
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
-        {card.pipeline_status && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{card.pipeline_status}</span>}
-        {card.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">{usd(card.value).replace('.00', '')}</span>}
-        {card.due_date && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">Due {shortDate(card.due_date)}</span>}
-        {card.checklist.length > 0 && <span className="flex items-center gap-0.5 text-slate-500"><CheckSquare size={12} />{done}/{card.checklist.length}</span>}
-      </div>
-      {card.assignees.length > 1 && (
-        <div className="mt-2 flex -space-x-1.5">
-          {card.assignees.map((a) => (
-            <span key={a.user_id} title={fullName(usersById[a.user_id])}
-              className="grid h-5 w-5 place-items-center rounded-full bg-slate-200 text-[9px] font-semibold text-slate-700 ring-2 ring-white">
-              {initials(usersById[a.user_id])}
-            </span>
-          ))}
-        </div>
-      )}
-      {!planned && <div className="mt-2 text-[10px] font-semibold tracking-wide text-amber-700 uppercase">New work</div>}
     </div>
   );
 }

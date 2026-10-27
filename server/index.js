@@ -12,6 +12,8 @@ import teamRoutes from './routes/teams.js';
 import travelRoutes from './routes/travel.js';
 import gsaRoutes from './routes/gsa.js';
 import priorityRoutes from './routes/priorities.js';
+import ticketRoutes from './routes/tickets.js';
+import dashboardRoutes from './routes/dashboard.js';
 import aiRoutes from './routes/ai.js';
 
 ensureGsaRates();
@@ -26,6 +28,8 @@ app.use('/api/teams', teamRoutes); // GET is public (used by account activation)
 app.use('/api/travel', requireAuth, travelRoutes);
 app.use('/api/gsa', requireAuth, gsaRoutes);
 app.use('/api/priorities', requireAuth, priorityRoutes);
+app.use('/api/tickets', requireAuth, ticketRoutes);
+app.use('/api/dashboard', requireAuth, dashboardRoutes);
 app.use('/api/ai', requireAuth, aiRoutes);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

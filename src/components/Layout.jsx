@@ -1,12 +1,14 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { UserRound, Plane, ListChecks, LogOut } from 'lucide-react';
+import { UserRound, LayoutDashboard, Plane, ListChecks, Ticket, LogOut } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
 
 const NAV = [
   { to: '/profile', label: 'Profile', icon: UserRound },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/travel', label: 'Travel', icon: Plane },
   { to: '/priorities', label: 'Weekly Priorities', icon: ListChecks },
+  { to: '/tickets', label: 'Tickets', icon: Ticket },
 ];
 
 export default function Layout() {

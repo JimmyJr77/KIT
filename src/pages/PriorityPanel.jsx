@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { X, Plus, Trash2, Search, Ticket } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import MultiSelect from '../components/MultiSelect.jsx';
+import CardNotes from './CardNotes.jsx';
 
 const EMPTY_TICKET = { opportunity_title: '', organization: '', pipeline_status: '', value: '' };
 
 /** Slide-out panel for creating or editing a priority card (and its ticket). */
-export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, readOnly, onClose, onSaved }) {
+export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, readOnly, asWork, onClose: close, onSaved, onNotesChanged }) {
   const { user } = useAuth();
   const isNew = !card;
   const [ticketMode, setTicketMode] = useState('new'); // 'new' | 'existing' (new cards only)
@@ -21,13 +22,21 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
     title: card?.title || '',
     due_date: card?.due_date || '',
     checklist: card?.checklist || [],
-    notes: card?.notes || '',
     completed: !!card?.completed,
     assignees: card ? card.assignees.map((a) => a.user_id) : [defaultAssignee || user.id],
   });
   const [newItem, setNewItem] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [pendingNotes, setPendingNotes] = useState([]);
+  const notesDirty = useRef(false);
+  const setNotesDirty = useCallback((v) => { notesDirty.current = v; }, []);
+
+  // Don't lose a half-written note when the panel closes.
+  const onClose = useCallback(() => {
+    if (notesDirty.current && !confirm('You have an unsaved note. Close and discard it?')) return;
+    close();
+  }, [close]);
 
   useEffect(() => {
     const h = (e) => e.key === 'Escape' && onClose();
@@ -42,11 +51,12 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
     setError('');
     if (!form.assignees.length) return setError('Assign at least one person');
     if (!ticket.opportunity_title.trim()) return setError(ticketMode === 'existing' && !ticketId ? 'Select an existing ticket' : 'Opportunity Title is required');
+    if (notesDirty.current && !confirm('A note you\'re writing hasn\'t been saved and will be discarded. Continue?')) return;
     setSaving(true);
     try {
       if (isNew) {
         await api.post('/priorities/cards', {
-          ...form, team_id: teamId, week_start: weekStart, ticket,
+          ...form, team_id: teamId, week_start: weekStart, ticket, new_notes: pendingNotes,
           ticket_id: ticketMode === 'existing' ? ticketId : null,
         });
       } else {
@@ -81,10 +91,11 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
         <style>{'@keyframes slidein{from{transform:translateX(100%)}to{transform:none}}'}</style>
         <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
-            <h2 className="font-semibold">{isNew ? 'New priority' : 'Priority details'}</h2>
+            <h2 className="font-semibold">{isNew ? (asWork ? 'New work' : 'New priority') : card.is_planned ? 'Priority details' : 'Work details'}</h2>
+            {isNew && asWork && <p className="text-xs text-slate-500">Planning is closed, so this is tracked as work: an accomplishment or new task.</p>}
             {!isNew && (
               <p className="text-xs text-slate-500">
-                Ticket #{card.ticket_id} · {card.is_planned ? 'Planned at check-in' : 'New work after check-in'}
+                Ticket #{card.ticket_id} · {card.is_planned ? 'Priority (planned)' : 'Work (added after planning closed)'}
               </p>
             )}
           </div>
@@ -174,7 +185,8 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
             )}
           </Field>
           <Field label="Notes">
-            <textarea className="input min-h-28" value={form.notes} onChange={(e) => set('notes', e.target.value)} disabled={ro} />
+            <CardNotes cardId={card?.id ?? null} initial={card?.notes || []} user={user} readOnly={ro}
+              onDirtyChange={setNotesDirty} onPendingChange={setPendingNotes} onChanged={onNotesChanged} />
           </Field>
           {!isNew && (
             <label className="flex items-center gap-2 text-sm">
@@ -188,7 +200,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
           <footer className="space-y-2 border-t border-slate-200 px-5 py-4">
             {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
             <div className="flex gap-2">
-              <button className="btn-primary flex-1" onClick={save} disabled={saving}>{saving ? 'Saving…' : isNew ? 'Add priority' : 'Save changes'}</button>
+              <button className="btn-primary flex-1" onClick={save} disabled={saving}>{saving ? 'Saving…' : isNew ? (asWork ? 'Add work' : 'Add priority') : 'Save changes'}</button>
               {!isNew && <button className="btn-danger" onClick={remove}><Trash2 size={15} /></button>}
             </div>
           </footer>

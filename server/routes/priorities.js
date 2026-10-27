@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { db, json } from '../db.js';
+import { loadThreads } from './tickets.js';
 
 const r = Router();
 
@@ -22,11 +23,25 @@ function loadCards(teamId, weekStart) {
     WHERE c.team_id = ? AND c.week_start = ? ORDER BY c.id`).all(teamId, weekStart);
   const assignees = db.prepare(`SELECT a.* FROM card_assignees a JOIN priority_cards c ON c.id = a.card_id
     WHERE c.team_id = ? AND c.week_start = ?`).all(teamId, weekStart);
+  const notes = db.prepare(`SELECT n.*, u.first_name, u.last_name FROM card_notes n
+    JOIN priority_cards c ON c.id = n.card_id LEFT JOIN users u ON u.id = n.author_id
+    WHERE c.team_id = ? AND c.week_start = ? ORDER BY n.created_at DESC, n.id DESC`).all(teamId, weekStart);
   return cards.map((c) => ({
     ...c,
     checklist: json.parse(c.checklist, []),
+    notes: notes.filter((n) => n.card_id === c.id).map(noteOut),
     assignees: assignees.filter((a) => a.card_id === c.id).map((a) => ({ user_id: a.user_id, position: a.position })),
   }));
+}
+
+const noteOut = (n) => ({
+  id: n.id, body: n.body, author_id: n.author_id, created_at: n.created_at, updated_at: n.updated_at,
+  author: n.first_name ? { first_name: n.first_name, last_name: n.last_name } : null,
+});
+
+function loadNote(id) {
+  const n = db.prepare('SELECT n.*, u.first_name, u.last_name FROM card_notes n LEFT JOIN users u ON u.id = n.author_id WHERE n.id = ?').get(id);
+  return n && noteOut(n);
 }
 
 function loadCard(id) {
@@ -36,18 +51,88 @@ function loadCard(id) {
 
 r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES }));
 
+/**
+ * Every active user across all teams. The strip runs on Monday weeks; each team's cards
+ * come from its own check-in week, shifted by the same number of weeks from "this week".
+ */
+function allTeamWeeks(date) {
+  const ANCHOR_DOW = 1;
+  const weekStart = weekStartFor(date, ANCHOR_DOW);
+  const currentWeekStart = weekStartFor(localToday(), ANCHOR_DOW);
+  const offset = Math.round((Date.parse(weekStart) - Date.parse(currentWeekStart)) / (7 * 864e5));
+  const teamWeeks = {};
+  db.prepare('SELECT * FROM teams ORDER BY id').all().forEach((t) => {
+    const d = new Date(`${weekStartFor(localToday(), t.checkin_dow)}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + offset * 7);
+    teamWeeks[t.id] = d.toISOString().slice(0, 10);
+  });
+  return { weekStart, currentWeekStart, teamWeeks };
+}
+
+function allTeamsBoard(date) {
+  const { weekStart, currentWeekStart, teamWeeks } = allTeamWeeks(date);
+  const cards = Object.entries(teamWeeks).flatMap(([id, week]) => loadCards(Number(id), week));
+  const members = db.prepare(`SELECT u.id, u.first_name, u.last_name, u.username, u.title, u.team_id, t.name AS team_name
+    FROM users u LEFT JOIN teams t ON t.id = u.team_id WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all();
+  const weeks = Object.entries(teamWeeks).map(([id, week]) => [Number(id), week]);
+  return { team: { id: 'all', name: 'All' }, weekStart, currentWeekStart, teamWeeks, members, cards, threads: threadsFor(cards), planning: planningFor(weeks) };
+}
+
+// ---- Planning lock
+
+const planningRow = (teamId, week) => db.prepare(`SELECT p.*, u.first_name, u.last_name FROM week_planning p
+  LEFT JOIN users u ON u.id = p.closed_by WHERE p.team_id = ? AND p.week_start = ?`).get(teamId, week);
+export const planningClosed = (teamId, week) => !!planningRow(teamId, week);
+
+/** Planning state across one or more team-weeks. It counts as closed only when every one is closed. */
+function planningFor(weeks) {
+  const rows = weeks.map(([id, week]) => planningRow(id, week)).filter(Boolean);
+  const last = rows.sort((a, b) => (a.closed_at < b.closed_at ? 1 : -1))[0];
+  return {
+    closed: rows.length === weeks.length && weeks.length > 0,
+    closed_count: rows.length,
+    closed_teams: rows.map((r) => r.team_id),
+    total: weeks.length,
+    closed_at: last?.closed_at ?? null,
+    closed_by: last?.first_name ? `${last.first_name} ${last.last_name}` : null,
+  };
+}
+
+/** Body: { team: id | 'all', week: date, closed: boolean }. */
+r.put('/planning', (req, res) => {
+  const { team: teamId, week, closed } = req.body || {};
+  let weeks;
+  if (teamId === 'all') {
+    weeks = Object.entries(allTeamWeeks(week || localToday()).teamWeeks).map(([id, w]) => [Number(id), w]);
+  } else {
+    const t = team(teamId);
+    if (!t) return res.status(400).json({ error: 'Unknown team' });
+    weeks = [[t.id, weekStartFor(week || localToday(), t.checkin_dow)]];
+  }
+  const close = db.prepare('INSERT OR IGNORE INTO week_planning (team_id, week_start, closed_by) VALUES (?, ?, ?)');
+  const open = db.prepare('DELETE FROM week_planning WHERE team_id = ? AND week_start = ?');
+  db.transaction(() => weeks.forEach(([id, w]) => (closed ? close.run(id, w, req.user.id) : open.run(id, w))))();
+  res.json({ planning: planningFor(weeks) });
+});
+
+const threadsFor = (cards) => loadThreads([...new Set(cards.map((c) => c.ticket_id))]);
+
 r.get('/', (req, res) => {
+  if (req.query.team === 'all') return res.json(allTeamsBoard(req.query.week || localToday()));
   const t = team(req.query.team);
   if (!t) return res.status(400).json({ error: 'Unknown team' });
   const weekStart = weekStartFor(req.query.week || localToday(), t.checkin_dow);
   const members = db.prepare(`SELECT id, first_name, last_name, username, title FROM users
     WHERE team_id = ? AND active = 1 ORDER BY last_name, first_name`).all(t.id);
+  const cards = loadCards(t.id, weekStart);
   res.json({
     team: t,
     weekStart,
     currentWeekStart: weekStartFor(localToday(), t.checkin_dow),
     members,
-    cards: loadCards(t.id, weekStart),
+    cards,
+    threads: threadsFor(cards),
+    planning: planningFor([[t.id, weekStart]]),
   });
 });
 
@@ -87,7 +172,6 @@ function cardFields(b = {}) {
     title: b.title?.trim() || null,
     due_date: b.due_date || null,
     checklist: json.str(Array.isArray(b.checklist) ? b.checklist.map((i) => ({ text: String(i.text || ''), done: !!i.done })) : []),
-    notes: b.notes || null,
     completed: b.completed ? 1 : 0,
   };
 }
@@ -125,13 +209,17 @@ r.post('/cards', (req, res) => {
       ticketId = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, value, created_by)
         VALUES (@opportunity_title, @organization, @pipeline_status, @value, @created_by)`).run({ ...tf, created_by: req.user.id }).lastInsertRowid;
     }
-    // Cards created on or before the check-in day are the week's planned priorities;
-    // anything added after that is flagged as new (unplanned) work.
-    const isPlanned = localToday() <= weekStart ? 1 : 0;
-    const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, title, due_date, checklist, notes, completed, is_planned, created_by)
-      VALUES (@ticket_id, @team_id, @week_start, @title, @due_date, @checklist, @notes, @completed, @is_planned, @created_by)`)
+    // Cards added while the week's planning is open are priorities; once planning
+    // is closed, new cards are work tickets (accomplishments and new tasks).
+    const isPlanned = planningClosed(t.id, weekStart) ? 0 : 1;
+    const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, title, due_date, checklist, completed, is_planned, created_by)
+      VALUES (@ticket_id, @team_id, @week_start, @title, @due_date, @checklist, @completed, @is_planned, @created_by)`)
       .run({ ...cardFields(b), ticket_id: ticketId, team_id: t.id, week_start: weekStart, is_planned: isPlanned, created_by: req.user.id }).lastInsertRowid;
     setAssignees(cardId, assignees, t.id, weekStart);
+    // Notes written before the card existed, oldest first so the newest stays on top.
+    const addNote = db.prepare('INSERT INTO card_notes (card_id, body, author_id) VALUES (?, ?, ?)');
+    (Array.isArray(b.new_notes) ? b.new_notes : []).map((n) => String(n || '').trim()).filter(Boolean).reverse()
+      .forEach((body) => addNote.run(cardId, body, req.user.id));
     return cardId;
   });
 
@@ -149,7 +237,7 @@ r.put('/cards/:id', (req, res) => {
   const tf = ticketFields(b.ticket);
   if (b.ticket && !tf.opportunity_title) return res.status(400).json({ error: 'Opportunity Title is required' });
   db.transaction(() => {
-    db.prepare(`UPDATE priority_cards SET title=@title, due_date=@due_date, checklist=@checklist, notes=@notes,
+    db.prepare(`UPDATE priority_cards SET title=@title, due_date=@due_date, checklist=@checklist,
       completed=@completed, updated_at=datetime('now') WHERE id=@id`).run({ ...cardFields(b), id: card.id });
     if (b.ticket) {
       db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
@@ -160,8 +248,54 @@ r.put('/cards/:id', (req, res) => {
   res.json({ card: loadCard(card.id) });
 });
 
+/** Check or uncheck one task. It moves to the end of the list, so newly finished tasks sink to the bottom. */
+r.put('/cards/:id/checklist/:index', (req, res) => {
+  const card = db.prepare('SELECT * FROM priority_cards WHERE id = ?').get(req.params.id);
+  if (!card) return res.status(404).json({ error: 'Not found' });
+  const list = json.parse(card.checklist, []);
+  const i = Number(req.params.index);
+  if (!list[i]) return res.status(400).json({ error: 'Task not found' });
+  const [item] = list.splice(i, 1);
+  list.push({ ...item, done: !!req.body?.done });
+  db.prepare("UPDATE priority_cards SET checklist = ?, updated_at = datetime('now') WHERE id = ?").run(json.str(list), card.id);
+  res.json({ card: loadCard(card.id) });
+});
+
 r.delete('/cards/:id', (req, res) => {
   db.prepare('DELETE FROM priority_cards WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// ---- Notes (each one a separate entry; only its author or an admin may change it)
+
+r.post('/cards/:id/notes', (req, res) => {
+  const body = String(req.body?.body || '').trim();
+  if (!body) return res.status(400).json({ error: 'Note is empty' });
+  if (!db.prepare('SELECT 1 FROM priority_cards WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'Not found' });
+  const id = db.prepare('INSERT INTO card_notes (card_id, body, author_id) VALUES (?, ?, ?)').run(req.params.id, body, req.user.id).lastInsertRowid;
+  res.json({ note: loadNote(id) });
+});
+
+function ownNote(req, res) {
+  const n = db.prepare('SELECT * FROM card_notes WHERE id = ?').get(req.params.id);
+  if (!n) return res.status(404).json({ error: 'Note not found' }), null;
+  if (n.author_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the note\'s author can change it' }), null;
+  return n;
+}
+
+r.put('/notes/:id', (req, res) => {
+  const n = ownNote(req, res);
+  if (!n) return;
+  const body = String(req.body?.body || '').trim();
+  if (!body) return res.status(400).json({ error: 'Note is empty' });
+  if (body !== n.body) db.prepare("UPDATE card_notes SET body = ?, updated_at = datetime('now') WHERE id = ?").run(body, n.id);
+  res.json({ note: loadNote(n.id) });
+});
+
+r.delete('/notes/:id', (req, res) => {
+  const n = ownNote(req, res);
+  if (!n) return;
+  db.prepare('DELETE FROM card_notes WHERE id = ?').run(n.id);
   res.json({ ok: true });
 });
 

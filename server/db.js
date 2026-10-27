@@ -134,7 +134,61 @@ CREATE TABLE IF NOT EXISTS card_assignees (
   position INTEGER NOT NULL DEFAULT 0, -- 0 = top priority (left-most)
   PRIMARY KEY (card_id, user_id)
 );
+
+-- Each note on a priority card is its own entry.
+CREATE TABLE IF NOT EXISTS card_notes (
+  id INTEGER PRIMARY KEY,
+  card_id INTEGER NOT NULL REFERENCES priority_cards(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  author_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS card_notes_card ON card_notes(card_id);
+
+-- Questions and comments on a master ticket, optionally about one priority card.
+-- Replies point at their thread with parent_id.
+CREATE TABLE IF NOT EXISTS ticket_comments (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  card_id INTEGER REFERENCES priority_cards(id) ON DELETE SET NULL,
+  parent_id INTEGER REFERENCES ticket_comments(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'comment', -- question | comment | reply
+  body TEXT NOT NULL,
+  author_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ticket_comments_ticket ON ticket_comments(ticket_id);
+
+-- A team's planning for a week is open until someone closes it. While closed,
+-- new cards are work tickets (is_planned = 0) instead of priorities.
+CREATE TABLE IF NOT EXISTS week_planning (
+  team_id INTEGER NOT NULL REFERENCES teams(id),
+  week_start TEXT NOT NULL,
+  closed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  closed_by INTEGER REFERENCES users(id),
+  PRIMARY KEY (team_id, week_start)
+);
+
+-- Documents uploaded to a master ticket. Files live in server/data/uploads.
+CREATE TABLE IF NOT EXISTS ticket_files (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  mime_type TEXT,
+  size INTEGER,
+  uploaded_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
+
+// Move the old single notes field on each card into its first note entry.
+db.transaction(() => {
+  db.prepare(`INSERT INTO card_notes (card_id, body, author_id, created_at)
+    SELECT id, trim(notes), created_by, updated_at FROM priority_cards WHERE trim(COALESCE(notes, '')) != ''`).run();
+  db.prepare(`UPDATE priority_cards SET notes = NULL WHERE notes IS NOT NULL`).run();
+})();
 
 const insertTeam = db.prepare('INSERT OR IGNORE INTO teams (name) VALUES (?)');
 TEAMS.forEach((t) => insertTeam.run(t));
