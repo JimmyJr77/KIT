@@ -188,11 +188,12 @@ function WeekStrip({ weekStart, current, onPick }) {
       <div ref={ref} className="flex flex-1 gap-1.5 overflow-x-auto scroll-smooth py-1 [scrollbar-width:thin]">
         {weeks.map((w) => {
           const sel = w === weekStart;
+          const now = w === current;
           return (
             <button key={w} data-selected={sel} onClick={() => onPick(w)}
-              className={`shrink-0 rounded-lg border px-3 py-1.5 text-left text-xs ${sel ? 'border-brand-600 bg-brand-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-brand-500'}`}>
+              className={`shrink-0 rounded-lg border px-3 py-1.5 text-left text-xs ${sel ? 'border-brand-600 bg-brand-600 text-white' : now ? 'border-brand-500 bg-brand-100 text-brand-700 hover:border-brand-600' : 'border-slate-200 bg-white text-slate-600 hover:border-brand-500'}`}>
               <div className="font-semibold">{shortDate(w)}</div>
-              <div className={sel ? 'text-brand-100' : 'text-slate-400'}>{w === current ? 'This week' : new Date(`${w}T12:00:00`).getFullYear()}</div>
+              <div className={sel ? 'text-brand-100' : now ? 'text-brand-600' : 'text-slate-400'}>{w === current ? 'This week' : new Date(`${w}T12:00:00`).getFullYear()}</div>
             </button>
           );
         })}
