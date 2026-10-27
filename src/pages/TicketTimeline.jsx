@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Check, Square, Download, MessageSquarePlus, Pencil, ChevronRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Check, Square, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -69,6 +70,11 @@ export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) 
           {t.organization && <span>· {t.organization}</span>}
           {t.pipeline_status && <span className="rounded bg-slate-100 px-1.5 text-slate-600">{t.pipeline_status}</span>}
           {t.value != null && <span className="rounded bg-emerald-50 px-1.5 text-emerald-700">{usd(t.value).replace('.00', '')}</span>}
+          {t.event_id && (
+            <Link to={`/events?open=${t.event_id}`} className="flex items-center gap-1 rounded bg-sky-50 px-1.5 text-sky-800 hover:underline" title="The event this ticket supports">
+              <CalendarDays size={11} /> {t.event_name}
+            </Link>
+          )}
           {t.pwin && <span className="rounded bg-brand-50 px-1.5 font-semibold text-brand-700" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>PWIN {t.pwin.score}%</span>}
         </span>
       )}>

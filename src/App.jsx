@@ -10,6 +10,9 @@ import Dashboard from './pages/Dashboard.jsx';
 import Alerts from './pages/Alerts.jsx';
 import Pipeline from './pages/Pipeline.jsx';
 import Events from './pages/Events.jsx';
+import Crm from './pages/Crm.jsx';
+import TechnicalSolutions from './pages/TechnicalSolutions.jsx';
+import Delivery from './pages/Delivery.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -32,6 +35,9 @@ export default function App() {
         <Route path="/priorities" element={<WeeklyPriorities />} />
         <Route path="/tickets" element={<Tickets />} />
         <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/delivery" element={<Delivery />} />
+        <Route path="/crm" element={<Crm />} />
+        <Route path="/solutions" element={<TechnicalSolutions />} />
         <Route path="/alerts" element={<Alerts />} />
         <Route path="*" element={<Navigate to="/priorities" replace />} />
       </Route>

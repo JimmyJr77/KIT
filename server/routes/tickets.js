@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db, json, getSetting, setSetting } from '../db.js';
 import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../src/lib/assessment.js';
+import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
 import { recordWork } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
 import { PIPELINE_STATUSES, ticketFields } from './priorities.js';
@@ -154,7 +155,10 @@ r.get('/', (req, res) => {
     t[k.done ? 'done' : 'open'] += 1;
   });
   const model = pwinModel();
-  res.json({ tickets: rows.map((t) => ({ ...t, tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model) })) });
+  res.json({ tickets: rows.map((t) => {
+    const lane = laneFor(t);
+    return { ...t, tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
+  }) });
 });
 
 /** Create a ticket on its own, without a priority. Body: { ticket_type: 'bid' | 'work', opportunity_title, organization, account_type, pipeline_status, value }. */
@@ -353,6 +357,39 @@ r.put('/:id/assessment', (req, res) => {
   res.json({ ok: true, assessment_updated_at: ticketRow(t.id).assessment_updated_at, assessment_updated_by: nameOf(req.user.id) });
 });
 
+/**
+ * Swim lane changes. Body may hold:
+ *   lane     move it to that lane (a bid ticket moved by hand is locked there)
+ *   locked   lock a bid ticket in `lane`, or unlock it so it moves on its own again
+ *   archived archive a Done ticket now, or restore an archived one to Done
+ * None of this counts as activity, so it doesn't reset the ticket's timer.
+ */
+r.put('/:id/lane', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const b = req.body || {};
+  const lane = b.lane;
+  if (lane != null && !LANES.some((l) => l.key === lane)) return res.status(400).json({ error: 'Unknown lane' });
+  const set = (sql, ...args) => db.prepare(`UPDATE tickets SET ${sql} WHERE id = ?`).run(...args, t.id);
+
+  if (lane) {
+    if (t.ticket_type === 'bid' && ['Awarded', 'Lost', 'No Bid'].includes(t.pipeline_status) && lane !== 'done') {
+      return res.status(400).json({ error: `This bid is ${t.pipeline_status}, so it stays in Done. Change its pipeline stage to reopen it.` });
+    }
+    set(`lane = ?, lane_locked = ?, archived_at = NULL,
+      done_at = CASE WHEN ? = 'done' THEN COALESCE(done_at, datetime('now')) ELSE NULL END`, lane, t.ticket_type === 'bid' ? 1 : 0, lane);
+  }
+  if (typeof b.locked === 'boolean' && t.ticket_type === 'bid') {
+    if (b.locked) set('lane = COALESCE(?, lane), lane_locked = 1', lane || b.current || null);
+    else set("lane = NULL, lane_locked = 0, done_at = CASE WHEN pipeline_status IN ('Awarded', 'Lost', 'No Bid') THEN done_at ELSE NULL END");
+  }
+  if (typeof b.archived === 'boolean') {
+    if (b.archived) set("archived_at = datetime('now')");
+    else set("archived_at = NULL, done_at = datetime('now')"); // restored: back on the board for another 14 days
+  }
+  res.json({ ok: true });
+});
+
 /** Move a master ticket to another pipeline stage (null clears it). Used by the BD Pipeline board. */
 r.put('/:id/stage', (req, res) => {
   const t = ticketRow(req.params.id);
@@ -367,10 +404,11 @@ r.put('/:id/stage', (req, res) => {
 // ---- Full timeline of a master ticket, newest first
 
 r.get('/:id/timeline', (req, res) => {
-  const t = db.prepare(`SELECT t.*, u.first_name, u.last_name FROM tickets t LEFT JOIN users u ON u.id = t.created_by WHERE t.id = ?`).get(req.params.id);
+  const t = db.prepare(`SELECT t.*, u.first_name, u.last_name, e.name AS event_name FROM tickets t
+    LEFT JOIN users u ON u.id = t.created_by LEFT JOIN events e ON e.id = t.event_id WHERE t.id = ?`).get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const ticket = { id: t.id, ticket_type: t.ticket_type, owner_id: t.created_by, opportunity_title: t.opportunity_title, organization: t.organization, pipeline_status: t.pipeline_status, value: t.value, created_at: t.created_at,
-    pwin: ticketPwin(t) };
+    pwin: ticketPwin(t), event_id: t.event_id ?? null, event_name: t.event_name ?? null };
   const events = [{ type: 'ticket', at: t.created_at, author: t.first_name ? { id: t.created_by, first_name: t.first_name, last_name: t.last_name } : null }];
 
   const cards = db.prepare(`SELECT c.*, tm.name AS team_name, u.first_name, u.last_name FROM priority_cards c

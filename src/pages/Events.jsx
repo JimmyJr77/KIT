@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Search, Plus, CalendarDays, Plane, ExternalLink, Check, MapPin, Trash2 } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Search, Plus, CalendarDays, Plane, ExternalLink, Check, MapPin, Trash2, Megaphone, Ticket, Loader2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { fullName, formatPhoneInput, shortDate } from '../lib/format.js';
+import { fullName, formatPhoneInput, shortDate, stamp, fullStamp } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
@@ -32,6 +32,18 @@ export default function Events() {
 
   const load = () => api.get(`/events?scope=${scope}`).then((d) => setEvents(d.events));
   useEffect(() => { load(); }, [scope]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Links from alerts land here with ?open=<event id>.
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const id = Number(params.get('open'));
+    if (!id) return;
+    api.get('/events?scope=all').then((d) => {
+      const e = d.events.find((x) => x.id === id);
+      if (e) setOpen(e);
+      setParams({}, { replace: true });
+    });
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = (events || []).filter((e) => {
     const s = q.trim().toLowerCase();
@@ -122,6 +134,7 @@ export default function Events() {
 
       {open && (
         <EventPanel key={open.id ?? 'new'} event={open} onClose={() => setOpen(null)} onAttend={setAttending} onPlanTravel={planTravel}
+          onUpdated={(e) => { setOpen(e); setEvents((xs) => xs?.map((x) => (x.id === e.id ? e : x))); }}
           onSaved={(e) => { load(); setOpen(e); }} onDeleted={() => { setOpen(null); load(); }} />
       )}
     </div>
@@ -129,7 +142,7 @@ export default function Events() {
 }
 
 /** View and edit one event; sign up as attending; start a travel estimate from it. */
-function EventPanel({ event, onClose, onAttend, onPlanTravel, onSaved, onDeleted }) {
+function EventPanel({ event, onClose, onAttend, onPlanTravel, onSaved, onDeleted, onUpdated }) {
   const { user } = useAuth();
   const isNew = !event.id;
   const toForm = (e) => ({ ...EMPTY_EVENT, ...e, fee: e.fee ?? '', location: { ...EMPTY_LOCATION, ...e.location },
@@ -208,6 +221,8 @@ function EventPanel({ event, onClose, onAttend, onPlanTravel, onSaved, onDeleted
           </section>
         )}
 
+        {!isNew && <SupportSection event={event} onUpdated={onUpdated} />}
+
         <Field label="Event name *"><input className="input" autoFocus={isNew} value={form.name} onChange={(e) => set('name', e.target.value)} /></Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Date from *">
@@ -239,6 +254,96 @@ function EventPanel({ event, onClose, onAttend, onPlanTravel, onSaved, onDeleted
         <LocationInput label="City (used for travel estimates)" value={form.location} onChange={(v) => set('location', v)} />
       </div>
     </SidePanel>
+  );
+}
+
+/** Ask Marketing for support at the event; Marketing turns each request into a work ticket linked back here. */
+function SupportSection({ event, onUpdated }) {
+  const navigate = useNavigate();
+  const [team, setTeam] = useState(null); // { team, canTake }
+  const [details, setDetails] = useState('');
+  const [busy, setBusy] = useState(null); // 'request' | request id being taken
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => { api.get('/events/support-team').then(setTeam); }, []);
+
+  const request = async () => {
+    if (!details.trim()) return;
+    setBusy('request');
+    setError('');
+    try {
+      const r = await api.post(`/events/${event.id}/support`, { details });
+      setDetails('');
+      setNote(r.notified ? `Sent to ${r.notified} ${r.notified === 1 ? 'person' : 'people'} on the Marketing team.` : 'Saved, but no one is on the Marketing team to alert yet.');
+      onUpdated(r.event);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const take = async (q) => {
+    setBusy(q.id);
+    setError('');
+    try {
+      const r = await api.post(`/events/support/${q.id}/accept`, {});
+      onUpdated(r.event);
+      navigate(`/tickets?open=${r.ticket_id}`);
+    } catch (e) {
+      setError(e.message);
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-slate-200 p-3">
+      <h3 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Megaphone size={13} /> Marketing support</h3>
+
+      {event.support.length > 0 && (
+        <ul className="mt-2 space-y-2">
+          {event.support.map((q) => (
+            <li key={q.id} className="rounded-md bg-slate-50 p-2.5 text-sm">
+              <div className="flex items-start justify-between gap-2">
+                <p className="min-w-0 break-words whitespace-pre-wrap text-slate-800">{q.details}</p>
+                {q.status === 'accepted'
+                  ? <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">Work ticket created</span>
+                  : <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Waiting on Marketing</span>}
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-400">
+                <Avatar user={q.requested_by} size="xs" />
+                <span>{fullName(q.requested_by) || 'Someone'} asked</span>
+                <span title={fullStamp(q.created_at)}>· {stamp(q.created_at)}</span>
+                {q.accepted_by && <span>· taken by {fullName(q.accepted_by)}</span>}
+              </div>
+              {q.ticket_id ? (
+                <button type="button" onClick={() => navigate(`/tickets?open=${q.ticket_id}`)} className="mt-2 flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
+                  <Ticket size={12} /> {q.ticket_title || 'Open work ticket'}
+                </button>
+              ) : team?.canTake && (
+                <button type="button" className="btn-primary mt-2 px-2.5 py-1 text-xs" onClick={() => take(q)} disabled={!!busy}>
+                  {busy === q.id ? <><Loader2 size={12} className="animate-spin" /> Creating…</> : <><Ticket size={12} /> Take it: create work ticket</>}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-2 space-y-2">
+        <textarea className="input min-h-16 text-sm" value={details} onChange={(e) => setDetails(e.target.value)} disabled={busy === 'request'}
+          placeholder="What do you need? Booth graphics, one-pagers, swag, social posts, a sponsorship…" />
+        <div className="flex items-center justify-between gap-2">
+          <span className={`text-[11px] ${error ? 'text-red-600' : note ? 'text-emerald-700' : 'text-slate-400'}`}>
+            {error || note || (team && (team.team.length
+              ? `Alerts ${team.team.map(fullName).join(', ')}`
+              : 'No one is on the Marketing team yet. Assign people to it in Profile.'))}
+          </span>
+          <button type="button" className="btn shrink-0 px-2.5 py-1 text-xs" onClick={request} disabled={!details.trim() || busy === 'request'}>
+            <Megaphone size={13} /> {busy === 'request' ? 'Sending…' : 'Request marketing support'}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 

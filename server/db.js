@@ -218,11 +218,58 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT
 );
+-- Requests for marketing support at an event. Marketing turns each into a work ticket.
+CREATE TABLE IF NOT EXISTS event_support_requests (
+  id INTEGER PRIMARY KEY,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  details TEXT NOT NULL,
+  requested_by INTEGER REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'open', -- open | accepted
+  ticket_id INTEGER REFERENCES tickets(id) ON DELETE SET NULL,
+  accepted_by INTEGER REFERENCES users(id),
+  accepted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS event_attendees (
   event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (event_id, user_id)
+);
+`);
+
+db.exec(`
+-- CRM: people we know, where they work, and how well we know them.
+CREATE TABLE IF NOT EXISTS contacts (
+  id INTEGER PRIMARY KEY,
+  first_name TEXT NOT NULL,
+  last_name TEXT,
+  organization TEXT,   -- where they work
+  role TEXT,           -- their title or role there
+  email TEXT,
+  phone TEXT,
+  relationship INTEGER NOT NULL DEFAULT 0, -- 0 never spoke … 5 close personal relationship
+  notes TEXT,          -- standing notes about the relationship
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+-- A log of interactions with a contact, newest first.
+CREATE TABLE IF NOT EXISTS contact_interactions (
+  id INTEGER PRIMARY KEY,
+  contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  author_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS contact_interactions_contact ON contact_interactions(contact_id);
+-- Which tickets a contact is involved in.
+CREATE TABLE IF NOT EXISTS ticket_contacts (
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  added_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (ticket_id, contact_id)
 );
 `);
 
@@ -247,6 +294,37 @@ addColumn('tickets', 'assessment_updated_at', 'TEXT');
 addColumn('tickets', 'assessment_updated_by', 'INTEGER');
 // A trip planned from an event links back to it.
 addColumn('trips', 'event_id', 'INTEGER REFERENCES events(id) ON DELETE SET NULL');
+// Swim lanes on the Tickets page (todo | in_work | stale | done). Work tickets keep the lane people put them in;
+// bid tickets move on their own from their activity unless lane_locked holds them where they are.
+addColumn('tickets', 'lane', 'TEXT');
+addColumn('tickets', 'lane_locked', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('tickets', 'done_at', 'TEXT');      // when it reached Done; it archives 14 days later
+addColumn('tickets', 'archived_at', 'TEXT');  // archived early by hand
+db.exec(`
+-- A bid that's won, lost, or no-bid is done: it moves to Done, unlocked. Reopening it brings it back.
+CREATE TRIGGER IF NOT EXISTS tickets_lane_on_close AFTER UPDATE OF pipeline_status ON tickets
+WHEN NEW.ticket_type = 'bid' AND NEW.pipeline_status IN ('Awarded', 'Lost', 'No Bid')
+  AND (OLD.pipeline_status IS NULL OR OLD.pipeline_status NOT IN ('Awarded', 'Lost', 'No Bid'))
+BEGIN
+  UPDATE tickets SET done_at = datetime('now'), lane = NULL, lane_locked = 0, archived_at = NULL WHERE id = NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS tickets_lane_on_reopen AFTER UPDATE OF pipeline_status ON tickets
+WHEN NEW.ticket_type = 'bid' AND OLD.pipeline_status IN ('Awarded', 'Lost', 'No Bid')
+  AND (NEW.pipeline_status IS NULL OR NEW.pipeline_status NOT IN ('Awarded', 'Lost', 'No Bid'))
+BEGIN
+  UPDATE tickets SET done_at = NULL, archived_at = NULL WHERE id = NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS tickets_lane_on_insert AFTER INSERT ON tickets
+WHEN NEW.ticket_type = 'bid' AND NEW.pipeline_status IN ('Awarded', 'Lost', 'No Bid')
+BEGIN
+  UPDATE tickets SET done_at = datetime('now') WHERE id = NEW.id;
+END;
+`);
+// Bids already closed before lanes existed are done as of their last update.
+db.exec(`UPDATE tickets SET done_at = updated_at WHERE ticket_type = 'bid' AND pipeline_status IN ('Awarded', 'Lost', 'No Bid') AND done_at IS NULL`);
+
+// A work ticket made from an event's marketing support request links back to the event.
+addColumn('tickets', 'event_id', 'INTEGER REFERENCES events(id) ON DELETE SET NULL');
 
 db.exec(`
 -- To-dos on a ticket as a whole, not tied to any priority card.
@@ -296,6 +374,64 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS alerts_user ON alerts(user_id, created_at);
 `);
+
+// Alerts about an event's marketing support request.
+addColumn('alerts', 'event_id', 'INTEGER REFERENCES events(id) ON DELETE CASCADE');
+addColumn('alerts', 'request_id', 'INTEGER REFERENCES event_support_requests(id) ON DELETE CASCADE');
+
+// These tables were first named ops_*; carry over anything saved under the old names.
+for (const [from, to] of [['ops_programs', 'delivery_programs'], ['ops_program_team', 'delivery_team']]) {
+  const has = (n) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(n);
+  if (has(from) && !has(to)) db.exec(`ALTER TABLE ${from} RENAME TO ${to}`);
+}
+db.exec('DROP TRIGGER IF EXISTS ops_on_award_insert; DROP TRIGGER IF EXISTS ops_on_award_update;');
+
+db.exec(`
+-- Delivery: won contracts. When a bid ticket reaches Awarded, it's copied here to be staffed and delivered.
+CREATE TABLE IF NOT EXISTS delivery_programs (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER UNIQUE REFERENCES tickets(id) ON DELETE SET NULL, -- the bid ticket it was won from
+  name TEXT NOT NULL,
+  organization TEXT,
+  account_type TEXT,
+  value REAL,
+  awarded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  program_manager_id INTEGER REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'Active', -- Active | Complete
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+-- The delivery team on a program: KIT users, or names of people outside KIT (user_id null).
+CREATE TABLE IF NOT EXISTS delivery_team (
+  id INTEGER PRIMARY KEY,
+  program_id INTEGER NOT NULL REFERENCES delivery_programs(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id),
+  name TEXT,
+  role TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Copy a bid ticket into Delivery the moment it's Awarded, however that happens.
+CREATE TRIGGER IF NOT EXISTS delivery_on_award_insert AFTER INSERT ON tickets
+WHEN NEW.pipeline_status = 'Awarded' AND NEW.ticket_type = 'bid'
+BEGIN
+  INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value)
+  VALUES (NEW.id, NEW.opportunity_title, NEW.organization, NEW.account_type, NEW.value);
+END;
+CREATE TRIGGER IF NOT EXISTS delivery_on_award_update AFTER UPDATE OF pipeline_status ON tickets
+WHEN NEW.pipeline_status = 'Awarded' AND OLD.pipeline_status IS NOT 'Awarded' AND NEW.ticket_type = 'bid'
+BEGIN
+  INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value)
+  VALUES (NEW.id, NEW.opportunity_title, NEW.organization, NEW.account_type, NEW.value);
+END;
+`);
+// Alerts telling someone they've been put on a won contract.
+addColumn('alerts', 'program_id', 'INTEGER REFERENCES delivery_programs(id) ON DELETE CASCADE');
+
+// Bid tickets already Awarded before Delivery existed.
+db.exec(`INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value)
+  SELECT id, opportunity_title, organization, account_type, value FROM tickets WHERE pipeline_status = 'Awarded' AND ticket_type = 'bid'`);
 
 // Move the old single notes field on each card into its first note entry.
 db.transaction(() => {

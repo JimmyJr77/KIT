@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Package, CheckSquare, MessageSquare, Paperclip, ListOrdered, UserRound, Plus } from 'lucide-react';
+import { Search, Package, CheckSquare, MessageSquare, Paperclip, ListOrdered, UserRound, Plus, ArrowDownAZ, Columns3, Archive, RotateCcw } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ago, fullName, fullStamp, ticketKind } from '../lib/format.js';
@@ -10,6 +10,9 @@ import PageHeader from '../components/PageHeader.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel from './NewTicketPanel.jsx';
+import TicketLanes from './TicketLanes.jsx';
+import SidePanel from '../components/SidePanel.jsx';
+import { stamp } from '../lib/format.js';
 
 /** Every master ticket the user created or has priorities on. */
 export default function Tickets() {
@@ -23,6 +26,10 @@ export default function Tickets() {
   const [q, setQ] = useState('');
   const [tickets, setTickets] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  // Alphabetical cards or swim lanes; the choice is remembered on this browser.
+  const [view, setViewState] = useState(() => { try { return localStorage.getItem('kit.tickets.view') || 'az'; } catch { return 'az'; } });
+  const setView = (v) => { setViewState(v); try { localStorage.setItem('kit.tickets.view', v); } catch { /* ignore */ } };
   const openId = Number(params.get('open')) || null;
 
   // Account holders: people who own at least one master ticket, narrowed to the chosen team.
@@ -47,6 +54,11 @@ export default function Tickets() {
   }, [scope, q, teamId, owners]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = (id) => setParams(id ? { open: String(id) } : {});
+  // Archived tickets leave both views; they live in the archive.
+  const live = (tickets || []).filter((t) => !t.archived)
+    .sort((a, b) => a.opportunity_title.localeCompare(b.opportunity_title, undefined, { sensitivity: 'base' }));
+  const archived = (tickets || []).filter((t) => t.archived);
+  const restore = async (t) => { await api.put(`/tickets/${t.id}/lane`, { archived: false }); load(); };
 
   return (
     <div className="space-y-5 p-8">
@@ -72,6 +84,21 @@ export default function Tickets() {
         </div>
         <button type="button" onClick={() => setCreating(true)} title="New ticket" aria-label="New ticket"
             className="btn-primary h-[38px] w-[38px] shrink-0 p-0"><Plus size={18} /></button>
+        <div className="flex h-[38px] rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="radiogroup" aria-label="View">
+          {[['az', 'A–Z', ArrowDownAZ], ['lanes', 'Swim lanes', Columns3]].map(([k, l, Icon]) => (
+            <button key={k} type="button" role="radio" aria-checked={view === k} onClick={() => setView(k)} title={l} aria-label={l}
+              className={`grid w-[34px] place-items-center rounded ${view === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>
+              <Icon size={16} />
+            </button>
+          ))}
+        </div>
+        <button type="button" className="btn relative h-[38px] w-[38px] p-0" onClick={() => setArchiveOpen(true)}
+          title={`Archive: done tickets, archived after 14 days or by hand${archived.length ? ` (${archived.length})` : ''}`} aria-label="Archive">
+          <Archive size={16} />
+          {archived.length > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-slate-500 px-1 text-[10px] font-semibold text-white">{archived.length}</span>
+          )}
+        </button>
         {scope === 'filter' && (
           <div className="min-w-72 flex-1">
             <label className="label">Account holders</label>
@@ -81,7 +108,7 @@ export default function Tickets() {
         )}
       </div>
 
-      {tickets && !tickets.length && (
+      {tickets && !live.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <Package size={28} className="mx-auto mb-2 text-slate-300" />
           {q ? 'No tickets match your search.' : scope === 'mine'
@@ -90,8 +117,10 @@ export default function Tickets() {
         </div>
       )}
 
-      <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
-        {tickets?.map((t) => (
+      {view === 'lanes' && tickets && live.length > 0 && <TicketLanes tickets={live} onOpen={open} onChanged={load} />}
+
+      {view === 'az' && <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
+        {live.map((t) => (
           <button key={t.id} type="button" onClick={() => open(t.id)}
             className={`flex flex-col rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-brand-500 hover:shadow-md ${openId === t.id ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
             <div className="mb-1 flex items-start justify-between gap-2">
@@ -122,7 +151,29 @@ export default function Tickets() {
             </div>
           </button>
         ))}
-      </div>
+      </div>}
+
+      {archiveOpen && (
+        <SidePanel title="Archive" subtitle="Done tickets leave the board 14 days after reaching Done, or when archived by hand" onClose={() => setArchiveOpen(false)}>
+          {archived.length ? (
+            <ul className="space-y-2">
+              {archived.map((t) => (
+                <li key={t.id} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3">
+                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => { setArchiveOpen(false); open(t.id); }}>
+                    <div className="truncate text-sm font-semibold text-slate-800 hover:text-brand-700">{t.opportunity_title}</div>
+                    <div className="text-xs text-slate-500">
+                      {[ticketKind(t), t.pipeline_status, t.archived_at ? `archived ${stamp(t.archived_at)}` : t.done_at ? `done ${stamp(t.done_at)}` : null].filter(Boolean).join(' · ')}
+                    </div>
+                  </button>
+                  <button type="button" className="btn shrink-0 px-2.5 py-1 text-xs" onClick={() => restore(t)} title="Put it back in Done for another 14 days">
+                    <RotateCcw size={13} /> Restore
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-sm text-slate-400">Nothing archived{scope === 'mine' ? ' among your tickets' : ''} yet.</p>}
+        </SidePanel>
+      )}
 
       {creating && (
         <NewTicketPanel onClose={() => setCreating(false)}

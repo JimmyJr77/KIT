@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, Footprints, GripVertical, Flag, Pencil, ArrowUp, ArrowDown } from 'lucide-react';
+import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, ContactRound, ArrowLeft, Search, Link2, Unlink, Footprints, GripVertical, Flag, Pencil, ArrowUp, ArrowDown } from 'lucide-react';
 import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -7,6 +7,7 @@ import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { api } from '../lib/api.js';
 import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
+import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
 /** The menu items along the ticket pane's left edge. Strategy and the win assessment are for bid tickets only. */
@@ -15,6 +16,7 @@ export const PLAN_TOOLS = [
   { key: 'steps', label: 'Next steps', icon: Footprints, bidOnly: true },
   { key: 'tasks', label: 'Tasks', icon: SquareCheck },
   { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
+  { key: 'people', label: 'People', icon: ContactRound },
 ];
 
 export function PlanRail({ ticket, active, onSelect }) {
@@ -29,6 +31,7 @@ export function PlanRail({ ticket, active, onSelect }) {
 /** The extra pane for whichever menu item is open. `onChanged` refreshes the timeline after a save. */
 export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty }) {
   if (tool === 'tasks') return <TasksDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
+  if (tool === 'people') return <PeopleDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
   if (tool === 'steps') return <StepsDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'strategy') return <StrategyDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'assessment') return <AssessmentDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
@@ -140,6 +143,103 @@ function TaskGroup({ items, empty }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+// ---- People (CRM)
+
+/**
+ * The people involved in this ticket. Anyone added here also goes into the master CRM; people already in the
+ * CRM can be linked instead. Selecting someone opens their details and interaction log.
+ */
+function PeopleDrawer({ ticket, onClose, onChanged }) {
+  const [view, setView] = useState('list'); // list | new | link | <contact id>
+  const [people, setPeople] = useState(null);
+  const load = () => api.get(`/contacts/ticket/${ticket.id}`).then((d) => setPeople(d.contacts));
+  useEffect(() => { load(); }, [ticket.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const back = () => { setView('list'); load(); };
+  const unlink = async (c) => {
+    if (!confirm(`Take ${contactName(c)} off this ticket? They stay in the CRM.`)) return;
+    await api.del(`/contacts/${c.id}/tickets/${ticket.id}`);
+    load();
+    onChanged();
+  };
+
+  const header = view !== 'list' && (
+    <button type="button" onClick={back} className="mb-3 flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline"><ArrowLeft size={13} /> Back to people</button>
+  );
+  const selected = typeof view === 'number' ? people?.find((p) => p.id === view) : null;
+
+  return (
+    <DrawerShell title={selected ? contactName(selected) : view === 'new' ? 'Add a person' : view === 'link' ? 'Add from the CRM' : 'People'}
+      subtitle={selected ? contactLine(selected) || 'In the CRM' : 'Everyone added here also goes into the CRM'} onClose={onClose}>
+      {header}
+      {view === 'list' && (
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            <button type="button" className="btn-primary flex-1 text-xs" onClick={() => setView('new')}><Plus size={14} /> Add a person</button>
+            <button type="button" className="btn flex-1 text-xs" onClick={() => setView('link')}><Link2 size={14} /> Add from the CRM</button>
+          </div>
+          {people && !people.length && <p className="text-sm text-slate-400">No one on this ticket yet.</p>}
+          <ul className="space-y-2">
+            {people?.map((c) => (
+              <li key={c.id} className="group flex items-start gap-2 rounded-lg border border-slate-200 bg-white p-2.5 hover:border-brand-500">
+                <button type="button" onClick={() => setView(c.id)} className="min-w-0 flex-1 text-left">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-slate-800">{contactName(c)}</span>
+                    <RelationshipBadge level={c.relationship} short />
+                  </div>
+                  {contactLine(c) && <div className="truncate text-xs text-slate-500">{contactLine(c)}</div>}
+                  <div className="text-[11px] text-slate-400">{c.interaction_count} interaction{c.interaction_count === 1 ? '' : 's'}{c.last_interaction_at ? ` · last ${stamp(c.last_interaction_at)}` : ''}</div>
+                </button>
+                <button type="button" onClick={() => unlink(c)} title="Take off this ticket" aria-label="Take off this ticket"
+                  className="rounded p-1 text-slate-300 opacity-0 group-hover:opacity-100 hover:bg-slate-100 hover:text-slate-600"><Unlink size={14} /></button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {view === 'new' && (
+        <ContactForm submitLabel="Add person" onCancel={back}
+          onSubmit={async (form) => { const r = await api.post('/contacts', { ...form, ticket_id: ticket.id }); onChanged(); await load(); setView(r.contact.id); }} />
+      )}
+      {view === 'link' && <LinkFromCrm ticket={ticket} linked={people || []} onLinked={async (id) => { onChanged(); await load(); setView(id); }} />}
+      {typeof view === 'number' && <ContactDetail contactId={view} onChanged={() => load()} onDeleted={back} />}
+    </DrawerShell>
+  );
+}
+
+/** Search the CRM for someone not yet on this ticket, and add them. */
+function LinkFromCrm({ ticket, linked, onLinked }) {
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState(null);
+  useEffect(() => {
+    const h = setTimeout(() => api.get(`/contacts?q=${encodeURIComponent(q)}`).then((d) => setResults(d.contacts)), q ? 200 : 0);
+    return () => clearTimeout(h);
+  }, [q]);
+  const add = async (c) => { await api.put(`/contacts/${c.id}/tickets/${ticket.id}`); onLinked(c.id); };
+  const shown = (results || []).filter((c) => !linked.some((l) => l.id === c.id));
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <Search size={14} className="absolute top-2.5 left-2.5 text-slate-400" />
+        <input autoFocus className="input pl-8" placeholder="Search by name, organization, or role…" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+      <ul className="divide-y divide-slate-100 overflow-hidden rounded-lg bg-white ring-1 ring-slate-200">
+        {shown.map((c) => (
+          <li key={c.id}>
+            <button type="button" onClick={() => add(c)} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-brand-50">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-slate-800">{contactName(c)}</div>
+                {contactLine(c) && <div className="truncate text-xs text-slate-500">{contactLine(c)}</div>}
+              </div>
+              <RelationshipBadge level={c.relationship} short />
+            </button>
+          </li>
+        ))}
+        {results && !shown.length && <li className="px-3 py-3 text-sm text-slate-400">{q ? 'No one matches.' : 'Everyone in the CRM is already on this ticket.'}</li>}
+      </ul>
+    </div>
   );
 }
 
