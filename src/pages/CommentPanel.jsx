@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Package, Loader2, ArrowRight, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { fullName, stamp, fullStamp, shortDate } from '../lib/format.js';
+import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
@@ -38,7 +38,7 @@ function ThreadPane({ id, onClose, onChanged, highlight, footer }) {
   };
 
   return (
-    <SidePanel title={data ? 'Comment' : 'Loading…'} subtitle={data && `Master ticket #${data.ticket.id}`} onClose={onClose} footer={footer}>
+    <SidePanel title={data ? 'Comment' : 'Loading…'} subtitle={data && `${ticketKind(data.ticket)} #${data.ticket.id}`} onClose={onClose} footer={footer}>
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {data && (
         <div className="space-y-5">
@@ -68,7 +68,7 @@ export function TicketSummary({ ticket, card }) {
   return (
     <section className="rounded-lg bg-slate-50 p-4">
       <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Package size={13} /> Master ticket</span>
+        <span className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Package size={13} /> {ticketKind(ticket)}</span>
         <Link to={`/tickets?open=${ticket.id}`} className="flex items-center gap-0.5 text-xs text-brand-600 hover:underline">Timeline <ArrowRight size={12} /></Link>
       </div>
       <div className="font-semibold text-slate-900">{ticket.opportunity_title}</div>

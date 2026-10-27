@@ -2,13 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { StickyNote, FileText, Ticket, Upload, Loader2, Check, Square, Download, MessageSquarePlus, Pencil, ChevronRight } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { fullName, stamp, fullStamp, shortDate } from '../lib/format.js';
+import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx';
 import { ReplyBox } from './CommentPanel.jsx';
 import PriorityPanel from './PriorityPanel.jsx';
+import { PlanRail, PlanDrawer } from './TicketPlanning.jsx';
 
 const FILTERS = [
   ['all', 'Everything', () => true],
@@ -29,6 +30,12 @@ export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) 
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('all');
   const [cardId, setCardId] = useState(null); // a priority opened from the timeline
+  const [tool, setTool] = useState(null); // tasks | strategy | assessment, shown in a pane off the left edge
+  const toolDirty = useRef(false);
+  const setToolDirty = (v) => { toolDirty.current = v; };
+  const leaveTool = () => !toolDirty.current || confirm('You have unsaved changes. Discard them?');
+  const switchTool = (next) => { if (leaveTool()) { toolDirty.current = false; setTool(next); } };
+  const close = () => { if (leaveTool()) onClose(); };
   const load = () => api.get(`/tickets/${ticketId}/timeline`).then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [ticketId]); // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = () => { load(); onChanged?.(); };
@@ -45,20 +52,24 @@ export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) 
     setTimeout(() => el.classList.remove('ring-2', 'ring-brand-500', 'ring-offset-2'), 2500);
   }, [data, focus]);
 
-  if (cardId) return <TicketPriority cardId={cardId} onBack={() => { setCardId(null); load(); }} onClose={onClose} />;
+  if (cardId) return <TicketPriority cardId={cardId} onBack={() => { setCardId(null); load(); }} onClose={close} />;
 
   const t = data?.ticket;
   const test = FILTERS.find(([k]) => k === filter)[2];
   const events = (data?.events || []).filter(test);
 
   return (
-    <SidePanel wide onClose={onClose} title={t ? t.opportunity_title : 'Loading…'}
+    <SidePanel wide onClose={close} title={t ? t.opportunity_title : 'Loading…'}
+      onEscape={tool ? () => switchTool(null) : close}
+      rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} />}
+      drawer={t && tool && <PlanDrawer key={tool} tool={tool} ticket={t} onClose={() => switchTool(null)} onChanged={refresh} onDirty={setToolDirty} />}
       subtitle={t && (
         <span className="flex flex-wrap items-center gap-1.5">
-          <span>Master ticket #{t.id}</span>
+          <span className={`rounded px-1.5 font-semibold ${t.ticket_type === 'work' ? 'bg-slate-200 text-slate-700' : 'bg-brand-50 text-brand-700'}`}>{ticketKind(t)} #{t.id}</span>
           {t.organization && <span>· {t.organization}</span>}
           {t.pipeline_status && <span className="rounded bg-slate-100 px-1.5 text-slate-600">{t.pipeline_status}</span>}
           {t.value != null && <span className="rounded bg-emerald-50 px-1.5 text-emerald-700">{usd(t.value).replace('.00', '')}</span>}
+          {t.pwin && <span className="rounded bg-brand-50 px-1.5 font-semibold text-brand-700" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>PWIN {t.pwin.score}%</span>}
         </span>
       )}>
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
@@ -123,7 +134,7 @@ function Marker({ event, ticket }) {
   if (event.type === 'comment' || event.type === 'note') return <PostMarker author={event.author} ticket={ticket} />;
   if (event.type === 'card') return <span className={`${box} bg-brand-600 font-mono text-[9px] font-bold tracking-tighter text-white`} title="Priority ticket">123</span>;
   if (event.type === 'file') return <span className={`${box} bg-emerald-100 text-emerald-700`} title="Document"><FileText size={15} /></span>;
-  return <span className={`${box} bg-slate-200 text-slate-600`} title="Master ticket"><Ticket size={15} /></span>;
+  return <span className={`${box} bg-slate-200 text-slate-600`} title={ticketKind(ticket)}><Ticket size={15} /></span>;
 }
 
 function Meta({ event, children }) {
@@ -211,7 +222,7 @@ function Event({ event: e, ticket, onChanged, onOpenCard }) {
         <div id={post ? `tl-${e.type === 'comment' ? 'c' : 'n'}-${post.id}` : undefined} className="group/item relative rounded-lg transition">
           <HoverActions className="absolute -top-1 right-0 z-10" onComment={() => setReplying(true)} onEdit={mine && !editing ? () => setEditing(true) : null} />
 
-          {e.type === 'ticket' && <Meta event={e}>created this master ticket</Meta>}
+          {e.type === 'ticket' && <Meta event={e}>created this {ticketKind(ticket).toLowerCase()}</Meta>}
 
           {e.type === 'card' && (
             <>

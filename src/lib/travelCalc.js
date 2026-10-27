@@ -17,6 +17,13 @@ export function quarterFor(iso) {
   return `${y} Q${Math.floor((m - 1) / 3) + 1}`;
 }
 
+/** The quarter containing `iso` (default today) and the `count - 1` quarters after it, e.g. ["2026 Q4", "2027 Q1", …]. */
+export function upcomingQuarters(count = 4, iso = new Date().toLocaleDateString('en-CA')) {
+  const [y, m] = iso.split('-').map(Number);
+  const start = y * 4 + Math.floor((m - 1) / 3);
+  return Array.from({ length: count }, (_, i) => `${Math.floor((start + i) / 4)} Q${((start + i) % 4) + 1}`);
+}
+
 export function eachDate(from, to) {
   if (!from || !to || to < from) return [];
   const out = [];

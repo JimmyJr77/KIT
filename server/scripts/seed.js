@@ -5,6 +5,15 @@ import { hashPassword, formatPhone, digitsOnly } from '../auth.js';
 
 const teamId = (name) => db.prepare('SELECT id FROM teams WHERE name = ?').get(name).id;
 
+if (process.env.NODE_ENV === 'production' &&
+    (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD ||
+     process.env.ADMIN_PASSWORD === 'ChangeMe123!' || process.env.ADMIN_PASSWORD.length < 12)) {
+  throw new Error('Production seeding requires ADMIN_EMAIL and a non-default ADMIN_PASSWORD of at least 12 characters.');
+}
+if (process.env.NODE_ENV === 'production' && process.argv.includes('--demo')) {
+  throw new Error('Demo accounts cannot be seeded in production.');
+}
+
 function ensureUser({ first_name, last_name, email, username, phone, title, team, role = 'member', password }) {
   db.prepare('INSERT OR IGNORE INTO approved_accounts (email, role) VALUES (?, ?)').run(email, role);
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) return console.log(`exists: ${email}`);

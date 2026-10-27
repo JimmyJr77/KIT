@@ -17,6 +17,7 @@ export function notifyMentions(actor, body, ref, previous = '') {
   const before = new Set(mentionedUsers(previous).map((u) => u.id));
   const ins = db.prepare(`INSERT INTO alerts (user_id, actor_id, kind, ticket_id, card_id, comment_id, note_id, excerpt)
     VALUES (?, ?, 'mention', ?, ?, ?, ?, ?)`);
-  mentionedUsers(body).filter((u) => u.id !== actor.id && !before.has(u.id))
+  // Mentioning yourself creates an alert too, as a reminder.
+  mentionedUsers(body).filter((u) => !before.has(u.id))
     .forEach((u) => ins.run(u.id, actor.id, ref.ticket_id ?? null, ref.card_id ?? null, ref.comment_id ?? null, ref.note_id ?? null, String(body).slice(0, 400)));
 }

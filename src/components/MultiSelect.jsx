@@ -4,9 +4,9 @@ import { useClickAway } from './UserCombobox.jsx';
 
 /**
  * Multi-select with a type-to-filter text box and removable chips.
- * options: [{ value, label, sub? }]
+ * options: [{ value, label, sub?, group? }]. Options sharing a `group` are listed under that heading.
  */
-export default function MultiSelect({ options = [], value = [], onChange, placeholder = 'Type to filter…' }) {
+export default function MultiSelect({ options = [], value = [], onChange, placeholder = 'Type to filter…', compact }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -23,7 +23,7 @@ export default function MultiSelect({ options = [], value = [], onChange, placeh
 
   return (
     <div className="relative" ref={ref}>
-      <div className="input flex min-h-[38px] flex-wrap items-center gap-1.5 py-1.5" onClick={() => setOpen(true)}>
+      <div className={`input flex flex-wrap items-center gap-1.5 ${compact ? 'min-h-9 py-1' : 'min-h-[38px] py-1.5'}`} onClick={() => setOpen(true)}>
         {selected.map((o) => (
           <span key={o.value} className="chip">
             {o.label}
@@ -44,8 +44,11 @@ export default function MultiSelect({ options = [], value = [], onChange, placeh
       </div>
       {open && matches.length > 0 && (
         <ul className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-          {matches.map((o) => (
+          {matches.map((o, i) => (
             <li key={o.value}>
+              {o.group && o.group !== matches[i - 1]?.group && (
+                <div className={`px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-slate-400 uppercase ${i ? 'mt-1 border-t border-slate-100' : ''}`}>{o.group}</div>
+              )}
               <button type="button" className="w-full px-3 py-1.5 text-left text-sm hover:bg-brand-50" onClick={() => add(o.value)}>
                 {o.label}{o.sub && <span className="ml-2 text-xs text-slate-400">{o.sub}</span>}
               </button>

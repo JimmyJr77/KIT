@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
 import { usd } from '../lib/travelCalc.js';
-import { shortDate } from '../lib/format.js';
+import { fullName, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import UserCombobox from '../components/UserCombobox.jsx';
 import { locationLabel } from '../components/LocationInput.jsx';
@@ -21,11 +21,14 @@ export default function Travel() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [outlook, setOutlook] = useState(null);
 
   const load = () => {
     const qs = new URLSearchParams();
     if (traveler) qs.set('traveler', traveler);
     if (quarter) qs.set('quarter', quarter);
+    // The quarterly outlook ignores the Quarter filter so it's always visible, but follows Traveler.
+    api.get(`/travel/outlook${traveler ? `?traveler=${traveler}` : ''}`).then((d) => setOutlook(d.quarters));
     return api.get(`/travel?${qs}`).then((d) => setTrips(d.trips));
   };
 
@@ -72,6 +75,31 @@ export default function Travel() {
         </button>
         <button className="btn-primary" onClick={() => setEditing(newTrip(user.id, meta.data?.mileageRate))}><Plus size={15} /> New trip</button>
       </PageHeader>
+
+      {outlook && (
+        <section aria-label="Estimated travel spend by quarter">
+          <div className="mb-2 flex items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-800">Estimated travel spend · next four quarters</h2>
+            <span className="text-xs text-slate-500">
+              {traveler ? fullName(users.data?.users.find((u) => u.id === traveler)) : 'All travelers'} · {usd(outlook.reduce((s, q) => s + q.total, 0)).replace('.00', '')} total
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {outlook.map((q, i) => (
+              <button key={q.quarter} type="button" onClick={() => setQuarter(quarter === q.quarter ? '' : q.quarter)}
+                title={quarter === q.quarter ? 'Show all quarters' : `Show only ${q.quarter} trips`}
+                className={`rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-brand-500 ${quarter === q.quarter ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
+                <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+                  <span>{q.quarter}</span>
+                  {i === 0 && <span className="rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700">This quarter</span>}
+                </div>
+                <div className="mt-1 text-2xl font-bold text-slate-900 tabular-nums">{usd(q.total).replace('.00', '')}</div>
+                <div className="mt-0.5 text-[11px] text-slate-400">{q.trips} trip{q.trips === 1 ? '' : 's'}</div>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="panel flex flex-wrap items-end gap-4">
         <div className="w-72">

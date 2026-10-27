@@ -3,6 +3,10 @@ import bcrypt from 'bcryptjs';
 import { db } from './db.js';
 
 const SECRET = process.env.JWT_SECRET || 'dev-only-change-me';
+if (process.env.NODE_ENV === 'production' &&
+    (!process.env.JWT_SECRET || SECRET.length < 32 || SECRET === 'replace-with-a-long-random-string')) {
+  throw new Error('Production requires a random JWT_SECRET of at least 32 characters.');
+}
 const COOKIE = 'kit_session';
 
 export const digitsOnly = (s) => String(s || '').replace(/\D/g, '');

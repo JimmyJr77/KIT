@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { db, json } from '../db.js';
 import { estimateFlight, estimateCar, mcpStatus, VEHICLE_CLASSES, placeLabel } from '../services/estimators.js';
 import { mileageRate } from '../services/gsa.js';
-import { quarterFor, tripCosts, PURPOSES } from '../../src/lib/travelCalc.js';
+import { quarterFor, tripCosts, upcomingQuarters, PURPOSES } from '../../src/lib/travelCalc.js';
 
 const r = Router();
 
@@ -51,6 +51,16 @@ r.get('/', (req, res) => {
   if (req.query.quarter) { where.push('t.quarter = @quarter'); params.quarter = req.query.quarter; }
   const rows = db.prepare(`${SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY t.date_from DESC`).all(params);
   res.json({ trips: rows.map(hydrate) });
+});
+
+/** Estimated spend for this quarter and the next three, optionally for one traveler. */
+r.get('/outlook', (req, res) => {
+  const quarters = upcomingQuarters(4);
+  const traveler = Number(req.query.traveler) || null;
+  const rows = db.prepare(`SELECT quarter, COUNT(*) AS trips, COALESCE(SUM(total_estimate), 0) AS total FROM trips
+    WHERE quarter IN (SELECT value FROM json_each(@quarters)) AND (@traveler IS NULL OR traveler_id = @traveler)
+    GROUP BY quarter`).all({ quarters: JSON.stringify(quarters), traveler });
+  res.json({ quarters: quarters.map((q) => ({ quarter: q, trips: 0, total: 0, ...rows.find((r) => r.quarter === q) })) });
 });
 
 r.get('/:id', (req, res) => {

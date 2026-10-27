@@ -7,6 +7,8 @@ import { notifyMentions } from '../mentions.js';
 const r = Router();
 
 export const PIPELINE_STATUSES = ['Identified', 'Qualified', 'Capture', 'Proposal', 'Submitted', 'Awarded', 'Lost', 'No Bid'];
+export const ACCOUNT_TYPES = ['Army', 'Air Force', 'Navy / Marine'];
+export const TICKET_TYPES = ['bid', 'work'];
 
 const localToday = () => new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
 
@@ -20,7 +22,7 @@ export function weekStartFor(iso, dow) {
 const team = (id) => db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
 
 function loadCards(teamId, weekStart) {
-  const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.value
+  const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.value, t.ticket_type
     FROM priority_cards c JOIN tickets t ON t.id = c.ticket_id
     WHERE c.team_id = ? AND c.week_start = ? ORDER BY c.id`).all(teamId, weekStart);
   const assignees = db.prepare(`SELECT a.* FROM card_assignees a JOIN priority_cards c ON c.id = a.card_id
@@ -51,7 +53,7 @@ function loadCard(id) {
   return c ? loadCards(c.team_id, c.week_start).find((x) => x.id === Number(id)) : null;
 }
 
-r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES }));
+r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES, accountTypes: ACCOUNT_TYPES }));
 
 /**
  * Every active user across all teams. The strip runs on Monday weeks; each team's cards
@@ -162,11 +164,12 @@ r.get('/tickets', (req, res) => {
   res.json({ tickets: rows });
 });
 
-function ticketFields(t = {}) {
+export function ticketFields(t = {}) {
   return {
     opportunity_title: String(t.opportunity_title || '').trim(),
     organization: t.organization?.trim() || null,
     pipeline_status: PIPELINE_STATUSES.includes(t.pipeline_status) ? t.pipeline_status : null,
+    account_type: ACCOUNT_TYPES.includes(t.account_type) ? t.account_type : null,
     value: t.value === '' || t.value == null ? null : Number(t.value),
   };
 }
@@ -205,13 +208,17 @@ r.post('/cards', (req, res) => {
       if (b.ticket) {
         const tf = ticketFields(b.ticket);
         if (tf.opportunity_title) db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
-          pipeline_status=@pipeline_status, value=@value, updated_at=datetime('now') WHERE id=@id`).run({ ...tf, id: ticketId });
+          pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type,
+          value=CASE WHEN ticket_type = 'work' THEN NULL ELSE @value END, updated_at=datetime('now') WHERE id=@id`).run({ ...tf, id: ticketId });
       }
     } else {
       const tf = ticketFields(b.ticket);
       if (!tf.opportunity_title) throw new Error('Opportunity Title is required');
-      ticketId = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, value, created_by)
-        VALUES (@opportunity_title, @organization, @pipeline_status, @value, @created_by)`).run({ ...tf, created_by: req.user.id }).lastInsertRowid;
+      // The ticket type is chosen once, when the ticket is created. Work tickets have no value or pipeline status.
+      const ticketType = b.ticket?.ticket_type === 'work' ? 'work' : 'bid';
+      const fields = ticketType === 'work' ? { ...tf, pipeline_status: null, value: null } : tf;
+      ticketId = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by)
+        VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @value, @ticket_type, @created_by)`).run({ ...fields, ticket_type: ticketType, created_by: req.user.id }).lastInsertRowid;
     }
     // Cards added while the week's planning is open are priorities; once planning
     // is closed, new cards are work tickets (accomplishments and new tasks).
@@ -253,7 +260,8 @@ r.put('/cards/:id', (req, res) => {
       completed=@completed, updated_at=datetime('now') WHERE id=@id`).run({ ...cardFields(b), id: card.id });
     if (b.ticket) {
       db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
-        pipeline_status=@pipeline_status, value=@value, updated_at=datetime('now') WHERE id=@id`).run({ ...tf, id: card.ticket_id });
+        pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type,
+        value=CASE WHEN ticket_type = 'work' THEN NULL ELSE @value END, updated_at=datetime('now') WHERE id=@id`).run({ ...tf, id: card.ticket_id });
     }
     if (Array.isArray(b.assignees) && b.assignees.length) setAssignees(card.id, b.assignees, card.team_id, card.week_start);
   })();
@@ -320,6 +328,7 @@ r.delete('/notes/:id', (req, res) => {
   const n = ownNote(req, res);
   if (!n) return;
   db.prepare('DELETE FROM card_notes WHERE id = ?').run(n.id);
+  db.prepare("DELETE FROM work_log WHERE kind = 'note' AND ref_id = ?").run(n.id);
   res.json({ ok: true });
 });
 

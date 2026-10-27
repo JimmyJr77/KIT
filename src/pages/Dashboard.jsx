@@ -60,8 +60,8 @@ export default function Dashboard() {
       {data && (
         <>
           <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(13rem,1fr))]">
-            <Tile label="Master tickets" value={data.totals.tickets} sub="All pipeline statuses" />
-            <Tile label="Pipeline value" value={money(data.totals.value)} sub="Sum of every master ticket" />
+            <Tile label="Bid tickets" value={data.totals.tickets} sub="All pipeline statuses" />
+            <Tile label="Pipeline value" value={money(data.totals.value)} sub="Sum of every bid ticket" />
             <Tile label="Avg priority close-out" value={pct(teamCloseout)} sub="Per person, per week" />
             <Tile label="Avg work while priorities open" value={num(teamWork)} sub="Work tickets per week" />
           </div>
@@ -110,7 +110,7 @@ export default function Dashboard() {
             </div>
           </Section>
 
-          <Section title="Pipeline" note={`${data.totals.tickets} master ticket${data.totals.tickets === 1 ? '' : 's'} worth ${money(data.totals.value)} in total.`}>
+          <Section title="Pipeline" note={`${data.totals.tickets} bid ticket${data.totals.tickets === 1 ? '' : 's'} worth ${money(data.totals.value)} in total.`}>
             <Pipeline rows={data.pipeline} />
           </Section>
 
@@ -169,7 +169,7 @@ function Pipeline({ rows }) {
         <thead>
           <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
             <Th>Pipeline status</Th>
-            <Th>Master tickets</Th>
+            <Th>Bid tickets</Th>
             <Th>Total value</Th>
           </tr>
         </thead>
@@ -178,7 +178,7 @@ function Pipeline({ rows }) {
             <tr key={r.status ?? 'none'} className={`border-b border-slate-100 last:border-0 ${r.count ? '' : 'text-slate-400'}`}>
               <td className="py-2.5 pr-3 font-medium">{r.status ?? <span className="italic">No status</span>}</td>
               <td className="py-2.5 pr-3">
-                <div className="flex items-center gap-2" title={`${r.count} master ticket${r.count === 1 ? '' : 's'} in ${r.status ?? 'no status'}`}>
+                <div className="flex items-center gap-2" title={`${r.count} bid ticket${r.count === 1 ? '' : 's'} in ${r.status ?? 'no status'}`}>
                   <div className="h-2 w-28 rounded-full bg-slate-100">
                     {r.count > 0 && <div className="h-full rounded-full bg-brand-600" style={{ width: `${(r.count / maxCount) * 100}%` }} />}
                   </div>

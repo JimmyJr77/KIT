@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { UserRound, LayoutDashboard, Plane, ListChecks, Ticket, Bell, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { UserRound, LayoutDashboard, Plane, ListChecks, Ticket, SquareKanban, Bell, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
@@ -12,6 +12,7 @@ const NAV = [
   { to: '/travel', label: 'Travel', icon: Plane },
   { to: '/priorities', label: 'Weekly Priorities', icon: ListChecks },
   { to: '/tickets', label: 'Tickets', icon: Ticket },
+  { to: '/pipeline', label: 'BD Pipeline', icon: SquareKanban },
 ];
 
 const COLLAPSED_KEY = 'kit.sidebar.collapsed';

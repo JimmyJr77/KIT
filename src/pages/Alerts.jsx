@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, ArrowRight, CheckCheck, StickyNote } from 'lucide-react';
 import { api } from '../lib/api.js';
-import { ago, fullName, fullStamp } from '../lib/format.js';
+import { ago, fullName, fullStamp, ticketKind } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
@@ -111,7 +111,7 @@ function NotePane({ alert, onClose, onGo }) {
   useEffect(() => { api.get(`/tickets/${alert.ticket_id}/timeline`).then(setData).catch(() => setData({ events: [] })); }, [alert.ticket_id]);
   const note = data?.events.find((e) => e.type === 'note' && e.note.id === alert.note_id);
   return (
-    <SidePanel title="Note" subtitle={`Master ticket #${alert.ticket_id}`} onClose={onClose} footer={<GoButton alert={alert} onGo={onGo} />}>
+    <SidePanel title="Note" subtitle={`${ticketKind(alert)} #${alert.ticket_id}`} onClose={onClose} footer={<GoButton alert={alert} onGo={onGo} />}>
       {data && (
         <div className="space-y-5">
           {data.ticket && <TicketSummary ticket={data.ticket} card={alert.card_id ? { title: alert.card_title, week_start: null } : null} />}

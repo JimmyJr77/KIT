@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Package, CheckSquare, MessageSquare, Paperclip, ListOrdered, UserRound } from 'lucide-react';
+import { Search, Package, CheckSquare, MessageSquare, Paperclip, ListOrdered, UserRound, Plus } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { ago, fullName, fullStamp } from '../lib/format.js';
+import { ago, fullName, fullStamp, ticketKind } from '../lib/format.js';
 import { useApi } from '../lib/data.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
+import NewTicketPanel from './NewTicketPanel.jsx';
 
 /** Every master ticket the user created or has priorities on. */
 export default function Tickets() {
@@ -21,6 +22,7 @@ export default function Tickets() {
   const [owners, setOwners] = useState([]);
   const [q, setQ] = useState('');
   const [tickets, setTickets] = useState(null);
+  const [creating, setCreating] = useState(false);
   const openId = Number(params.get('open')) || null;
 
   // Account holders: people who own at least one master ticket, narrowed to the chosen team.
@@ -68,6 +70,8 @@ export default function Tickets() {
           <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
           <input className="input pl-9" placeholder="Search by opportunity or organization…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
+        <button type="button" onClick={() => setCreating(true)} title="New ticket" aria-label="New ticket"
+            className="btn-primary h-[38px] w-[38px] shrink-0 p-0"><Plus size={18} /></button>
         {scope === 'filter' && (
           <div className="min-w-72 flex-1">
             <label className="label">Account holders</label>
@@ -92,7 +96,6 @@ export default function Tickets() {
             className={`flex flex-col rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-brand-500 hover:shadow-md ${openId === t.id ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
             <div className="mb-1 flex items-start justify-between gap-2">
               <div className="flex min-w-0 items-start gap-2">
-                <Package size={16} className="mt-0.5 shrink-0 text-brand-600" />
                 <div className="min-w-0">
                   <div className="font-semibold leading-snug text-slate-900">{t.opportunity_title}</div>
                   <div className="truncate text-xs text-slate-500">{t.organization || `Ticket #${t.id}`}</div>
@@ -106,6 +109,7 @@ export default function Tickets() {
               <span className="shrink-0 text-[11px] text-slate-400" title={fullStamp(t.last_activity)}>{ago(t.last_activity)}</span>
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+              <span className={`rounded px-1.5 py-0.5 font-semibold ${t.ticket_type === 'work' ? 'bg-slate-200 text-slate-700' : 'bg-brand-50 text-brand-700'}`}>{ticketKind(t)}</span>
               {t.pipeline_status && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{t.pipeline_status}</span>}
               {t.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">{usd(t.value).replace('.00', '')}</span>}
             </div>
@@ -119,6 +123,11 @@ export default function Tickets() {
           </button>
         ))}
       </div>
+
+      {creating && (
+        <NewTicketPanel onClose={() => setCreating(false)}
+          onCreated={(t) => { setCreating(false); load(); open(t.id); }} />
+      )}
 
       {openId && <TicketTimeline key={openId} ticketId={openId} focus={params.get('focus')} onClose={() => open(null)} onChanged={load} />}
     </div>

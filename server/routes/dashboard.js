@@ -52,7 +52,7 @@ r.get('/', (req, res) => {
     tickets: [...tickets.values()].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })),
   }));
 
-  const pipelineRows = db.prepare('SELECT pipeline_status, COUNT(*) AS count, COALESCE(SUM(value), 0) AS value FROM tickets GROUP BY pipeline_status').all();
+  const pipelineRows = db.prepare("SELECT pipeline_status, COUNT(*) AS count, COALESCE(SUM(value), 0) AS value FROM tickets WHERE ticket_type = 'bid' GROUP BY pipeline_status").all();
   const pipeline = [...PIPELINE_STATUSES, null].map((status) => {
     const p = pipelineRows.find((x) => (x.pipeline_status || null) === status);
     return { status, count: p?.count || 0, value: p?.value || 0 };

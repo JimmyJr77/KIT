@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS work_log (
   team_id INTEGER NOT NULL REFERENCES teams(id),
   week_start TEXT NOT NULL,
   user_id INTEGER NOT NULL REFERENCES users(id),
-  kind TEXT NOT NULL, -- note | file | question | comment | reply | task | completed
+  kind TEXT NOT NULL, -- note | file | question | comment | reply | task | completed | ticket | step
   ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
   card_id INTEGER REFERENCES priority_cards(id) ON DELETE SET NULL,
   ref_id INTEGER, -- the note, file or comment the action created
@@ -207,6 +207,48 @@ function addColumn(table, column, type) {
 addColumn('ticket_comments', 'target_type', 'TEXT');
 addColumn('ticket_comments', 'target_id', 'INTEGER');
 addColumn('ticket_comments', 'updated_at', 'TEXT');
+// The customer branch a master ticket belongs to (see ACCOUNT_TYPES).
+addColumn('tickets', 'account_type', 'TEXT');
+// bid: a ticket to win a contract (has a value and pipeline stage). work: everything else.
+addColumn('tickets', 'ticket_type', "TEXT NOT NULL DEFAULT 'bid'");
+// Capture planning on a ticket: free-text win strategy and the scored win assessment (JSON, see src/lib/assessment.js).
+addColumn('tickets', 'strategy', 'TEXT');
+addColumn('tickets', 'strategy_updated_at', 'TEXT');
+addColumn('tickets', 'strategy_updated_by', 'INTEGER');
+addColumn('tickets', 'assessment', 'TEXT');
+addColumn('tickets', 'assessment_updated_at', 'TEXT');
+addColumn('tickets', 'assessment_updated_by', 'INTEGER');
+
+db.exec(`
+-- To-dos on a ticket as a whole, not tied to any priority card.
+CREATE TABLE IF NOT EXISTS ticket_tasks (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  done_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ticket_tasks_ticket ON ticket_tasks(ticket_id);
+
+-- Next major steps in pursuing a ticket: a broad-stroke log, newest on top unless reordered.
+-- One step at a time can be flagged as the next step; it feeds the win assessment's next milestone.
+CREATE TABLE IF NOT EXISTS ticket_steps (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  done_at TEXT,
+  is_next INTEGER NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL DEFAULT 0,
+  author_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ticket_steps_ticket ON ticket_steps(ticket_id);
+`);
 
 db.exec(`
 -- Notifications for a user, e.g. someone @mentioned them.

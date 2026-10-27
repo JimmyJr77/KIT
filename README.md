@@ -19,6 +19,30 @@ Sign in with the admin's email, phone, or username (usernames are not case sensi
 
 **Production:** `npm run build && npm start` serves the built app and API from one Node process on `PORT`.
 
+## Deploy to Vercel + Render
+
+Use Node 22 (`nvm use`). Vercel hosts the React frontend; Render runs Express with a persistent disk for SQLite and uploaded documents. Browser requests stay on the Vercel origin: `/api/*` is proxied to Render, preserving the existing secure, HTTP-only login cookies without cross-origin cookie settings.
+
+1. Push the intended app version and deployment files to the GitHub repository. Both providers must deploy the same revision.
+2. In Render, create a **Blueprint** from this repository using `render.yaml`. It provisions a paid **Starter** web service and a **1 GB persistent disk**. Review the cost in Render before creating it. Set `ADMIN_EMAIL` and a unique `ADMIN_PASSWORD` (at least 12 characters) in Render's secure setup form. `JWT_SECRET` is generated automatically. Never use the example credentials in production.
+3. Render runs `npm ci --omit=dev`, then `npm run start:render`. Startup creates the admin only if that email does not exist, initializes the database, and imports the bundled GSA rates. Seeding runs at startup because the disk is not available during builds or pre-deploy commands. Redeploys preserve existing users and passwords; changing `ADMIN_PASSWORD` later does not reset an existing account.
+4. Wait for Render's `/api/health` endpoint to return `{"status":"ok"}`. Copy the actual service origin from its dashboard (the assigned hostname may differ from the service name).
+5. Import this repository into the intended Vercel team. Use the repository root, **Other** framework preset, Node **22.x**, and the commands in `vercel.json`. Leave Output Directory unset: the build generates `.vercel/output` using Vercel's Build Output API.
+6. In Vercel, set `RENDER_API_URL` to that HTTPS origin, for example `https://your-kit-service.onrender.com`, with no `/api` suffix. Set it for Production and, if desired, Preview. Redeploy after changing it; this value is baked into the proxy configuration. Preview deployments using the production backend share production data; use a separate Render service and disk for isolated testing.
+7. Deploy Vercel, sign in, refresh a nested page, and verify a ticket attachment can be uploaded and downloaded. Check `/api/health` through the Vercel URL as well as directly on Render.
+
+Render stores the database at `/var/data/kit.db` and attachments at `/var/data/uploads`. Keep the service at one instance because SQLite and the disk are local to that instance. The disk does not cover bundled source data, so airport and GSA datasets continue to update with deploys. Back up SQLite with its backup API (or stop writes before copying the database and its WAL files) and preserve uploaded files alongside it. A new deployment starts with an empty database; it does **not** copy local users, tickets, or attachments automatically.
+
+Optional integration secrets (`GEMINI_API_KEY`, `GSA_API_KEY`, rental-car settings and MCP authentication headers) belong only in Render environment variables. Do not put secrets in `VITE_*` variables or commit `.env`. API responses are marked `private, no-store` to keep authenticated data out of shared caches.
+
+To check the frontend deployment output locally:
+
+```bash
+RENDER_API_URL=https://your-kit-service.onrender.com npm run build:vercel
+```
+
+This validates the URL and builds the static app plus API proxy rules; it does not deploy or contact that example backend. Local `npm run dev` and the single-server `npm run build && npm start` workflow still work.
+
 ## Access model
 
 - Only **approved** emails can sign in. Admins approve emails under **Profile → Admin · Access & team directory**.

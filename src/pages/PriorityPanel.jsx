@@ -2,21 +2,23 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { X, Plus, Trash2, Search, Ticket, ArrowLeft } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { fullName } from '../lib/format.js';
+import { fullName, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import MultiSelect from '../components/MultiSelect.jsx';
 import CardNotes from './CardNotes.jsx';
+import { useApi } from '../lib/data.js';
 
-const EMPTY_TICKET = { opportunity_title: '', organization: '', pipeline_status: '', value: '' };
+const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', pipeline_status: '', value: '' };
 
 /** Slide-out panel for creating or editing a priority card (and its ticket). */
 export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, readOnly, asWork, onBack: back, onClose: close, onSaved, onNotesChanged }) {
   const { user } = useAuth();
+  const meta = useApi('/priorities/meta');
   const isNew = !card;
   const [ticketMode, setTicketMode] = useState('new'); // 'new' | 'existing' (new cards only)
   const [ticketId, setTicketId] = useState(card?.ticket_id ?? null);
   const [ticket, setTicket] = useState(card ? {
-    opportunity_title: card.opportunity_title, organization: card.organization || '', pipeline_status: card.pipeline_status || '', value: card.value ?? '',
+    ticket_type: card.ticket_type || 'bid', opportunity_title: card.opportunity_title, organization: card.organization || '', account_type: card.account_type || '', pipeline_status: card.pipeline_status || '', value: card.value ?? '',
   } : EMPTY_TICKET);
   const [form, setForm] = useState({
     title: card?.title || '',
@@ -51,7 +53,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   const save = async () => {
     setError('');
     if (!form.assignees.length) return setError('Assign at least one person');
-    if (!ticket.opportunity_title.trim()) return setError(ticketMode === 'existing' && !ticketId ? 'Select an existing ticket' : 'Opportunity Title is required');
+    if (!ticket.opportunity_title.trim()) return setError(ticketMode === 'existing' && !ticketId ? 'Select an existing ticket' : ticket.ticket_type === 'work' ? 'Title is required' : 'Opportunity Title is required');
     if (notesDirty.current && !confirm('A note you\'re writing hasn\'t been saved and will be discarded. Continue?')) return;
     setSaving(true);
     try {
@@ -84,6 +86,9 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   };
 
   const ro = readOnly;
+  // A brand-new ticket (not an existing one picked from search) chooses Bid or Work.
+  const creatingTicket = isNew && ticketMode === 'new' && !ticketId && !ro;
+  const isWork = ticket.ticket_type === 'work';
 
   return (
     <>
@@ -92,7 +97,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
         <style>{'@keyframes slidein{from{transform:translateX(100%)}to{transform:none}}'}</style>
         {onBack && (
           <button type="button" onClick={onBack} className="flex items-center gap-1.5 border-b border-slate-200 bg-slate-50 px-5 py-2 text-left text-xs font-medium text-brand-700 hover:bg-brand-50">
-            <ArrowLeft size={14} /> Back to master ticket
+            <ArrowLeft size={14} /> Back to {ticketKind(card).toLowerCase()}
           </button>
         )}
         <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
@@ -101,7 +106,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
             {isNew && asWork && <p className="text-xs text-slate-500">Planning is closed, so this is tracked as work: an accomplishment or new task.</p>}
             {!isNew && (
               <p className="text-xs text-slate-500">
-                Ticket #{card.ticket_id} · {card.is_planned ? 'Priority (planned)' : 'Work (added after planning closed)'}
+                {ticketKind(card)} #{card.ticket_id} · {card.is_planned ? 'Priority (planned)' : 'Work (added after planning closed)'}
               </p>
             )}
           </div>
@@ -112,7 +117,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
           {/* Ticket */}
           <section className="space-y-3 rounded-lg bg-slate-50 p-4">
             <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Ticket size={13} /> Ticket</span>
+              <span className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Ticket size={13} /> {creatingTicket ? 'New ticket' : ticketKind(ticket)}</span>
               {isNew && !ro && (
                 <div className="flex rounded-md bg-white p-0.5 text-xs ring-1 ring-slate-200">
                   {[['new', 'New ticket'], ['existing', 'Existing ticket']].map(([m, l]) => (
@@ -125,7 +130,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
             {isNew && ticketMode === 'existing' && !ticketId ? (
               <TicketSearch onPick={(t) => {
                 setTicketId(t.id);
-                setTicket({ opportunity_title: t.opportunity_title, organization: t.organization || '', pipeline_status: t.pipeline_status || '', value: t.value ?? '' });
+                setTicket({ ticket_type: t.ticket_type || 'bid', opportunity_title: t.opportunity_title, organization: t.organization || '', account_type: t.account_type || '', pipeline_status: t.pipeline_status || '', value: t.value ?? '' });
               }} />
             ) : (
               <>
@@ -135,12 +140,35 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
                     ← Choose a different ticket
                   </button>
                 )}
-                <Field label="Opportunity title *">
+                {creatingTicket && (
+                  <div>
+                    <span className="label">Ticket type</span>
+                    <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Ticket type">
+                      {[['bid', 'Bid Ticket', 'To win a contract. Has a value and pipeline status.'], ['work', 'Work Ticket', 'Any other work. No value or pipeline status.']].map(([k, l, hint]) => (
+                        <button key={k} type="button" role="radio" aria-checked={ticket.ticket_type === k} onClick={() => setT('ticket_type', k)}
+                          className={`rounded-lg border px-3 py-2 text-left transition ${ticket.ticket_type === k ? 'border-brand-500 bg-white ring-2 ring-brand-100' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+                          <div className={`text-sm font-semibold ${ticket.ticket_type === k ? 'text-brand-700' : 'text-slate-700'}`}>{l}</div>
+                          <div className="text-[11px] leading-snug text-slate-500">{hint}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <Field label={isWork ? 'Title *' : 'Opportunity title *'}>
                   <input className="input" value={ticket.opportunity_title} onChange={(e) => setT('opportunity_title', e.target.value)} disabled={ro} autoFocus={isNew} />
                 </Field>
-                <Field label="Organization">
-                  <input className="input" value={ticket.organization} onChange={(e) => setT('organization', e.target.value)} disabled={ro} />
-                </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Organization">
+                    <input className="input" value={ticket.organization} onChange={(e) => setT('organization', e.target.value)} disabled={ro} />
+                  </Field>
+                  <Field label="Account type">
+                    <select className="input" value={ticket.account_type} onChange={(e) => setT('account_type', e.target.value)} disabled={ro}>
+                      <option value="">—</option>
+                      {(meta.data?.accountTypes || []).map((a) => <option key={a}>{a}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                {!isWork && (
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Pipeline status">
                     <select className="input" value={ticket.pipeline_status} onChange={(e) => setT('pipeline_status', e.target.value)} disabled={ro}>
@@ -152,6 +180,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
                     <input type="number" min="0" className="input" value={ticket.value} onChange={(e) => setT('value', e.target.value)} disabled={ro} />
                   </Field>
                 </div>
+                )}
               </>
             )}
           </section>

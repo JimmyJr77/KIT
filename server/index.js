@@ -3,7 +3,7 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'node:path';
 import fs from 'node:fs';
-import './db.js';
+import { db } from './db.js';
 import { requireAuth } from './auth.js';
 import { ensureGsaRates } from './services/gsa.js';
 import authRoutes from './routes/auth.js';
@@ -22,6 +22,15 @@ ensureGsaRates();
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
+
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'private, no-store');
+  next();
+});
+app.get('/api/health', (req, res) => {
+  db.prepare('SELECT 1').get();
+  res.json({ status: 'ok' });
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', requireAuth, userRoutes);

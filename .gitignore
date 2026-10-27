@@ -5,3 +5,4 @@ server/data/*.db
 server/data/*.db-*
 server/data/uploads/
 .DS_Store
+.vercel/

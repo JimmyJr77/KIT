@@ -1,4 +1,4 @@
-import { Package, CheckSquare, Plus, MessageSquare, StickyNote, FileText, CheckCircle2 } from 'lucide-react';
+import { Package, CheckSquare, Plus, MessageSquare, StickyNote, FileText, CheckCircle2, Footprints } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
 import { MentionText } from '../components/MentionTextarea.jsx';
 import { ago, fullName, fullStamp } from '../lib/format.js';
@@ -197,6 +197,8 @@ export const WORK_KINDS = {
   reply: { label: 'Reply', icon: <MessageSquare size={12} /> },
   task: { label: 'Task completed', icon: <CheckSquare size={12} /> },
   completed: { label: 'Priority completed', icon: <CheckCircle2 size={12} /> },
+  ticket: { label: 'New ticket', icon: <Package size={12} /> },
+  step: { label: 'Next step', icon: <Footprints size={12} /> },
 };
 
 /** An action recorded while planning was closed, shown as a work ticket in the person's lane. */

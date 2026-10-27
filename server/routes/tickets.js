@@ -5,9 +5,11 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { db, json } from '../db.js';
+import { db, json, getSetting, setSetting } from '../db.js';
+import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../src/lib/assessment.js';
 import { recordWork } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
+import { PIPELINE_STATUSES, ticketFields } from './priorities.js';
 
 const r = Router();
 
@@ -52,6 +54,56 @@ const ticketRow = (id) => db.prepare('SELECT * FROM tickets WHERE id = ?').get(i
 
 // ---- A user's master tickets
 
+// ---- PWIN settings: weights and must-have areas (one set for everyone, kept in settings)
+
+const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
+
+/** The PWIN model in use: saved custom weights and must-haves, or the defaults. */
+export function pwinModel() {
+  const saved = json.parse(getSetting('pwin_weights'), null);
+  const gates = json.parse(getSetting('pwin_gates'), null);
+  return {
+    weights: Object.fromEntries(CRITERIA.map((c) => [c.key, Number.isFinite(saved?.[c.key]) ? saved[c.key] : DEFAULT_PWIN_WEIGHTS[c.key]])),
+    gates: Array.isArray(gates) ? gates.filter((k) => CRITERIA.some((c) => c.key === k)) : DEFAULT_PWIN_GATES,
+  };
+}
+const ticketPwin = (t, model = pwinModel()) => (t.ticket_type === 'work' ? null : pwin(json.parse(t.assessment, {}), model.weights, model.gates));
+
+function weightsOut() {
+  const { weights, gates } = pwinModel();
+  const by = Number(getSetting('pwin_weights_updated_by'));
+  const u = by && db.prepare('SELECT first_name, last_name FROM users WHERE id = ?').get(by);
+  return {
+    weights,
+    gates,
+    defaults: DEFAULT_PWIN_WEIGHTS,
+    default_gates: DEFAULT_PWIN_GATES,
+    custom: CRITERIA.some((c) => weights[c.key] !== DEFAULT_PWIN_WEIGHTS[c.key]) || !sameSet(gates, DEFAULT_PWIN_GATES),
+    updated_at: getSetting('pwin_weights_updated_at') || null,
+    updated_by: u ? `${u.first_name} ${u.last_name}` : null,
+  };
+}
+
+r.get('/pwin-weights', (req, res) => res.json(weightsOut()));
+
+/** Body: { weights: { [criterion]: 0–100 }, gates: [criterion, ...] }. Weights are relative, so they needn't add up to 100. */
+r.put('/pwin-weights', (req, res) => {
+  const input = req.body?.weights || {};
+  const weights = {};
+  for (const c of CRITERIA) {
+    const w = Number(input[c.key] ?? 0);
+    if (!Number.isFinite(w) || w < 0 || w > 100) return res.status(400).json({ error: `${c.title}: weight must be 0–100` });
+    weights[c.key] = Math.round(w);
+  }
+  if (!Object.values(weights).some(Boolean)) return res.status(400).json({ error: 'At least one area needs some weight' });
+  const gates = Array.isArray(req.body?.gates) ? CRITERIA.map((c) => c.key).filter((k) => req.body.gates.includes(k)) : pwinModel().gates;
+  setSetting('pwin_weights', json.str(weights));
+  setSetting('pwin_gates', json.str(gates));
+  setSetting('pwin_weights_updated_at', new Date().toISOString().slice(0, 19).replace('T', ' '));
+  setSetting('pwin_weights_updated_by', req.user.id);
+  res.json(weightsOut());
+});
+
 /** People who own (created) at least one master ticket, for the Tickets page filter. */
 r.get('/owners', (req, res) => {
   res.json({ owners: db.prepare(`SELECT u.id, u.first_name, u.last_name, u.team_id, tm.name AS team_name, COUNT(t.id) AS ticket_count
@@ -60,14 +112,17 @@ r.get('/owners', (req, res) => {
 });
 
 /**
- * Master tickets. scope: mine (default) | all | filter. With all or filter, `team` keeps tickets whose
- * owner is on that team; with filter, `owners` (comma-separated user ids) keeps just those owners' tickets.
+ * Master tickets. scope: mine (default) | all | filter. Outside "mine", `team` keeps tickets whose owner is
+ * on that team. In any scope, `owners` (comma-separated user ids) keeps those owners' tickets and `types`
+ * (comma-separated account types) keeps those account types.
  */
 r.get('/', (req, res) => {
   const scope = ['all', 'filter'].includes(req.query.scope) ? req.query.scope : 'mine';
   const q = `%${req.query.q || ''}%`;
   const team = scope !== 'mine' && Number(req.query.team) ? Number(req.query.team) : null;
-  const owners = scope === 'filter' ? String(req.query.owners || '').split(',').map(Number).filter(Boolean) : [];
+  const owners = String(req.query.owners || '').split(',').map(Number).filter(Boolean);
+  const types = String(req.query.types || '').split(',').filter(Boolean);
+  const kind = ['bid', 'work'].includes(req.query.kind) ? req.query.kind : null; // bid or work tickets only
   const rows = db.prepare(`SELECT t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name, ot.name AS owner_team,
       (SELECT COUNT(*) FROM priority_cards c WHERE c.ticket_id = t.id) AS card_count,
       (SELECT COUNT(*) FROM ticket_comments m WHERE m.ticket_id = t.id AND m.parent_id IS NULL AND m.kind = 'question') AS question_count,
@@ -75,8 +130,8 @@ r.get('/', (req, res) => {
       (SELECT COUNT(*) FROM ticket_files f WHERE f.ticket_id = t.id) AS file_count,
       MAX(t.updated_at,
         COALESCE((SELECT MAX(c.updated_at) FROM priority_cards c WHERE c.ticket_id = t.id), ''),
-        COALESCE((SELECT MAX(m.created_at) FROM ticket_comments m WHERE m.ticket_id = t.id), ''),
-        COALESCE((SELECT MAX(n.created_at) FROM card_notes n JOIN priority_cards c ON c.id = n.card_id WHERE c.ticket_id = t.id), ''),
+        COALESCE((SELECT MAX(MAX(m.created_at, COALESCE(m.updated_at, ''))) FROM ticket_comments m WHERE m.ticket_id = t.id), ''),
+        COALESCE((SELECT MAX(MAX(n.created_at, COALESCE(n.updated_at, ''))) FROM card_notes n JOIN priority_cards c ON c.id = n.card_id WHERE c.ticket_id = t.id), ''),
         COALESCE((SELECT MAX(f.created_at) FROM ticket_files f WHERE f.ticket_id = t.id), '')) AS last_activity
     FROM tickets t LEFT JOIN users o ON o.id = t.created_by LEFT JOIN teams ot ON ot.id = o.team_id
     WHERE (t.opportunity_title LIKE @q OR t.organization LIKE @q)
@@ -84,7 +139,9 @@ r.get('/', (req, res) => {
         WHERE c.ticket_id = t.id AND a.user_id = @me))
       AND (@team IS NULL OR o.team_id = @team)
       AND (@owners = '[]' OR t.created_by IN (SELECT value FROM json_each(@owners)))
-    ORDER BY last_activity DESC`).all({ q, mine: scope === 'mine' ? 1 : 0, me: req.user.id, team, owners: JSON.stringify(owners) });
+      AND (@types = '[]' OR t.account_type IN (SELECT value FROM json_each(@types)))
+      AND (@kind IS NULL OR t.ticket_type = @kind)
+    ORDER BY last_activity DESC`).all({ q, mine: scope === 'mine' ? 1 : 0, me: req.user.id, team, owners: JSON.stringify(owners), types: JSON.stringify(types), kind });
   // Task counts come from each card's checklist JSON.
   const lists = db.prepare('SELECT ticket_id, checklist FROM priority_cards').all();
   const tasks = {};
@@ -92,7 +149,219 @@ r.get('/', (req, res) => {
     const t = (tasks[c.ticket_id] ||= { open: 0, done: 0 });
     t[i.done ? 'done' : 'open'] += 1;
   }));
-  res.json({ tickets: rows.map((t) => ({ ...t, tasks: tasks[t.id] || { open: 0, done: 0 } })) });
+  db.prepare('SELECT ticket_id, done FROM ticket_tasks').all().forEach((k) => {
+    const t = (tasks[k.ticket_id] ||= { open: 0, done: 0 });
+    t[k.done ? 'done' : 'open'] += 1;
+  });
+  const model = pwinModel();
+  res.json({ tickets: rows.map((t) => ({ ...t, tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model) })) });
+});
+
+/** Create a ticket on its own, without a priority. Body: { ticket_type: 'bid' | 'work', opportunity_title, organization, account_type, pipeline_status, value }. */
+r.post('/', (req, res) => {
+  const type = req.body?.ticket_type === 'work' ? 'work' : 'bid';
+  const tf = ticketFields(req.body);
+  if (!tf.opportunity_title) return res.status(400).json({ error: type === 'work' ? 'Title is required' : 'Opportunity title is required' });
+  const fields = type === 'work' ? { ...tf, pipeline_status: null, value: null } : tf;
+  const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by)
+    VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @value, @ticket_type, @created_by)`)
+    .run({ ...fields, ticket_type: type, created_by: req.user.id }).lastInsertRowid;
+  recordWork(req.user, { kind: 'ticket', ticket_id: id, summary: fields.opportunity_title });
+  res.json({ ticket: ticketRow(id) });
+});
+
+// ---- Ticket-wide tasks, strategy and win assessment
+
+const touch = (id) => db.prepare("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").run(id);
+const nameOf = (id) => {
+  const u = id && db.prepare('SELECT first_name, last_name FROM users WHERE id = ?').get(id);
+  return u ? `${u.first_name} ${u.last_name}` : null;
+};
+
+/** Every task on the ticket: its own general tasks, and each priority card's checklist. */
+r.get('/:id/tasks', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const general = db.prepare('SELECT id, text, done, created_at, done_at FROM ticket_tasks WHERE ticket_id = ? ORDER BY position, id').all(t.id)
+    .map((x) => ({ ...x, done: !!x.done }));
+  const cards = db.prepare('SELECT id, title, week_start, is_planned, completed, checklist FROM priority_cards WHERE ticket_id = ? ORDER BY week_start DESC, id')
+    .all(t.id).map((c) => ({ ...c, is_planned: !!c.is_planned, completed: !!c.completed, checklist: json.parse(c.checklist, []) }))
+    .filter((c) => c.checklist.length);
+  res.json({ general, cards });
+});
+
+r.post('/:id/tasks', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Write the task first' });
+  const pos = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM ticket_tasks WHERE ticket_id = ?').get(t.id).p;
+  const id = db.prepare('INSERT INTO ticket_tasks (ticket_id, text, position, created_by) VALUES (?, ?, ?, ?)').run(t.id, text, pos, req.user.id).lastInsertRowid;
+  touch(t.id);
+  res.json({ task: { ...db.prepare('SELECT id, text, done, created_at, done_at FROM ticket_tasks WHERE id = ?').get(id), done: false } });
+});
+
+/** Check off or rename a general task. Finished tasks move to the end of the list. */
+r.put('/tasks/:taskId', (req, res) => {
+  const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(req.params.taskId);
+  if (!k) return res.status(404).json({ error: 'Task not found' });
+  const b = req.body || {};
+  if (typeof b.text === 'string') {
+    if (!b.text.trim()) return res.status(400).json({ error: 'A task can’t be empty' });
+    db.prepare('UPDATE ticket_tasks SET text = ? WHERE id = ?').run(b.text.trim(), k.id);
+  }
+  if (typeof b.done === 'boolean' && b.done !== !!k.done) {
+    const pos = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM ticket_tasks WHERE ticket_id = ?').get(k.ticket_id).p;
+    db.prepare("UPDATE ticket_tasks SET done = ?, done_at = CASE WHEN ? THEN datetime('now') ELSE NULL END, position = ? WHERE id = ?")
+      .run(b.done ? 1 : 0, b.done ? 1 : 0, pos, k.id);
+    if (b.done) recordWork(req.user, { kind: 'task', ticket_id: k.ticket_id, summary: k.text });
+  }
+  touch(k.ticket_id);
+  const x = db.prepare('SELECT id, text, done, created_at, done_at FROM ticket_tasks WHERE id = ?').get(k.id);
+  res.json({ task: { ...x, done: !!x.done } });
+});
+
+r.delete('/tasks/:taskId', (req, res) => {
+  const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(req.params.taskId);
+  if (!k) return res.status(404).json({ error: 'Task not found' });
+  db.prepare('DELETE FROM ticket_tasks WHERE id = ?').run(k.id);
+  touch(k.ticket_id);
+  res.json({ ok: true });
+});
+
+// ---- Next major steps
+
+const STEP_SQL = `SELECT s.*, u.first_name, u.last_name FROM ticket_steps s LEFT JOIN users u ON u.id = s.author_id`;
+const stepOut = (s) => ({
+  id: s.id, text: s.text, done: !!s.done, done_at: s.done_at, is_next: !!s.is_next, created_at: s.created_at, updated_at: s.updated_at,
+  author: s.first_name ? { id: s.author_id, first_name: s.first_name, last_name: s.last_name } : null,
+});
+const stepRow = (id) => db.prepare('SELECT * FROM ticket_steps WHERE id = ?').get(id);
+const listSteps = (ticketId) => db.prepare(`${STEP_SQL} WHERE s.ticket_id = ? ORDER BY s.position, s.id DESC`).all(ticketId).map(stepOut);
+
+/** Copy the flagged next step into the win assessment's "Next milestone". */
+function syncMilestone(ticketId) {
+  const next = db.prepare('SELECT text FROM ticket_steps WHERE ticket_id = ? AND is_next = 1').get(ticketId);
+  if (!next) return;
+  const a = json.parse(ticketRow(ticketId).assessment, {});
+  a.momentum = { score: a.momentum?.score ?? null, answers: { ...(a.momentum?.answers || {}), milestone: next.text } };
+  db.prepare("UPDATE tickets SET assessment = ?, assessment_updated_at = datetime('now') WHERE id = ?").run(json.str(a), ticketId);
+}
+
+r.get('/:id/steps', (req, res) => {
+  if (!ticketRow(req.params.id)) return res.status(404).json({ error: 'Ticket not found' });
+  res.json({ steps: listSteps(req.params.id) });
+});
+
+/** New steps go on top. */
+r.post('/:id/steps', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Describe the step first' });
+  const top = db.prepare('SELECT COALESCE(MIN(position) - 1, 0) AS p FROM ticket_steps WHERE ticket_id = ?').get(t.id).p;
+  const id = db.prepare('INSERT INTO ticket_steps (ticket_id, text, position, author_id) VALUES (?, ?, ?, ?)').run(t.id, text, top, req.user.id).lastInsertRowid;
+  recordWork(req.user, { kind: 'step', ticket_id: t.id, ref_id: id, summary: text });
+  touch(t.id);
+  res.json({ steps: listSteps(t.id) });
+});
+
+/** Body: { ids: [stepId, ...] } in the new top-to-bottom order. */
+r.put('/:id/steps/order', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const ids = (req.body?.ids || []).map(Number);
+  const set = db.prepare('UPDATE ticket_steps SET position = ? WHERE id = ? AND ticket_id = ?');
+  db.transaction(() => ids.forEach((id, i) => set.run(i, id, t.id)))();
+  touch(t.id);
+  res.json({ steps: listSteps(t.id) });
+});
+
+/**
+ * Update one step. Body may hold: text (author only), done, next (true flags it as the next step and
+ * clears any other; finishing the next step unflags it).
+ */
+r.put('/steps/:sid', (req, res) => {
+  const s = stepRow(req.params.sid);
+  if (!s) return res.status(404).json({ error: 'Step not found' });
+  const b = req.body || {};
+  if (typeof b.text === 'string') {
+    if (s.author_id !== req.user.id) return res.status(403).json({ error: 'Only the author can edit this step' });
+    if (!b.text.trim()) return res.status(400).json({ error: 'A step can’t be empty' });
+    db.prepare("UPDATE ticket_steps SET text = ?, updated_at = datetime('now') WHERE id = ?").run(b.text.trim(), s.id);
+  }
+  if (typeof b.done === 'boolean') {
+    db.prepare("UPDATE ticket_steps SET done = ?, done_at = CASE WHEN ? THEN datetime('now') ELSE NULL END, is_next = CASE WHEN ? THEN 0 ELSE is_next END WHERE id = ?")
+      .run(b.done ? 1 : 0, b.done ? 1 : 0, b.done ? 1 : 0, s.id);
+  }
+  if (typeof b.next === 'boolean') {
+    db.transaction(() => {
+      if (b.next) db.prepare('UPDATE ticket_steps SET is_next = 0 WHERE ticket_id = ?').run(s.ticket_id);
+      db.prepare('UPDATE ticket_steps SET is_next = ?, done = CASE WHEN ? THEN 0 ELSE done END, done_at = CASE WHEN ? THEN NULL ELSE done_at END WHERE id = ?')
+        .run(b.next ? 1 : 0, b.next ? 1 : 0, b.next ? 1 : 0, s.id);
+    })();
+  }
+  syncMilestone(s.ticket_id);
+  touch(s.ticket_id);
+  res.json({ steps: listSteps(s.ticket_id) });
+});
+
+r.delete('/steps/:sid', (req, res) => {
+  const s = stepRow(req.params.sid);
+  if (!s) return res.status(404).json({ error: 'Step not found' });
+  if (s.author_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the author can delete this step' });
+  db.prepare('DELETE FROM ticket_steps WHERE id = ?').run(s.id);
+  db.prepare("DELETE FROM work_log WHERE kind = 'step' AND ref_id = ?").run(s.id);
+  touch(s.ticket_id);
+  res.json({ steps: listSteps(s.ticket_id) });
+});
+
+/** The ticket's win strategy and win assessment, with who last saved each. */
+r.get('/:id/plan', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  res.json({
+    strategy: t.strategy || '', strategy_updated_at: t.strategy_updated_at, strategy_updated_by: nameOf(t.strategy_updated_by),
+    assessment: json.parse(t.assessment, {}), assessment_updated_at: t.assessment_updated_at, assessment_updated_by: nameOf(t.assessment_updated_by),
+  });
+});
+
+r.put('/:id/strategy', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  db.prepare("UPDATE tickets SET strategy = ?, strategy_updated_at = datetime('now'), strategy_updated_by = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(String(req.body?.strategy ?? ''), req.user.id, t.id);
+  res.json({ ok: true, strategy_updated_at: ticketRow(t.id).strategy_updated_at, strategy_updated_by: nameOf(req.user.id) });
+});
+
+/** Body: { assessment: { [criterion]: { score: 1–5 | null, answers: { [prompt]: string } } } }. */
+r.put('/:id/assessment', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const input = req.body?.assessment;
+  if (!input || typeof input !== 'object') return res.status(400).json({ error: 'Nothing to save' });
+  const clean = {};
+  for (const [key, v] of Object.entries(input)) {
+    const score = Number(v?.score);
+    clean[key] = {
+      score: score >= 1 && score <= 5 ? Math.round(score) : null,
+      answers: Object.fromEntries(Object.entries(v?.answers || {}).map(([k, a]) => [k, String(a ?? '').slice(0, 4000)])),
+    };
+  }
+  db.prepare("UPDATE tickets SET assessment = ?, assessment_updated_at = datetime('now'), assessment_updated_by = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(json.str(clean), req.user.id, t.id);
+  res.json({ ok: true, assessment_updated_at: ticketRow(t.id).assessment_updated_at, assessment_updated_by: nameOf(req.user.id) });
+});
+
+/** Move a master ticket to another pipeline stage (null clears it). Used by the BD Pipeline board. */
+r.put('/:id/stage', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  if (t.ticket_type === 'work') return res.status(400).json({ error: 'Work tickets have no pipeline stage' });
+  const stage = req.body?.pipeline_status ?? null;
+  if (stage !== null && !PIPELINE_STATUSES.includes(stage)) return res.status(400).json({ error: 'Unknown pipeline stage' });
+  db.prepare("UPDATE tickets SET pipeline_status = ?, updated_at = datetime('now') WHERE id = ?").run(stage, t.id);
+  res.json({ ticket: ticketRow(t.id) });
 });
 
 // ---- Full timeline of a master ticket, newest first
@@ -100,7 +369,8 @@ r.get('/', (req, res) => {
 r.get('/:id/timeline', (req, res) => {
   const t = db.prepare(`SELECT t.*, u.first_name, u.last_name FROM tickets t LEFT JOIN users u ON u.id = t.created_by WHERE t.id = ?`).get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  const ticket = { id: t.id, owner_id: t.created_by, opportunity_title: t.opportunity_title, organization: t.organization, pipeline_status: t.pipeline_status, value: t.value, created_at: t.created_at };
+  const ticket = { id: t.id, ticket_type: t.ticket_type, owner_id: t.created_by, opportunity_title: t.opportunity_title, organization: t.organization, pipeline_status: t.pipeline_status, value: t.value, created_at: t.created_at,
+    pwin: ticketPwin(t) };
   const events = [{ type: 'ticket', at: t.created_at, author: t.first_name ? { id: t.created_by, first_name: t.first_name, last_name: t.last_name } : null }];
 
   const cards = db.prepare(`SELECT c.*, tm.name AS team_name, u.first_name, u.last_name FROM priority_cards c
@@ -216,6 +486,8 @@ r.delete('/comments/:id', (req, res) => {
   if (!m) return res.status(404).json({ error: 'Not found' });
   if (m.author_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the author can delete this' });
   db.prepare('DELETE FROM ticket_comments WHERE id = ?').run(m.id);
+  // Its additional-work entries go with it (replies are removed along with their thread).
+  db.prepare("DELETE FROM work_log WHERE kind IN ('question', 'comment', 'reply') AND ref_id NOT IN (SELECT id FROM ticket_comments)").run();
   res.json({ ok: true });
 });
 
