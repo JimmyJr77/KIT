@@ -10,7 +10,8 @@ import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../
 import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
 import { recordWork } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
-import { PIPELINE_STATUSES, ticketFields } from './priorities.js';
+import { ticketFields } from './priorities.js';
+import { statusesFor, listPipelines } from '../pipelines.js';
 import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
 
 const r = Router();
@@ -179,11 +180,14 @@ r.post('/', (req, res) => {
   if (!tf.opportunity_title) return res.status(400).json({ error: type === 'work' ? 'Title is required' : 'Opportunity title is required' });
   const fields = type === 'work' ? { ...tf, pipeline_status: null, value: null } : tf;
   const assign = type === 'bid' ? bidAssignment(req.body, req.user.id, fields.account_type) : NO_ASSIGNMENT;
+  // A bid can start on any pipeline, in one of that pipeline's stages.
+  const pipeline = type === 'bid' ? listPipelines().find((p) => p.id === (Number(req.body?.pipeline_id) || null)) || listPipelines()[0] : null;
+  if (pipeline && fields.pipeline_status && !pipeline.statuses.includes(fields.pipeline_status)) fields.pipeline_status = null;
   const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by,
-      bd_director_id, territory_id, projected_win_date, win_date_undetermined)
+      bd_director_id, territory_id, projected_win_date, win_date_undetermined, pipeline_id)
     VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @value, @ticket_type, @created_by,
-      @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined)`)
-    .run({ ...fields, ...assign, ticket_type: type, created_by: req.user.id }).lastInsertRowid;
+      @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined, @pipeline_id)`)
+    .run({ ...fields, ...assign, ticket_type: type, created_by: req.user.id, pipeline_id: pipeline?.id ?? null }).lastInsertRowid;
   recordWork(req.user, { kind: 'ticket', ticket_id: id, summary: fields.opportunity_title });
   res.json({ ticket: ticketRow(id) });
 });
@@ -471,7 +475,7 @@ r.put('/:id/stage', (req, res) => {
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   if (t.ticket_type === 'work') return res.status(400).json({ error: 'Work tickets have no pipeline stage' });
   const stage = req.body?.pipeline_status ?? null;
-  if (stage !== null && !PIPELINE_STATUSES.includes(stage)) return res.status(400).json({ error: 'Unknown pipeline stage' });
+  if (stage !== null && !statusesFor(t.pipeline_id).includes(stage)) return res.status(400).json({ error: 'Unknown pipeline stage' });
   db.prepare("UPDATE tickets SET pipeline_status = ?, updated_at = datetime('now') WHERE id = ?").run(stage, t.id);
   res.json({ ticket: ticketRow(t.id) });
 });
@@ -738,6 +742,7 @@ r.get('/files/:id', (req, res) => {
 const detailsOf = (t) => ({
   lost_reason: t.lost_reason ?? null, probability: t.probability ?? null, currency: t.currency ?? null, source: t.source ?? null,
   labels: json.parse(t.labels, []), custom_fields: json.parse(t.custom_fields, []), pipedrive_id: t.pipedrive_id ?? null,
+  pipeline_id: t.pipeline_id ?? null, pipelines: listPipelines().map(({ id, name }) => ({ id, name })),
   followers: db.prepare(`SELECT u.id, u.first_name, u.last_name FROM ticket_followers f JOIN users u ON u.id = f.user_id
     WHERE f.ticket_id = ? ORDER BY u.last_name, u.first_name`).all(t.id),
   products: db.prepare('SELECT * FROM ticket_products WHERE ticket_id = ? ORDER BY position, id').all(t.id),
@@ -749,7 +754,11 @@ r.get('/:id/details', (req, res) => {
   res.json(detailsOf(t));
 });
 
-/** Body: any of lost_reason, probability (0-100), currency, source, labels [names], custom_fields [{ name, value }], followers [user ids]. */
+/**
+ * Body: any of lost_reason, probability (0-100), currency, source, labels [names], custom_fields [{ name, value }],
+ * followers [user ids], pipeline_id (null for KIT's own). Moving to a pipeline without the ticket's stage puts it in
+ * that pipeline's first stage.
+ */
 r.put('/:id/details', (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
@@ -767,6 +776,12 @@ r.put('/:id/details', (req, res) => {
   if ('labels' in b) set.labels = json.str([...new Set((b.labels || []).map((x) => String(x).trim()).filter(Boolean))]);
   if ('custom_fields' in b) {
     set.custom_fields = json.str((b.custom_fields || []).map((f) => ({ name: String(f.name ?? '').trim(), value: String(f.value ?? '').trim() })).filter((f) => f.name));
+  }
+  if ('pipeline_id' in b && (Number(b.pipeline_id) || null) !== (t.pipeline_id ?? null)) {
+    const p = listPipelines().find((x) => x.id === (Number(b.pipeline_id) || null));
+    if (!p) return res.status(400).json({ error: 'Unknown pipeline' });
+    set.pipeline_id = p.id;
+    if (t.pipeline_status && !p.statuses.includes(t.pipeline_status)) set.pipeline_status = p.statuses[0];
   }
   db.transaction(() => {
     Object.entries(set).forEach(([k, v]) => db.prepare(`UPDATE tickets SET ${k} = ? WHERE id = ?`).run(v, t.id));

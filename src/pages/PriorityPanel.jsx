@@ -193,7 +193,8 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
                   <Field label="Pipeline status">
                     <select className="input" value={ticket.pipeline_status} onChange={(e) => setT('pipeline_status', e.target.value)} disabled={ro}>
                       <option value="">—</option>
-                      {statuses.map((s) => <option key={s}>{s}</option>)}
+                      {/* A ticket on another pipeline keeps its own stage as a choice. */}
+                      {[...new Set([...statuses, ...(ticket.pipeline_status ? [ticket.pipeline_status] : [])])].map((s) => <option key={s}>{s}</option>)}
                     </select>
                   </Field>
                   <Field label="Value ($)">

@@ -732,6 +732,30 @@ addColumn('tickets', 'probability', 'INTEGER');  // Pipedrive's hand-set deal pr
 addColumn('tickets', 'labels', 'TEXT');          // JSON array of label names
 addColumn('tickets', 'source', 'TEXT');          // where the deal came from (Pipedrive's source / origin channel)
 addColumn('tickets', 'custom_fields', 'TEXT');   // JSON array of { name, value }: Pipedrive custom fields, and any others
+db.exec(`
+-- Pipelines beyond KIT's own, each with its own stages, made to match Pipedrive's pipelines when they're synced.
+-- A ticket with no pipeline_id is on KIT's own pipeline (PIPELINE_STATUSES).
+CREATE TABLE IF NOT EXISTS pipelines (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  pipedrive_id INTEGER UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS pipeline_stages (
+  id INTEGER PRIMARY KEY,
+  pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  pipedrive_id INTEGER UNIQUE
+);
+CREATE INDEX IF NOT EXISTS pipeline_stages_pipeline ON pipeline_stages(pipeline_id, position);
+`);
+addColumn('tickets', 'pipeline_id', 'INTEGER REFERENCES pipelines(id) ON DELETE SET NULL');
+// Accounts the Pipedrive sync made for deal owners with no KIT account: they exist so tickets can name them, and the
+// person claims the account (sets a password) by activating with that email.
+addColumn('users', 'pending_activation', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'pipedrive_id', 'INTEGER');
 addColumn('ticket_contacts', 'is_primary', 'INTEGER NOT NULL DEFAULT 0'); // the deal's main contact person
 addColumn('contacts', 'pipedrive_id', 'INTEGER');
 addColumn('ticket_comments', 'pinned', 'INTEGER NOT NULL DEFAULT 0'); // kind 'note' is a Pipedrive note; notes can be pinned

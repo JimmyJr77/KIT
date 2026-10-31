@@ -28,12 +28,17 @@ r.post('/register', (req, res) => {
   const approval = db.prepare('SELECT * FROM approved_accounts WHERE email = ?').get(data.email);
   if (!approval) return res.status(403).json({ error: 'That email has not been approved. Ask an admin for access.' });
   try {
-    const info = db.prepare(`INSERT INTO users (first_name, last_name, email, phone, phone_digits, username, title, role, password_hash)
-      VALUES (@first_name, @last_name, @email, @phone, @phone_digits, @username, @title, @role, @password_hash)`)
-      .run({ ...data, role: approval.role, password_hash: hashPassword(password) });
+    // An account the Pipedrive sync made for this email is claimed (keeping its tickets) rather than made again.
+    const pending = db.prepare('SELECT id FROM users WHERE email = ? AND pending_activation = 1').get(data.email);
+    const values = { ...data, role: approval.role, password_hash: hashPassword(password) };
+    const id = pending
+      ? (db.prepare(`UPDATE users SET first_name = @first_name, last_name = @last_name, phone = @phone, phone_digits = @phone_digits, username = @username,
+          title = @title, role = @role, password_hash = @password_hash, pending_activation = 0 WHERE id = @id`).run({ ...values, id: pending.id }), pending.id)
+      : db.prepare(`INSERT INTO users (first_name, last_name, email, phone, phone_digits, username, title, role, password_hash)
+          VALUES (@first_name, @last_name, @email, @phone, @phone_digits, @username, @title, @role, @password_hash)`).run(values).lastInsertRowid;
     // Teams an admin assigned to the approved email come first, then any the person picked.
-    setUserTeams(info.lastInsertRowid, [...json.parse(approval.team_ids, []), ...(teamIdsFrom(req.body) || [])]);
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+    setUserTeams(id, [...json.parse(approval.team_ids, []), ...(teamIdsFrom(req.body) || [])]);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     setSession(res, user);
     res.json({ user: publicUser(withTeams(user)) });
   } catch (e) {

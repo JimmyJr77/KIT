@@ -18,6 +18,8 @@ import archiveRoutes from './routes/archive.js';
 import sampleRoutes from './routes/sample.js';
 import { ensureSample } from './sample/index.js';
 import activityRoutes from './routes/activities.js';
+import pipedriveRoutes from './routes/pipedrive.js';
+import { schedulePipedriveSync } from './services/pipedrive.js';
 import travelRoutes from './routes/travel.js';
 import gsaRoutes from './routes/gsa.js';
 import priorityRoutes from './routes/priorities.js';
@@ -60,6 +62,7 @@ app.use('/api/gsa', requireAuth, gsaRoutes);
 app.use('/api/priorities', requireAuth, priorityRoutes);
 app.use('/api/tickets', requireAuth, ticketRoutes);
 app.use('/api/activities', requireAuth, activityRoutes);
+app.use('/api/pipedrive', requireAuth, pipedriveRoutes);
 app.use('/api/dashboard', requireAuth, dashboardRoutes);
 app.use('/api/alerts', requireAuth, alertRoutes);
 app.use('/api/events', requireAuth, eventRoutes);
@@ -87,6 +90,8 @@ try {
 } catch (e) {
   console.error(`Couldn't load the sample data: ${e.message}`);
 }
+
+schedulePipedriveSync();
 
 const port = Number(process.env.PORT) || 3001;
 app.listen(port, () => console.log(`KIT API listening on http://localhost:${port}`));

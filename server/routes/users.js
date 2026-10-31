@@ -94,14 +94,15 @@ r.delete('/:id', requireAdmin, (req, res) => {
 
 // ---- Approved accounts (admin) ----
 r.get('/approved', requireAdmin, (req, res) => {
-  const rows = db.prepare(`SELECT a.*, u.id AS account_id, u.active, u.first_name, u.last_name
+  const rows = db.prepare(`SELECT a.*, u.id AS account_id, u.active, u.pending_activation, u.first_name, u.last_name
     FROM approved_accounts a LEFT JOIN users u ON u.email = a.email ORDER BY a.email`).all();
   // Anyone with an account, even a deactivated one, keeps their teams on it (that's where PUT saves them);
-  // only emails never activated keep them on the approval. user_id is set for active accounts only.
+  // only emails never activated keep them on the approval. user_id is set for active accounts only; an account the
+  // Pipedrive sync made counts as waiting until its person activates it.
   const teams = new Map(withTeams(rows.filter((a) => a.account_id).map((a) => ({ id: a.account_id }))).map((u) => [u.id, u.team_ids]));
   res.json({
-    approved: rows.map(({ account_id, active, ...a }) => ({
-      ...a, user_id: active ? account_id : null, team_ids: account_id ? teams.get(account_id) : json.parse(a.team_ids, []),
+    approved: rows.map(({ account_id, active, pending_activation, ...a }) => ({
+      ...a, user_id: active && !pending_activation ? account_id : null, team_ids: account_id ? teams.get(account_id) : json.parse(a.team_ids, []),
     })),
   });
 });

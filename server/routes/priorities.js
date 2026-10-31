@@ -3,10 +3,13 @@ import { db, json, withTeams } from '../db.js';
 import { loadThreads, bidAssignment, NO_ASSIGNMENT } from './tickets.js';
 import { recordWork, loadWorkLog } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
+import { KIT_STAGES, listPipelines, allStatuses } from '../pipelines.js';
 
 const r = Router();
 
-export const PIPELINE_STATUSES = ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation', 'Awarded', 'Lost'];
+
+// KIT's own pipeline. Synced Pipedrive pipelines have their own stages (see server/pipelines.js).
+export const PIPELINE_STATUSES = KIT_STAGES;
 export const ACCOUNT_TYPES = ['Army', 'Air Force', 'Navy / Marine'];
 export const TICKET_TYPES = ['bid', 'work'];
 
@@ -53,7 +56,7 @@ function loadCard(id) {
   return c ? loadCards(c.team_id, c.week_start).find((x) => x.id === Number(id)) : null;
 }
 
-r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES, accountTypes: ACCOUNT_TYPES }));
+r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES, pipelines: listPipelines(), accountTypes: ACCOUNT_TYPES }));
 
 /**
  * Every active user across all teams. The strip runs on Monday weeks; each team's cards
@@ -169,7 +172,7 @@ export function ticketFields(t = {}) {
   return {
     opportunity_title: String(t.opportunity_title || '').trim(),
     organization: t.organization?.trim() || null,
-    pipeline_status: PIPELINE_STATUSES.includes(t.pipeline_status) ? t.pipeline_status : null,
+    pipeline_status: allStatuses().includes(t.pipeline_status) ? t.pipeline_status : null,
     account_type: ACCOUNT_TYPES.includes(t.account_type) ? t.account_type : null,
     value: t.value === '' || t.value == null ? null : Number(t.value),
   };

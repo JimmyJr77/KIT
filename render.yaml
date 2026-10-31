@@ -42,6 +42,9 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
+      # Pipedrive (Settings → Personal preferences → API in Pipedrive). Secret: set it in Render's dashboard.
+      - key: PIPEDRIVE_API_KEY
+        sync: false
       # GSA Per Diem API (free key from https://api.data.gov/signup). Secret: set it in Render's dashboard.
       - key: GSA_API_KEY
         sync: false

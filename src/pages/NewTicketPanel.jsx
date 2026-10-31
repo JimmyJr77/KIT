@@ -12,9 +12,9 @@ const TYPES = [
 
 /**
  * Create a ticket on its own, without a priority. With `bidOnly` (the BD Pipeline) it's always a Bid Ticket,
- * starting in `stage` when given. Calls onCreated(ticket) once saved.
+ * starting in `stage` when given, on `pipeline` ({ id, statuses }; KIT's own when not given). Calls onCreated(ticket) once saved.
  */
-export default function NewTicketPanel({ bidOnly, stage = '', onClose, onCreated }) {
+export default function NewTicketPanel({ bidOnly, stage = '', pipeline = null, onClose, onCreated }) {
   const meta = useApi('/priorities/meta');
   const { user } = useAuth();
   const [form, setForm] = useState({ ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', pipeline_status: stage, value: '' });
@@ -36,7 +36,7 @@ export default function NewTicketPanel({ bidOnly, stage = '', onClose, onCreated
     setError('');
     try {
       const { ticket } = await api.post('/tickets', isWork ? form
-        : { ...form, ...assign, bd_director_id: assign.bd_director_id || null, territory_id: assign.territory_id || null });
+        : { ...form, ...assign, bd_director_id: assign.bd_director_id || null, territory_id: assign.territory_id || null, pipeline_id: pipeline?.id ?? null });
       onCreated(ticket);
     } catch (e) {
       setError(e.message);
@@ -91,7 +91,7 @@ export default function NewTicketPanel({ bidOnly, stage = '', onClose, onCreated
               <label className="label">Pipeline status</label>
               <select className="input" value={form.pipeline_status} onChange={(e) => set('pipeline_status', e.target.value)}>
                 <option value="">—</option>
-                {(meta.data?.pipelineStatuses || []).map((s) => <option key={s}>{s}</option>)}
+                {(pipeline?.statuses || meta.data?.pipelineStatuses || []).map((s) => <option key={s}>{s}</option>)}
               </select>
             </div>
             <div>

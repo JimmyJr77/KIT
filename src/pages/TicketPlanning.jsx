@@ -895,7 +895,7 @@ const money = (n, currency) => {
 const lineTotal = (p) => p.quantity * p.item_price * (1 - p.discount / 100);
 const formOf = (d) => ({
   lost_reason: d.lost_reason ?? '', probability: d.probability ?? '', currency: d.currency ?? '', source: d.source ?? '',
-  labels: d.labels.join(', '), followers: d.followers.map((u) => u.id), custom_fields: d.custom_fields,
+  labels: d.labels.join(', '), followers: d.followers.map((u) => u.id), custom_fields: d.custom_fields, pipeline_id: d.pipeline_id ?? '',
 });
 
 /**
@@ -923,7 +923,7 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
     setBusy(true);
     setError('');
     try {
-      load(await api.put(`/tickets/${ticket.id}/details`, { ...form, labels: form.labels.split(',') }));
+      load(await api.put(`/tickets/${ticket.id}/details`, { ...form, labels: form.labels.split(','), pipeline_id: form.pipeline_id || null }));
       onChanged();
     } catch (e) {
       setError(e.message);
@@ -946,6 +946,14 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
       {form ? (
         <div className="space-y-5">
           <section className="grid gap-3 sm:grid-cols-2">
+            {data.pipelines.length > 1 && (
+              <label className="sm:col-span-2">
+                <span className="label">Pipeline</span>
+                <select className="input" value={form.pipeline_id} onChange={set('pipeline_id')}>
+                  {data.pipelines.map((p) => <option key={p.id ?? ''} value={p.id ?? ''}>{p.name}</option>)}
+                </select>
+              </label>
+            )}
             {lost && (
               <label className="sm:col-span-2">
                 <span className="label">Lost reason</span>

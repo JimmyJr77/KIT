@@ -34,6 +34,7 @@ export default function Pipeline() {
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pipelineKey, setPipelineKey] = useState(() => { try { return localStorage.getItem('kit.pipeline') || ''; } catch { return ''; } });
   // Re-render every minute so the activity bars keep growing.
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -47,7 +48,8 @@ export default function Pipeline() {
     const types = filters.filter((f) => f.startsWith('t:')).map((f) => f.slice(2));
     if (owners.length) p.set('owners', owners.join(','));
     if (types.length) p.set('types', types.join(','));
-    return api.get(`/tickets?${p}`).then((d) => setTickets(d.tickets));
+    // Archived bids (closed more than 14 days ago, or archived by hand) live in the Archive, not on the board.
+    return api.get(`/tickets?${p}`).then((d) => setTickets(d.tickets.filter((t) => !t.archived)));
   };
   useEffect(() => {
     const h = setTimeout(load, q ? 200 : 0);
@@ -62,14 +64,27 @@ export default function Pipeline() {
     ...(meta.data?.accountTypes || []).map((t) => ({ value: `t:${t}`, label: t, group: 'Account types' })),
   ], [users.data, meta.data]);
 
-  const stages = meta.data?.pipelineStatuses || [];
+  // One board per pipeline: KIT's own, plus one for each Pipedrive pipeline. KIT's own shows only when it has bids or
+  // is the only one.
+  const keyOf = (id) => (id == null ? 'kit' : String(id));
+  const pipelines = useMemo(() => {
+    const list = meta.data?.pipelines || [];
+    const counts = new Map();
+    (tickets || []).forEach((t) => counts.set(keyOf(t.pipeline_id), (counts.get(keyOf(t.pipeline_id)) || 0) + 1));
+    return list.filter((p) => p.id != null || counts.get('kit') || list.length === 1).map((p) => ({ ...p, key: keyOf(p.id), count: counts.get(keyOf(p.id)) || 0 }));
+  }, [meta.data, tickets]);
+  const pipeline = pipelines.find((p) => p.key === pipelineKey) || pipelines.find((p) => p.count) || pipelines[0];
+  const choosePipeline = (k) => { setPipelineKey(k); try { localStorage.setItem('kit.pipeline', k); } catch { /* not saved */ } };
+
+  const stages = pipeline?.statuses || [];
   const columns = useMemo(() => {
-    const byStage = (s) => (tickets || []).filter(byDirector(director)).filter((t) => (t.pipeline_status || NO_STAGE) === s);
+    const onBoard = (tickets || []).filter((t) => keyOf(t.pipeline_id) === pipeline?.key).filter(byDirector(director));
+    const byStage = (s) => onBoard.filter((t) => (t.pipeline_status || NO_STAGE) === s);
     const cols = stages.map((s) => ({ key: s, label: s, tickets: byStage(s) }));
     const none = byStage(NO_STAGE);
     // Tickets with no stage get their own column, shown only when there are some.
     return none.length ? [{ key: NO_STAGE, label: 'No stage', tickets: none }, ...cols] : cols;
-  }, [tickets, stages, director]);
+  }, [tickets, stages, director, pipeline?.key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
 
@@ -117,6 +132,16 @@ export default function Pipeline() {
           <DirectorSelect tickets={tickets} value={director} onChange={setDirector} className="h-[38px] w-48" />
           {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
         </div>
+        {pipelines.length > 1 && (
+          <div className="flex flex-wrap gap-1" role="tablist" aria-label="Pipelines">
+            {pipelines.map((p) => (
+              <button key={p.key} type="button" role="tab" aria-selected={p.key === pipeline?.key} onClick={() => choosePipeline(p.key)}
+                className={`rounded-md px-3 py-1.5 text-sm transition ${p.key === pipeline?.key ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                {p.name} <span className="opacity-70">{p.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
@@ -132,7 +157,7 @@ export default function Pipeline() {
       {settingsOpen && <PwinSettings onClose={() => setSettingsOpen(false)} onSaved={load} />}
 
       {creating && (
-        <NewTicketPanel bidOnly onClose={() => setCreating(false)}
+        <NewTicketPanel bidOnly pipeline={pipeline} onClose={() => setCreating(false)}
           onCreated={(t) => { setCreating(false); load(); setOpenId(t.id); }} />
       )}
 
