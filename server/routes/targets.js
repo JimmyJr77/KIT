@@ -31,6 +31,10 @@ r.put('/', (req, res) => {
   const q = Number(quarter);
   if (!Number.isInteger(Number(year)) || !(q >= 0 && q <= 4)) return res.status(400).json({ error: 'Choose a year and quarter' });
   if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(user_id)) return res.status(404).json({ error: 'Person not found' });
+  // A full reset may have archived a target for this quarter. Setting or clearing it takes it out of that dataset
+  // first, so the change doesn't land on a hidden row.
+  db.prepare(`DELETE FROM archived_rows WHERE tbl = 'booking_targets'
+    AND row_id IN (SELECT rowid FROM main.booking_targets WHERE user_id = ? AND year = ? AND quarter = ?)`).run(user_id, year, q);
   if (amount === '' || amount == null) {
     db.prepare('DELETE FROM booking_targets WHERE user_id = ? AND year = ? AND quarter = ?').run(user_id, year, q);
   } else {

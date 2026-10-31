@@ -6,6 +6,8 @@ import path from 'node:path';
 import { Router } from 'express';
 import { db, json } from '../db.js';
 import { laneFor, isArchived } from '../../src/lib/lanes.js';
+import { archiveRows, restoreRows, deleteRows, archivedRowCounts } from '../sample/registry.js';
+import { resetSample } from '../sample/index.js';
 
 const r = Router();
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
@@ -55,14 +57,40 @@ function liveItems() {
   return { tickets, cards };
 }
 
+// Everything else a full reset archives along with the tickets and priority cards: the CRM, events, travel, contracts
+// and their funding and billing, booking targets, account objectives, forecasts, marketing, alerts and work logs.
+// People, teams, territories and settings stay.
+const RESET_TABLES = ['contacts', 'contact_interactions', 'ticket_contacts', 'task_participants', 'events', 'event_attendees', 'event_support_requests',
+  'trips', 'delivery_programs', 'delivery_team', 'program_entries', 'booking_targets', 'account_objectives', 'forecast_snapshots',
+  'marketing_assets', 'marketing_copy', 'alerts', 'work_log'];
+
 function datasets() {
+  const other = archivedRowCounts();
   return db.prepare(`SELECT s.id, s.name, s.created_at, u.first_name || ' ' || u.last_name AS created_by_name,
       (SELECT COUNT(*) FROM tickets t WHERE t.archive_set_id = s.id AND t.ticket_type = 'bid') AS bid,
       (SELECT COUNT(*) FROM tickets t WHERE t.archive_set_id = s.id AND t.ticket_type = 'work') AS work,
       (SELECT COUNT(*) FROM priority_cards c WHERE c.archive_set_id = s.id) AS cards,
       (SELECT COUNT(*) FROM ticket_files f JOIN tickets t ON t.id = f.ticket_id WHERE t.archive_set_id = s.id) AS files
-    FROM archive_sets s LEFT JOIN users u ON u.id = s.created_by ORDER BY s.created_at DESC, s.id DESC`).all();
+    FROM archive_sets s LEFT JOIN users u ON u.id = s.created_by ORDER BY s.created_at DESC, s.id DESC`).all()
+    .map((d) => {
+      const o = other[d.id] || {};
+      return { ...d, full_reset: !!other[d.id], contacts: o.contacts || 0, events: o.events || 0, trips: o.trips || 0, contracts: o.delivery_programs || 0, targets: o.booking_targets || 0, objectives: o.account_objectives || 0 };
+    });
 }
+
+/** Archives the live tickets and cards into a new dataset. */
+function archiveLive(name, userId) {
+  const live = liveItems();
+  return db.transaction(() => {
+    const setId = db.prepare('INSERT INTO archive_sets (name, created_by) VALUES (?, ?)').run(name, userId).lastInsertRowid;
+    db.prepare("UPDATE tickets SET archived_at = datetime('now'), archive_set_id = ? WHERE id IN (SELECT value FROM json_each(?))")
+      .run(setId, JSON.stringify(live.tickets.map((t) => t.id)));
+    db.prepare("UPDATE priority_cards SET archived_at = COALESCE(archived_at, datetime('now')), archive_set_id = ? WHERE id IN (SELECT value FROM json_each(?))")
+      .run(setId, JSON.stringify(live.cards));
+    return setId;
+  })();
+}
+const today = () => new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
 r.get('/', (req, res) => {
   const live = liveItems();
@@ -77,15 +105,25 @@ r.post('/all', (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can archive everything' });
   const live = liveItems();
   if (!live.tickets.length && !live.cards.length) return res.status(400).json({ error: 'There’s nothing on the boards to archive' });
-  const name = String(req.body?.name || '').trim() || `Archive of ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-  const id = db.transaction(() => {
-    const setId = db.prepare('INSERT INTO archive_sets (name, created_by) VALUES (?, ?)').run(name, req.user.id).lastInsertRowid;
-    db.prepare("UPDATE tickets SET archived_at = datetime('now'), archive_set_id = ? WHERE id IN (SELECT value FROM json_each(?))")
-      .run(setId, JSON.stringify(live.tickets.map((t) => t.id)));
-    db.prepare("UPDATE priority_cards SET archived_at = COALESCE(archived_at, datetime('now')), archive_set_id = ? WHERE id IN (SELECT value FROM json_each(?))")
-      .run(setId, JSON.stringify(live.cards));
-    return setId;
-  })();
+  const id = archiveLive(String(req.body?.name || '').trim() || `Archive of ${today()}`, req.user.id);
+  res.json({ dataset: datasets().find((d) => d.id === id) });
+});
+
+/**
+ * Body: { confirm: 'RESET' }. Full reset, admins only: archives all real work data as one dataset (tickets and priority
+ * cards, plus everything in RESET_TABLES), then reloads a fresh copy of the sample data, still shown or hidden as it was.
+ * Nothing is deleted; load the dataset back from the archive to undo it.
+ */
+r.post('/reset', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can reset KIT' });
+  if (req.body?.confirm !== 'RESET') return res.status(400).json({ error: 'Type RESET to confirm' });
+  const id = archiveLive(`Full reset of ${today()}`, req.user.id);
+  archiveRows(id, RESET_TABLES);
+  try {
+    resetSample();
+  } catch (e) {
+    console.error(`Full reset: couldn't reload the sample data: ${e.message}`);
+  }
   res.json({ dataset: datasets().find((d) => d.id === id) });
 });
 
@@ -98,6 +136,7 @@ r.post('/datasets/:id/load', (req, res) => {
     // Done tickets get a fresh 14 days on the board before they age back into the archive.
     db.prepare("UPDATE tickets SET archived_at = NULL, archive_set_id = NULL, done_at = CASE WHEN done_at IS NOT NULL THEN datetime('now') END WHERE archive_set_id = ?").run(set.id);
     db.prepare("UPDATE priority_cards SET archived_at = NULL, archive_set_id = NULL, updated_at = datetime('now') WHERE archive_set_id = ?").run(set.id);
+    restoreRows(set.id);
     db.prepare('DELETE FROM archive_sets WHERE id = ?').run(set.id);
   })();
   res.json({ ok: true });
@@ -111,6 +150,7 @@ r.delete('/datasets/:id', (req, res) => {
   const t = db.prepare('SELECT id FROM tickets WHERE archive_set_id = ? AND archived_at IS NOT NULL').all(set.id).map((x) => x.id);
   const c = db.prepare('SELECT id FROM priority_cards WHERE archive_set_id = ? AND archived_at IS NOT NULL').all(set.id).map((x) => x.id);
   const deleted = removeForGood(t, c);
+  deleteRows(set.id);
   db.prepare('DELETE FROM archive_sets WHERE id = ?').run(set.id);
   res.json({ deleted });
 });

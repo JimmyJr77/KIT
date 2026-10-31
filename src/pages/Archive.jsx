@@ -5,15 +5,10 @@ import { api } from '../lib/api.js';
 import { stamp, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
+import { archiveAll as archiveAllPrompt, contents, plural } from '../components/ArchiveAllPanel.jsx';
 
 const money = (n) => (n == null ? '' : usd(n).replace('.00', ''));
 const TABS = [['bid', 'Bid tickets'], ['work', 'Work tickets'], ['cards', 'Priority cards'], ['datasets', 'Datasets']];
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-/** "3 bid tickets, 1 work ticket and 12 priority cards", leaving out what's zero. */
-const contents = ({ bid, work, cards }) => {
-  const parts = [bid && plural(bid, 'bid ticket'), work && plural(work, 'work ticket'), cards && plural(cards, 'priority card')].filter(Boolean);
-  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] || 'nothing';
-};
 
 /**
  * Everything taken off the boards: bid tickets, work tickets and priority cards. Select some or all to restore them,
@@ -54,7 +49,7 @@ export default function Archive() {
   const run = async (fn, done) => {
     setBusy(true);
     setMsg(null);
-    try { const r = await fn(); setSelected(new Set()); await load(); setMsg({ ok: true, text: done(r) }); } catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(false); }
+    try { const r = await fn(); setSelected(new Set()); await load(); const text = done(r); setMsg(text ? { ok: true, text } : null); } catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(false); }
   };
   const restore = () => run(() => api.post('/archive/restore', body()), () => `Restored ${picked.length} ${noun(picked.length)}.`);
   const remove = () => {
@@ -67,13 +62,9 @@ export default function Archive() {
   };
 
   const archiveAll = async () => {
-    const n = data.live.bid + data.live.work + data.live.cards;
-    if (!n) return setMsg({ ok: false, text: 'There’s nothing on the boards to archive.' });
-    const name = prompt(`Archive all ${contents(data.live)} on the boards as one dataset? Sample data stays where it is.\n\nName the dataset:`,
-      `Archive of ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`);
-    if (name === null) return;
-    await run(() => api.post('/archive/all', { name }), (r) => `Archived ${contents(r.dataset)} as “${r.dataset.name}”.`);
-    setParams({ tab: 'datasets' });
+    let made = null;
+    await run(async () => (made = await archiveAllPrompt(data.live)), (d) => (d ? `Archived ${contents(d)} as “${d.name}”.` : null));
+    if (made) setParams({ tab: 'datasets' });
   };
   const loadSet = (d) => {
     if (!confirm(`Load “${d.name}”? Its ${contents(d)} go back on the boards, alongside whatever is there now.`)) return;

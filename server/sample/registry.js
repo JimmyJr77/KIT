@@ -1,5 +1,6 @@
-// Sample data bookkeeping: which rows the sample created, and how to remove exactly those (plus whatever can't exist
-// without them) while leaving real data alone, even when real data has been mixed in since.
+// Row bookkeeping for the sample data and for archived datasets: which rows the sample created, which real rows a full
+// reset archived, how to hide them (temporary views stand in for the tables) and how to remove exactly those rows (plus
+// whatever can't exist without them) while leaving everything else alone.
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, getSetting, setSetting } from '../db.js';
@@ -11,9 +12,17 @@ CREATE TABLE IF NOT EXISTS sample_rows (
   row_id INTEGER NOT NULL,
   PRIMARY KEY (tbl, row_id)
 );
+-- Real rows archived by a full reset, by dataset. Hidden from every page until the dataset is loaded back.
+CREATE TABLE IF NOT EXISTS archived_rows (
+  set_id INTEGER NOT NULL REFERENCES archive_sets(id) ON DELETE CASCADE,
+  tbl TEXT NOT NULL,
+  row_id INTEGER NOT NULL,
+  PRIMARY KEY (tbl, row_id)
+);
+CREATE INDEX IF NOT EXISTS archived_rows_set ON archived_rows(set_id);
 `);
 
-const SKIP = new Set(['sample_rows', 'settings', 'gsa_rates', 'gsa_cache']);
+const SKIP = new Set(['sample_rows', 'archived_rows', 'archive_sets', 'settings', 'gsa_rates', 'gsa_cache']);
 const tables = () => db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all()
   .map((t) => t.name).filter((t) => !SKIP.has(t));
 const maxRowid = (t) => db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS n FROM main."${t}"`).get().n;
@@ -51,10 +60,25 @@ const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
  * instead. Returns what would be or was removed, with real data reported apart.
  */
 export function removeSample({ dryRun = false } = {}) {
+  return removeRows(db.prepare('SELECT tbl, row_id FROM sample_rows').all(), {
+    dryRun,
+    finish: () => {
+      db.prepare('DELETE FROM sample_rows').run();
+      setSetting('sample_loaded_at', '');
+      setSampleHidden(false);
+    },
+  });
+}
+
+/**
+ * Remove `seed` rows ([{ tbl, row_id }]) the same way: plus whatever can't exist without them, clearing links that can
+ * be empty. `finish` runs inside the same transaction. `summary.sample` counts seed rows; the rest are reported apart.
+ */
+function removeRows(seed, { dryRun = false, finish } = {}) {
   const all = tables();
   const doomed = new Map(all.map((t) => [t, new Set()]));
   const recorded = new Map(all.map((t) => [t, new Set()]));
-  db.prepare('SELECT tbl, row_id FROM sample_rows').all().forEach((r) => {
+  seed.forEach((r) => {
     if (!doomed.has(r.tbl)) return; // a table that no longer exists
     doomed.get(r.tbl).add(r.row_id);
     recorded.get(r.tbl).add(r.row_id);
@@ -122,32 +146,69 @@ export function removeSample({ dryRun = false } = {}) {
     doomed.forEach((ids, t) => {
       if (ids.size) db.prepare(`DELETE FROM main."${t}" WHERE rowid IN (SELECT value FROM json_each(?))`).run(JSON.stringify([...ids]));
     });
-    db.prepare('DELETE FROM sample_rows').run();
-    setSetting('sample_loaded_at', '');
-    setSampleHidden(false);
+    finish?.();
   })();
   files.forEach((f) => fs.rmSync(path.join(uploadDir, f.stored_name), { force: true }));
   return summary;
 }
 
 /**
- * Hide or show the sample without deleting it. Hidden, each table with sample rows is shadowed by a temporary view of
- * the same name that leaves those rows out; unqualified table names find the view first, so every read in the app skips
- * the sample. Writes go to the real tables (see db.prepare in server/db.js), and the sample keeps its ids, so showing it
- * again brings it back exactly as it was.
+ * Hide the sample (when switched off) and every row archived by a full reset, without deleting them. Each affected
+ * table is shadowed by a temporary view of the same name that leaves those rows out; unqualified table names find the
+ * view first, so every read in the app skips them. Writes go to the real tables (see db.prepare in server/db.js), and
+ * the rows keep their ids, so showing them again brings them back exactly as they were.
  */
-export function applySampleVisibility() {
-  const hidden = getSetting('sample_hidden') === '1';
+export function applyVisibility() {
+  const sampleHidden = getSetting('sample_hidden') === '1';
   db.prepare("SELECT name FROM sqlite_temp_master WHERE type = 'view'").all().forEach((v) => db.exec(`DROP VIEW temp."${v.name}"`));
-  if (!hidden) return;
-  db.prepare('SELECT DISTINCT tbl FROM sample_rows').all().map((r) => r.tbl).filter((t) => tables().includes(t)).forEach((t) => {
-    db.exec(`CREATE TEMP VIEW "${t}" AS SELECT * FROM main."${t}" WHERE rowid NOT IN (SELECT row_id FROM main.sample_rows WHERE tbl = '${t}')`);
+  const archived = new Set(db.prepare('SELECT DISTINCT tbl FROM archived_rows').all().map((r) => r.tbl));
+  const sample = new Set(sampleHidden ? db.prepare('SELECT DISTINCT tbl FROM sample_rows').all().map((r) => r.tbl) : []);
+  tables().filter((t) => archived.has(t) || sample.has(t)).forEach((t) => {
+    const hide = [archived.has(t) && `SELECT row_id FROM main.archived_rows WHERE tbl = '${t}'`, sample.has(t) && `SELECT row_id FROM main.sample_rows WHERE tbl = '${t}'`]
+      .filter(Boolean).map((q) => `rowid NOT IN (${q})`).join(' AND ');
+    db.exec(`CREATE TEMP VIEW "${t}" AS SELECT * FROM main."${t}" WHERE ${hide}`);
   });
+}
+
+/** Archive every real row of `tbls` (not sample, not already archived) into dataset `setId`, hiding it. Counts by table. */
+export function archiveRows(setId, tbls) {
+  const counts = {};
+  db.transaction(() => {
+    tbls.filter((t) => tables().includes(t)).forEach((t) => {
+      counts[t] = db.prepare(`INSERT INTO archived_rows (set_id, tbl, row_id) SELECT ?, ?, rowid FROM main."${t}"
+        WHERE rowid NOT IN (SELECT row_id FROM main.sample_rows WHERE tbl = ?) AND rowid NOT IN (SELECT row_id FROM main.archived_rows WHERE tbl = ?)`)
+        .run(setId, t, t, t).changes;
+    });
+  })();
+  applyVisibility();
+  return counts;
+}
+
+/** Bring a dataset's archived rows back into view. */
+export function restoreRows(setId) {
+  db.prepare('DELETE FROM archived_rows WHERE set_id = ?').run(setId);
+  applyVisibility();
+}
+
+/** Delete a dataset's archived rows for good (and whatever can't exist without them). */
+export function deleteRows(setId) {
+  const summary = removeRows(db.prepare('SELECT tbl, row_id FROM archived_rows WHERE set_id = ?').all(setId), {
+    finish: () => db.prepare('DELETE FROM archived_rows WHERE set_id = ?').run(setId),
+  });
+  applyVisibility();
+  return summary;
+}
+
+/** Archived row counts per dataset: { [setId]: { [table]: n } }. */
+export function archivedRowCounts() {
+  const out = {};
+  db.prepare('SELECT set_id, tbl, COUNT(*) AS n FROM archived_rows GROUP BY set_id, tbl').all().forEach((r) => { (out[r.set_id] ||= {})[r.tbl] = r.n; });
+  return out;
 }
 
 export function setSampleHidden(hidden) {
   setSetting('sample_hidden', hidden ? '1' : '');
-  applySampleVisibility();
+  applyVisibility();
 }
 
-applySampleVisibility();
+applyVisibility();
