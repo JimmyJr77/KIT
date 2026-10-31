@@ -447,6 +447,18 @@ if (!hadTerritories) {
 
 // Archived priority cards leave the boards (and close-out counts) but keep everything on them until deleted for good.
 addColumn('priority_cards', 'archived_at', 'TEXT');
+db.exec(`
+-- A dataset made by "Archive all": every ticket and priority card that was live at the time, archived together so they
+-- can be loaded back or deleted as one.
+CREATE TABLE IF NOT EXISTS archive_sets (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
+addColumn('tickets', 'archive_set_id', 'INTEGER REFERENCES archive_sets(id) ON DELETE SET NULL');
+addColumn('priority_cards', 'archive_set_id', 'INTEGER REFERENCES archive_sets(id) ON DELETE SET NULL');
 
 // ---- BD financials: when wins are expected, how the pipeline moves, money on won contracts, goals, and account plans.
 

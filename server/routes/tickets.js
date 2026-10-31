@@ -450,7 +450,7 @@ r.put('/:id/lane', (req, res) => {
     if (t.ticket_type === 'bid' && ['Awarded', 'Lost'].includes(t.pipeline_status) && lane !== 'done') {
       return res.status(400).json({ error: `This bid is ${t.pipeline_status}, so it stays in Done. Change its pipeline stage to reopen it.` });
     }
-    set(`lane = ?, lane_locked = ?, archived_at = NULL,
+    set(`lane = ?, lane_locked = ?, archived_at = NULL, archive_set_id = NULL,
       done_at = CASE WHEN ? = 'done' THEN COALESCE(done_at, datetime('now')) ELSE NULL END`, lane, t.ticket_type === 'bid' ? 1 : 0, lane);
   }
   if (typeof b.locked === 'boolean' && t.ticket_type === 'bid') {
@@ -460,7 +460,7 @@ r.put('/:id/lane', (req, res) => {
   if (typeof b.archived === 'boolean') {
     if (b.archived) set("archived_at = datetime('now')");
     // Restored: back on the board. A Done ticket gets another 14 days before it archives itself again.
-    else set("archived_at = NULL, done_at = CASE WHEN done_at IS NOT NULL THEN datetime('now') END");
+    else set("archived_at = NULL, archive_set_id = NULL, done_at = CASE WHEN done_at IS NOT NULL THEN datetime('now') END");
   }
   res.json({ ok: true });
 });

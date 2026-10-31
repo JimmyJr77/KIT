@@ -16,6 +16,7 @@ import objectiveRoutes from './routes/objectives.js';
 import financialRoutes from './routes/financials.js';
 import archiveRoutes from './routes/archive.js';
 import sampleRoutes from './routes/sample.js';
+import { ensureSample } from './sample/index.js';
 import activityRoutes from './routes/activities.js';
 import travelRoutes from './routes/travel.js';
 import gsaRoutes from './routes/gsa.js';
@@ -79,6 +80,13 @@ app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: 'Server error' });
 });
+
+// The sample data is always available to show; load it the first time the server starts.
+try {
+  if (ensureSample()) console.log('Loaded the sample data');
+} catch (e) {
+  console.error(`Couldn't load the sample data: ${e.message}`);
+}
 
 const port = Number(process.env.PORT) || 3001;
 app.listen(port, () => console.log(`KIT API listening on http://localhost:${port}`));

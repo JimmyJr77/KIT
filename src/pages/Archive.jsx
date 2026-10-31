@@ -1,17 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Archive as ArchiveIcon, RotateCcw, Trash2, Search } from 'lucide-react';
+import { Archive as ArchiveIcon, RotateCcw, Trash2, Search, Layers, Upload } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { stamp, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 
 const money = (n) => (n == null ? '' : usd(n).replace('.00', ''));
-const TABS = [['bid', 'Bid tickets'], ['work', 'Work tickets'], ['cards', 'Priority cards']];
+const TABS = [['bid', 'Bid tickets'], ['work', 'Work tickets'], ['cards', 'Priority cards'], ['datasets', 'Datasets']];
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** "3 bid tickets, 1 work ticket and 12 priority cards", leaving out what's zero. */
+const contents = ({ bid, work, cards }) => {
+  const parts = [bid && plural(bid, 'bid ticket'), work && plural(work, 'work ticket'), cards && plural(cards, 'priority card')].filter(Boolean);
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] || 'nothing';
+};
 
 /**
  * Everything taken off the boards: bid tickets, work tickets and priority cards. Select some or all to restore them,
- * or (admins) delete them for good.
+ * or (admins) delete them for good. Admins can also archive everything at once as a dataset, then load a dataset back
+ * or delete it.
  */
 export default function Archive() {
   const navigate = useNavigate();
@@ -28,14 +35,14 @@ export default function Archive() {
   useEffect(() => { setSelected(new Set()); }, [tab]);
 
   const rows = useMemo(() => {
-    if (!data) return [];
+    if (!data || tab === 'datasets') return [];
     const s = q.trim().toLowerCase();
     const list = tab === 'cards'
       ? data.cards.map((c) => ({ ...c, key: c.id, search: `${c.title} ${c.opportunity_title} ${c.team_name} ${c.assignees.join(' ')}` }))
       : data.tickets.filter((t) => t.ticket_type === tab).map((t) => ({ ...t, key: t.id, search: `${t.opportunity_title} ${t.organization || ''} ${t.owner || ''}` }));
     return list.filter((r) => !s || r.search.toLowerCase().includes(s));
   }, [data, tab, q]);
-  const counts = data && { bid: data.tickets.filter((t) => t.ticket_type === 'bid').length, work: data.tickets.filter((t) => t.ticket_type === 'work').length, cards: data.cards.length };
+  const counts = data && { bid: data.tickets.filter((t) => t.ticket_type === 'bid').length, work: data.tickets.filter((t) => t.ticket_type === 'work').length, cards: data.cards.length, datasets: data.datasets.length };
 
   const allOn = rows.length > 0 && rows.every((r) => selected.has(r.key));
   const toggleAll = () => setSelected(allOn ? new Set() : new Set(rows.map((r) => r.key)));
@@ -59,6 +66,24 @@ export default function Archive() {
     run(() => api.post('/archive/delete', body()), (r) => `Deleted ${r.deleted.tickets ? `${r.deleted.tickets} ticket${r.deleted.tickets === 1 ? '' : 's'} and ` : ''}${r.deleted.cards} priority card${r.deleted.cards === 1 ? '' : 's'} for good.`);
   };
 
+  const archiveAll = async () => {
+    const n = data.live.bid + data.live.work + data.live.cards;
+    if (!n) return setMsg({ ok: false, text: 'There’s nothing on the boards to archive.' });
+    const name = prompt(`Archive all ${contents(data.live)} on the boards as one dataset? Sample data stays where it is.\n\nName the dataset:`,
+      `Archive of ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`);
+    if (name === null) return;
+    await run(() => api.post('/archive/all', { name }), (r) => `Archived ${contents(r.dataset)} as “${r.dataset.name}”.`);
+    setParams({ tab: 'datasets' });
+  };
+  const loadSet = (d) => {
+    if (!confirm(`Load “${d.name}”? Its ${contents(d)} go back on the boards, alongside whatever is there now.`)) return;
+    run(() => api.post(`/archive/datasets/${d.id}/load`), () => `Loaded “${d.name}” back onto the boards.`);
+  };
+  const deleteSet = (d) => {
+    if (!confirm(`Permanently delete “${d.name}”? This deletes its ${contents(d)}${d.files ? ` and ${plural(d.files, 'document')}` : ''}, plus their comments, tasks, activities and history.\n\nThis can't be undone.`)) return;
+    run(() => api.del(`/archive/datasets/${d.id}`), () => `Deleted “${d.name}” for good.`);
+  };
+
   return (
     <div className="space-y-5 p-8">
       <PageHeader title="Archive" subtitle="Tickets and priority cards taken off the boards. Restore them, or delete them for good.">
@@ -70,9 +95,15 @@ export default function Archive() {
             </button>
           ))}
         </div>
+        {data?.canDelete && (
+          <button type="button" className="btn" onClick={archiveAll} disabled={busy}
+            title="Archive every real ticket and priority card on the boards as one dataset">
+            <Layers size={15} /> Archive all
+          </button>
+        )}
       </PageHeader>
 
-      <div className="flex flex-wrap items-center gap-2">
+      {tab !== 'datasets' && <div className="flex flex-wrap items-center gap-2">
         <div className="relative w-full sm:w-72">
           <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
           <input className="input pl-9" placeholder="Search the archive…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -82,10 +113,11 @@ export default function Archive() {
         {data?.canDelete && (
           <button type="button" className="btn-danger" onClick={remove} disabled={!picked.length || busy}><Trash2 size={15} /> Delete permanently</button>
         )}
-      </div>
+      </div>}
       {msg && <p className={`rounded-md px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700'}`}>{msg.text}</p>}
 
-      {data && !rows.length ? (
+      {tab === 'datasets' ? (data && <Datasets list={data.datasets} canManage={data.canDelete} busy={busy} onLoad={loadSet} onDelete={deleteSet} />)
+        : data && !rows.length ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <ArchiveIcon size={28} className="mx-auto mb-2 text-slate-300" />
           {q ? 'Nothing in the archive matches.' : `No archived ${tab === 'cards' ? 'priority cards' : `${tab} tickets`}.`}
@@ -135,7 +167,40 @@ export default function Archive() {
           </table>
         </div>
       )}
-      {data && !data.canDelete && <p className="text-xs text-slate-500">Only admins can delete permanently.</p>}
+      {data && !data.canDelete && <p className="text-xs text-slate-500">Only admins can delete permanently{tab === 'datasets' ? ' or load a dataset' : ''}.</p>}
     </div>
+  );
+}
+
+/** Datasets made by "Archive all": load one back onto the boards, or delete it for good. */
+function Datasets({ list, canManage, busy, onLoad, onDelete }) {
+  if (!list.length) {
+    return (
+      <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
+        <Layers size={28} className="mx-auto mb-2 text-slate-300" />
+        No datasets yet.{canManage ? ' Archive all puts everything on the boards here as one.' : ''}
+      </div>
+    );
+  }
+  return (
+    <ul className="space-y-2">
+      {list.map((d) => (
+        <li key={d.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <Layers size={18} className="shrink-0 text-brand-600" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-slate-800">{d.name}</div>
+            <div className="text-xs text-slate-500">
+              {contents(d)}{d.files ? ` · ${plural(d.files, 'document')}` : ''} · archived {stamp(d.created_at)}{d.created_by_name ? ` by ${d.created_by_name}` : ''}
+            </div>
+          </div>
+          {canManage && (
+            <div className="flex shrink-0 gap-2">
+              <button type="button" className="btn" onClick={() => onLoad(d)} disabled={busy}><Upload size={15} /> Load</button>
+              <button type="button" className="btn-danger" onClick={() => onDelete(d)} disabled={busy}><Trash2 size={15} /> Delete</button>
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }

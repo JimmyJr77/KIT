@@ -295,7 +295,7 @@ r.put('/cards/:id/checklist/:index', (req, res) => {
 r.put('/cards/:id/archive', (req, res) => {
   const card = db.prepare('SELECT id FROM priority_cards WHERE id = ?').get(req.params.id);
   if (!card) return res.status(404).json({ error: 'Not found' });
-  db.prepare(`UPDATE priority_cards SET archived_at = ${req.body?.archived ? "datetime('now')" : 'NULL'}, updated_at = datetime('now') WHERE id = ?`).run(card.id);
+  db.prepare(`UPDATE priority_cards SET archived_at = ${req.body?.archived ? "datetime('now')" : 'NULL'}, archive_set_id = NULL, updated_at = datetime('now') WHERE id = ?`).run(card.id);
   res.json({ ok: true });
 });
 
