@@ -6,9 +6,14 @@ import fs from 'node:fs';
 import { db } from './db.js';
 import { requireAuth } from './auth.js';
 import { ensureGsaRates } from './services/gsa.js';
+import { scheduleForecastSnapshots } from './forecast.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import teamRoutes from './routes/teams.js';
+import territoryRoutes from './routes/territories.js';
+import targetRoutes from './routes/targets.js';
+import objectiveRoutes from './routes/objectives.js';
+import financialRoutes from './routes/financials.js';
 import travelRoutes from './routes/travel.js';
 import gsaRoutes from './routes/gsa.js';
 import priorityRoutes from './routes/priorities.js';
@@ -22,6 +27,7 @@ import marketingRoutes from './routes/marketing.js';
 import aiRoutes from './routes/ai.js';
 
 ensureGsaRates();
+scheduleForecastSnapshots();
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -39,6 +45,10 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/users', requireAuth, userRoutes);
 app.use('/api/teams', teamRoutes); // GET is public (used by account activation)
+app.use('/api/territories', requireAuth, territoryRoutes);
+app.use('/api/targets', requireAuth, targetRoutes);
+app.use('/api/objectives', requireAuth, objectiveRoutes);
+app.use('/api/financials', requireAuth, financialRoutes);
 app.use('/api/travel', requireAuth, travelRoutes);
 app.use('/api/gsa', requireAuth, gsaRoutes);
 app.use('/api/priorities', requireAuth, priorityRoutes);

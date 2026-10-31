@@ -387,6 +387,161 @@ CREATE TABLE IF NOT EXISTS access_requests (
 );
 CREATE INDEX IF NOT EXISTS access_requests_status ON access_requests(status);
 `);
+const hadUserTeams = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_teams'").get();
+db.exec(`
+-- The teams each person is on; someone can be on several, as a member or as the team's lead. No team ranks above another.
+CREATE TABLE IF NOT EXISTS user_teams (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member', -- member | lead
+  PRIMARY KEY (user_id, team_id)
+);
+CREATE INDEX IF NOT EXISTS user_teams_team ON user_teams(team_id);
+`);
+// Before people could be on several teams, users.team_id held their one team. Carry it over once, when the table is new;
+// users.team_id is not used after that.
+if (!hadUserTeams) db.exec('INSERT OR IGNORE INTO user_teams (user_id, team_id) SELECT id, team_id FROM users WHERE team_id IS NOT NULL');
+addColumn('user_teams', 'role', "TEXT NOT NULL DEFAULT 'member'");
+// Teams used to be ordered, the first one "primary"; that order is gone.
+if (db.prepare('PRAGMA table_info(user_teams)').all().some((c) => c.name === 'position')) db.exec('ALTER TABLE user_teams DROP COLUMN position');
+
+// ---- Territories: the customer areas BD directors cover. Admins and BD team leads keep the list.
+const hadTerritories = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'territories'").get();
+db.exec(`
+CREATE TABLE IF NOT EXISTS territories (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  position INTEGER NOT NULL DEFAULT 0, -- display order
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- The territories each person (usually a BD director) covers.
+CREATE TABLE IF NOT EXISTS user_territories (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  territory_id INTEGER NOT NULL REFERENCES territories(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, territory_id)
+);
+`);
+// Each bid ticket belongs to one BD director and one territory.
+addColumn('tickets', 'bd_director_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+addColumn('tickets', 'territory_id', 'INTEGER REFERENCES territories(id) ON DELETE SET NULL');
+if (!hadTerritories) {
+  const add = db.prepare('INSERT INTO territories (name, position) VALUES (?, ?)');
+  ['Army', 'Navy / Marine Corps', 'Intelligence Community (Agencies)', 'DoD 4th Estate', 'Air Force & Space Force', 'DHS & FBI', 'FedCiv & Other']
+    .forEach((name, i) => add.run(name, i));
+  // Existing bid tickets: territory from their account type, BD director from whoever created them if they're on BD.
+  db.exec(`
+    UPDATE tickets SET territory_id = (SELECT id FROM territories WHERE name = CASE tickets.account_type
+      WHEN 'Army' THEN 'Army' WHEN 'Air Force' THEN 'Air Force & Space Force' WHEN 'Navy / Marine' THEN 'Navy / Marine Corps' END)
+    WHERE ticket_type = 'bid' AND territory_id IS NULL;
+    UPDATE tickets SET bd_director_id = created_by
+    WHERE ticket_type = 'bid' AND bd_director_id IS NULL AND created_by IN
+      (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD');
+  `);
+}
+
+// ---- BD financials: when wins are expected, how the pipeline moves, money on won contracts, goals, and account plans.
+
+// When a bid is expected to be won, or flagged as not yet known (the "undetermined" pool).
+addColumn('tickets', 'projected_win_date', 'TEXT'); // YYYY-MM-DD
+addColumn('tickets', 'win_date_undetermined', 'INTEGER NOT NULL DEFAULT 0');
+
+// One row each time a bid ticket's stage, value, director, territory or projected win date changes, so the pipeline
+// can be shown as it stood on any past date (latest row on or before that date). Triggers catch every way of editing.
+const hadHistory = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ticket_history'").get();
+db.exec(`
+CREATE TABLE IF NOT EXISTS ticket_history (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  pipeline_status TEXT,
+  value REAL,
+  bd_director_id INTEGER,
+  territory_id INTEGER,
+  projected_win_date TEXT,
+  win_date_undetermined INTEGER NOT NULL DEFAULT 0,
+  changed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ticket_history_ticket ON ticket_history(ticket_id, changed_at);
+CREATE TRIGGER IF NOT EXISTS ticket_history_on_insert AFTER INSERT ON tickets WHEN NEW.ticket_type = 'bid'
+BEGIN
+  INSERT INTO ticket_history (ticket_id, pipeline_status, value, bd_director_id, territory_id, projected_win_date, win_date_undetermined)
+  VALUES (NEW.id, NEW.pipeline_status, NEW.value, NEW.bd_director_id, NEW.territory_id, NEW.projected_win_date, NEW.win_date_undetermined);
+END;
+CREATE TRIGGER IF NOT EXISTS ticket_history_on_update
+AFTER UPDATE OF pipeline_status, value, bd_director_id, territory_id, projected_win_date, win_date_undetermined ON tickets
+WHEN NEW.ticket_type = 'bid' AND (OLD.pipeline_status IS NOT NEW.pipeline_status OR OLD.value IS NOT NEW.value
+  OR OLD.bd_director_id IS NOT NEW.bd_director_id OR OLD.territory_id IS NOT NEW.territory_id
+  OR OLD.projected_win_date IS NOT NEW.projected_win_date OR OLD.win_date_undetermined IS NOT NEW.win_date_undetermined)
+BEGIN
+  INSERT INTO ticket_history (ticket_id, pipeline_status, value, bd_director_id, territory_id, projected_win_date, win_date_undetermined)
+  VALUES (NEW.id, NEW.pipeline_status, NEW.value, NEW.bd_director_id, NEW.territory_id, NEW.projected_win_date, NEW.win_date_undetermined);
+END;
+`);
+// History starts now. Bids that already exist get one starting row, dated when they were created, with today's values.
+if (!hadHistory) {
+  db.exec(`INSERT INTO ticket_history (ticket_id, pipeline_status, value, bd_director_id, territory_id, projected_win_date, win_date_undetermined, changed_at)
+    SELECT id, pipeline_status, value, bd_director_id, territory_id, projected_win_date, win_date_undetermined, created_at FROM tickets WHERE ticket_type = 'bid'`);
+}
+
+db.exec(`
+-- Money recorded against a won contract: funding received (what's funded of its value) and revenue billed.
+CREATE TABLE IF NOT EXISTS program_entries (
+  id INTEGER PRIMARY KEY,
+  program_id INTEGER NOT NULL REFERENCES delivery_programs(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('funding', 'billing')),
+  amount REAL NOT NULL,
+  entry_date TEXT NOT NULL, -- YYYY-MM-DD: when the funding came in, or the end of the period billed
+  note TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS program_entries_program ON program_entries(program_id, kind);
+
+-- Booking goals per BD director: quarter 1-4, or 0 for the whole year.
+CREATE TABLE IF NOT EXISTS booking_targets (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  year INTEGER NOT NULL,
+  quarter INTEGER NOT NULL CHECK (quarter BETWEEN 0 AND 4),
+  amount REAL NOT NULL,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, year, quarter)
+);
+
+-- Account development: what a BD director is working toward with a customer (access, relationships, shaping demand).
+CREATE TABLE IF NOT EXISTS account_objectives (
+  id INTEGER PRIMARY KEY,
+  organization TEXT NOT NULL,
+  territory_id INTEGER REFERENCES territories(id) ON DELETE SET NULL,
+  owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, -- the BD director working it
+  objective TEXT NOT NULL,
+  target_date TEXT,
+  status TEXT NOT NULL DEFAULT 'Not started', -- Not started | In progress | Achieved | Missed
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT,
+  completed_at TEXT
+);
+
+-- What each open bid was forecast to bring in, captured at the start of the quarter it was expected to close in,
+-- so actual bookings can be checked against the forecast (forecast reliability).
+CREATE TABLE IF NOT EXISTS forecast_snapshots (
+  id INTEGER PRIMARY KEY,
+  quarter TEXT NOT NULL, -- "2026 Q4", the quarter forecast
+  taken_on TEXT NOT NULL, -- YYYY-MM-DD
+  ticket_id INTEGER REFERENCES tickets(id) ON DELETE SET NULL,
+  opportunity_title TEXT,
+  bd_director_id INTEGER,
+  territory_id INTEGER,
+  pipeline_status TEXT,
+  value REAL,
+  pwin REAL, -- 0-1, or NULL when the bid had no assessment
+  weighted REAL -- value × pwin, or the full value without one
+);
+CREATE INDEX IF NOT EXISTS forecast_snapshots_quarter ON forecast_snapshots(quarter);
+`);
+// Teams an admin assigns to an approved email before the person activates it (JSON array of team ids).
+addColumn('approved_accounts', 'team_ids', 'TEXT');
 // Documents uploaded to a process step are still ticket documents; this says which step they belong to.
 addColumn('ticket_files', 'process_step_id', 'INTEGER REFERENCES ticket_process_steps(id) ON DELETE SET NULL');
 
@@ -540,6 +695,80 @@ export function getSetting(key) {
 
 export function setSetting(key, value) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, String(value));
+}
+
+/** Set someone's teams to `teamIds`. Teams they keep keep their role (member or lead); new ones start as member. Unknown ids are dropped. */
+export function setUserTeams(userId, teamIds) {
+  const known = new Set(db.prepare('SELECT id FROM teams').all().map((t) => t.id));
+  const ids = [...new Set((teamIds || []).map(Number))].filter((id) => known.has(id));
+  db.transaction(() => {
+    db.prepare('DELETE FROM user_teams WHERE user_id = ? AND team_id NOT IN (SELECT value FROM json_each(?))').run(userId, JSON.stringify(ids));
+    const ins = db.prepare('INSERT OR IGNORE INTO user_teams (user_id, team_id) VALUES (?, ?)');
+    ids.forEach((id) => ins.run(userId, id));
+  })();
+}
+
+/** Make someone a member or the lead of one of their teams. Returns false if they aren't on that team. */
+export function setTeamRole(userId, teamId, role) {
+  return db.prepare('UPDATE user_teams SET role = ? WHERE user_id = ? AND team_id = ?')
+    .run(role === 'lead' ? 'lead' : 'member', userId, teamId).changes > 0;
+}
+
+export const isTeamLead = (userId, teamId) => !!db.prepare("SELECT 1 FROM user_teams WHERE user_id = ? AND team_id = ? AND role = 'lead'").get(userId, teamId);
+
+/**
+ * Add each person's teams and territories to user rows (matched on `id`): teams [{ id, name, role }] by name,
+ * team_ids, team_name (every team, "BD, Marketing", for display), and territories [{ id, name }] in list order.
+ */
+export function withTeams(rows) {
+  const list = Array.isArray(rows) ? rows : [rows];
+  const ids = JSON.stringify(list.filter(Boolean).map((u) => u.id));
+  const byUser = new Map();
+  const terrByUser = new Map();
+  if (ids !== '[]') {
+    db.prepare(`SELECT ut.user_id, ut.role, t.id, t.name FROM user_teams ut JOIN teams t ON t.id = ut.team_id
+      WHERE ut.user_id IN (SELECT value FROM json_each(?)) ORDER BY t.name`).all(ids)
+      .forEach(({ user_id, id, name, role }) => byUser.set(user_id, [...(byUser.get(user_id) || []), { id, name, role }]));
+    db.prepare(`SELECT ut.user_id, t.id, t.name FROM user_territories ut JOIN territories t ON t.id = ut.territory_id
+      WHERE ut.user_id IN (SELECT value FROM json_each(?)) ORDER BY t.position, t.name`).all(ids)
+      .forEach(({ user_id, id, name }) => terrByUser.set(user_id, [...(terrByUser.get(user_id) || []), { id, name }]));
+  }
+  const out = list.map((u) => {
+    if (!u) return u;
+    const { team_id, ...rest } = u; // users.team_id is a leftover from one-team-per-person; never pass it on.
+    const teams = byUser.get(u.id) || [];
+    return { ...rest, teams, team_ids: teams.map((t) => t.id), team_name: teams.map((t) => t.name).join(', ') || null, territories: terrByUser.get(u.id) || [] };
+  });
+  return Array.isArray(rows) ? out : out[0];
+}
+
+/** Admins and the BD team's leads run BD's setup: the territory list, who covers which, and booking targets. */
+export function canManageBd(user) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  return !!db.prepare(`SELECT 1 FROM user_teams ut JOIN teams t ON t.id = ut.team_id
+    WHERE ut.user_id = ? AND ut.role = 'lead' AND t.name = 'BD'`).get(user.id);
+}
+
+/** Set the territories someone covers. Unknown ids are dropped. */
+export function setUserTerritories(userId, territoryIds) {
+  const ids = JSON.stringify([...new Set((territoryIds || []).map(Number))]);
+  db.transaction(() => {
+    db.prepare('DELETE FROM user_territories WHERE user_id = ? AND territory_id NOT IN (SELECT value FROM json_each(?))').run(userId, ids);
+    db.prepare('INSERT OR IGNORE INTO user_territories (user_id, territory_id) SELECT ?, id FROM territories WHERE id IN (SELECT value FROM json_each(?))').run(userId, ids);
+  })();
+}
+
+/**
+ * Who a new bid ticket belongs to when nobody says: its creator as BD director if they're on BD, and the territory
+ * its account type maps to, else the creator's only territory.
+ */
+export function defaultAssignment(userId, accountType) {
+  const onBd = !!db.prepare("SELECT 1 FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE ut.user_id = ? AND t.name = 'BD'").get(userId);
+  const byType = { Army: 'Army', 'Air Force': 'Air Force & Space Force', 'Navy / Marine': 'Navy / Marine Corps' }[accountType];
+  const mapped = byType && db.prepare('SELECT id FROM territories WHERE name = ?').get(byType);
+  const own = db.prepare('SELECT territory_id FROM user_territories WHERE user_id = ?').all(userId);
+  return { bd_director_id: onBd ? userId : null, territory_id: mapped?.id ?? (own.length === 1 ? own[0].territory_id : null) };
 }
 
 export const json = {

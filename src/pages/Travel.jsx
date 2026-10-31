@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Plus, RefreshCw, Upload, Settings2 } from 'lucide-react';
+import { Plus, RefreshCw, Upload, Settings2, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
@@ -17,9 +17,12 @@ export default function Travel() {
   const teams = useApi('/teams');
   const meta = useApi('/travel/meta');
   const [traveler, setTraveler] = useState(null);
+  const [team, setTeam] = useState('');
   const [quarter, setQuarter] = useState('');
+  const [sort, setSort] = useState({ key: 'date', dir: 'desc' });
   const [trips, setTrips] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshed, setRefreshed] = useState(0);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [editing, setEditing] = useState(null);
   const [outlook, setOutlook] = useState(null);
@@ -37,9 +40,10 @@ export default function Travel() {
   const load = () => {
     const qs = new URLSearchParams();
     if (traveler) qs.set('traveler', traveler);
+    if (team) qs.set('team', team);
+    // The quarterly outlook ignores the Quarter filter so it's always visible, but follows Traveler and Team.
+    api.get(`/travel/outlook?${qs}`).then((d) => setOutlook(d.quarters));
     if (quarter) qs.set('quarter', quarter);
-    // The quarterly outlook ignores the Quarter filter so it's always visible, but follows Traveler.
-    api.get(`/travel/outlook${traveler ? `?traveler=${traveler}` : ''}`).then((d) => setOutlook(d.quarters));
     return api.get(`/travel?${qs}`).then((d) => setTrips(d.trips));
   };
 
@@ -51,12 +55,13 @@ export default function Travel() {
       setLastRefresh({ at: new Date(), updated: r.updated });
     } finally {
       setRefreshing(false);
-      load();
+      // Reload through the effect so it uses the filters as they are now, not as they were when the refresh began.
+      setRefreshed((n) => n + 1);
     }
   };
 
   useEffect(() => { refresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [traveler, quarter]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [traveler, team, quarter, refreshed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const quarters = useMemo(() => {
     const y = new Date().getFullYear();
@@ -64,6 +69,36 @@ export default function Travel() {
   }, []);
 
   const total = trips.reduce((s, t) => s + (t.total_estimate || 0), 0);
+
+  // Text columns sort A–Z with blanks last; ties fall back to the newest trip first.
+  const SORTS = {
+    traveler: (t) => t.traveler_name,
+    team: (t) => t.team_name,
+    date: (t) => t.date_from,
+    estimate: (t) => t.total_estimate || 0,
+  };
+  const sorted = useMemo(() => {
+    const get = SORTS[sort.key];
+    const sign = sort.dir === 'asc' ? 1 : -1;
+    return [...trips].sort((a, b) => {
+      const x = get(a), y = get(b);
+      if (x !== y) {
+        if (x == null || x === '') return 1;
+        if (y == null || y === '') return -1;
+        return sign * (typeof x === 'number' ? x - y : String(x).localeCompare(String(y)));
+      }
+      return b.date_from.localeCompare(a.date_from);
+    });
+  }, [trips, sort]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sortBy = (key) => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 'asc' ? 'desc' : 'asc') : key === 'date' || key === 'estimate' ? 'desc' : 'asc' }));
+  const header = (key, label, className = '') => (
+    <th className={`px-4 py-3 ${className}`} aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+      <button type="button" className="inline-flex items-center gap-1 uppercase hover:text-slate-800" onClick={() => sortBy(key)}>
+        {label}
+        {sort.key === key ? (sort.dir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />) : <ChevronsUpDown size={12} className="text-slate-300" />}
+      </button>
+    </th>
+  );
 
   if (editing) {
     return (
@@ -92,7 +127,8 @@ export default function Travel() {
           <div className="mb-2 flex items-baseline justify-between gap-2">
             <h2 className="text-sm font-semibold text-slate-800">Estimated travel spend · next four quarters</h2>
             <span className="text-xs text-slate-500">
-              {traveler ? fullName(users.data?.users.find((u) => u.id === traveler)) : 'All travelers'} · {usd(outlook.reduce((s, q) => s + q.total, 0)).replace('.00', '')} total
+              {traveler ? fullName(users.data?.users.find((u) => u.id === traveler))
+                : team ? teams.data?.teams.find((t) => t.id === Number(team))?.name : 'All travelers'} ·{usd(outlook.reduce((s, q) => s + q.total, 0)).replace('.00', '')} total
             </span>
           </div>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -115,7 +151,16 @@ export default function Travel() {
       <div className="panel flex flex-wrap items-end gap-4">
         <div className="w-72">
           <label className="label">Traveler</label>
-          <UserCombobox users={users.data?.users || []} teams={teams.data?.teams || []} value={traveler} onChange={setTraveler} placeholder="All travelers" />
+          {/* The Team filter beside this narrows the list, so the picker needs no team dropdown of its own. */}
+          <UserCombobox users={(users.data?.users || []).filter((u) => !team || (u.team_ids || []).includes(Number(team)))}
+            value={traveler} onChange={setTraveler} placeholder="All travelers" />
+        </div>
+        <div className="w-48">
+          <label className="label">Team</label>
+          <select className="input" value={team} onChange={(e) => setTeam(e.target.value)}>
+            <option value="">All teams</option>
+            {teams.data?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
         </div>
         <div className="w-40">
           <label className="label">Quarter</label>
@@ -135,14 +180,15 @@ export default function Travel() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
             <tr>
-              <th className="px-4 py-3">Traveler</th><th className="px-4 py-3">Purpose</th><th className="px-4 py-3">Route</th>
-              <th className="px-4 py-3">Dates</th><th className="px-4 py-3">Quarter</th><th className="px-4 py-3">Air</th><th className="px-4 py-3 text-right">Estimate</th>
+              {header('traveler', 'Traveler')}{header('team', 'Team')}<th className="px-4 py-3">Purpose</th><th className="px-4 py-3">Route</th>
+              {header('date', 'Dates')}<th className="px-4 py-3">Quarter</th><th className="px-4 py-3">Air</th>{header('estimate', 'Estimate', 'text-right')}
             </tr>
           </thead>
           <tbody>
-            {trips.map((t) => (
+            {sorted.map((t) => (
               <tr key={t.id} className="cursor-pointer border-t border-slate-100 hover:bg-brand-50/40" onClick={() => setEditing(t)}>
                 <td className="px-4 py-3 font-medium">{t.traveler_name}</td>
+                <td className="px-4 py-3 text-slate-600">{t.team_name || '—'}</td>
                 <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{t.purposes.map((p) => <span key={p} className="chip">{p}</span>)}</div></td>
                 <td className="px-4 py-3">{locationLabel(t.location_from) || '—'} → {locationLabel(t.location_to) || '—'}</td>
                 <td className="px-4 py-3 whitespace-nowrap">{shortDate(t.date_from)} – {shortDate(t.date_to, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
@@ -151,7 +197,7 @@ export default function Travel() {
                 <td className="px-4 py-3 text-right font-semibold">{usd(t.total_estimate)}</td>
               </tr>
             ))}
-            {!trips.length && <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">No trips yet. Click “New trip” to plan one.</td></tr>}
+            {!trips.length && <tr><td colSpan={8}className="px-4 py-10 text-center text-slate-400">No trips yet. Click “New trip” to plan one.</td></tr>}
           </tbody>
         </table>
       </div>

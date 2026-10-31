@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { db, json } from '../db.js';
-import { loadThreads } from './tickets.js';
+import { db, json, withTeams } from '../db.js';
+import { loadThreads, bidAssignment, NO_ASSIGNMENT } from './tickets.js';
 import { recordWork, loadWorkLog } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
 
@@ -77,8 +77,9 @@ function allTeamsBoard(date) {
   const { weekStart, currentWeekStart, teamWeeks } = allTeamWeeks(date);
   const cards = Object.entries(teamWeeks).flatMap(([id, week]) => loadCards(Number(id), week));
   const work = Object.entries(teamWeeks).flatMap(([id, week]) => loadWorkLog(Number(id), week));
-  const members = db.prepare(`SELECT u.id, u.first_name, u.last_name, u.username, u.title, u.team_id, t.name AS team_name
-    FROM users u LEFT JOIN teams t ON t.id = u.team_id WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all();
+  // Everyone appears once, with all their teams; their lane holds their cards from every team.
+  const members = withTeams(db.prepare(`SELECT u.id, u.first_name, u.last_name, u.username, u.title
+    FROM users u WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all());
   const weeks = Object.entries(teamWeeks).map(([id, week]) => [Number(id), week]);
   return { team: { id: 'all', name: 'All' }, weekStart, currentWeekStart, teamWeeks, members, cards, work, threads: threadsFor(cards), planning: planningFor(weeks) };
 }
@@ -127,8 +128,8 @@ r.get('/', (req, res) => {
   const t = team(req.query.team);
   if (!t) return res.status(400).json({ error: 'Unknown team' });
   const weekStart = weekStartFor(req.query.week || localToday(), t.checkin_dow);
-  const members = db.prepare(`SELECT id, first_name, last_name, username, title FROM users
-    WHERE team_id = ? AND active = 1 ORDER BY last_name, first_name`).all(t.id);
+  const members = db.prepare(`SELECT u.id, u.first_name, u.last_name, u.username, u.title FROM users u
+    JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = ? WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all(t.id);
   const cards = loadCards(t.id, weekStart);
   res.json({
     team: t,
@@ -217,8 +218,12 @@ r.post('/cards', (req, res) => {
       // The ticket type is chosen once, when the ticket is created. Work tickets have no value or pipeline status.
       const ticketType = b.ticket?.ticket_type === 'work' ? 'work' : 'bid';
       const fields = ticketType === 'work' ? { ...tf, pipeline_status: null, value: null } : tf;
-      ticketId = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by)
-        VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @value, @ticket_type, @created_by)`).run({ ...fields, ticket_type: ticketType, created_by: req.user.id }).lastInsertRowid;
+      const assign = ticketType === 'bid' ? bidAssignment(b.ticket, req.user.id, fields.account_type) : NO_ASSIGNMENT;
+      ticketId = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by,
+          bd_director_id, territory_id, projected_win_date, win_date_undetermined)
+        VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @value, @ticket_type, @created_by,
+          @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined)`)
+        .run({ ...fields, ...assign, ticket_type: ticketType, created_by: req.user.id }).lastInsertRowid;
     }
     // Cards added while the week's planning is open are priorities; once planning
     // is closed, new cards are work tickets (accomplishments and new tasks).
@@ -333,27 +338,32 @@ r.delete('/notes/:id', (req, res) => {
 });
 
 /**
- * Persist drag-and-drop ordering. Body: { team_id, week_start, lanes: { [userId]: [cardId, ...] } }.
+ * Persist drag-and-drop ordering. Body: { team_id: id | 'all', week_start, lanes: { [userId]: [cardId, ...] } }.
  * Each listed lane is rewritten in order (index 0 = top priority). Moving a card to
- * another member's lane reassigns it.
+ * another member's lane reassigns it. On the All board a lane spans every team's week,
+ * so positions are numbered across all of them, which keeps each team's order intact too.
  */
 r.put('/lanes', (req, res) => {
   const { team_id, week_start, lanes = {} } = req.body || {};
-  const weekCards = new Set(db.prepare('SELECT id FROM priority_cards WHERE team_id = ? AND week_start = ?')
-    .all(team_id, week_start).map((c) => c.id));
+  const weeks = team_id === 'all'
+    ? Object.entries(allTeamWeeks(week_start).teamWeeks).map(([id, w]) => [Number(id), w])
+    : [[Number(team_id), week_start]];
+  const weekCards = new Set(weeks.flatMap(([id, w]) => db.prepare('SELECT id FROM priority_cards WHERE team_id = ? AND week_start = ?')
+    .all(id, w).map((c) => c.id)));
   db.transaction(() => {
-    const del = db.prepare(`DELETE FROM card_assignees WHERE user_id = ? AND card_id IN
-      (SELECT id FROM priority_cards WHERE team_id = ? AND week_start = ?)`);
+    const del = db.prepare('DELETE FROM card_assignees WHERE user_id = ? AND card_id = ?');
     const ins = db.prepare('INSERT OR REPLACE INTO card_assignees (card_id, user_id, position) VALUES (?, ?, ?)');
+    const assigned = db.prepare('SELECT card_id FROM card_assignees WHERE user_id = ?');
     for (const [userId, ids] of Object.entries(lanes)) {
-      del.run(Number(userId), team_id, week_start);
+      assigned.all(Number(userId)).filter((a) => weekCards.has(a.card_id)).forEach((a) => del.run(Number(userId), a.card_id));
       ids.map(Number).filter((id) => weekCards.has(id)).forEach((id, i) => ins.run(id, Number(userId), i));
     }
     // A card must always belong to someone; drop any orphaned by the move.
-    db.prepare(`DELETE FROM priority_cards WHERE team_id = ? AND week_start = ?
-      AND id NOT IN (SELECT card_id FROM card_assignees)`).run(team_id, week_start);
+    const orphans = db.prepare(`DELETE FROM priority_cards WHERE team_id = ? AND week_start = ?
+      AND id NOT IN (SELECT card_id FROM card_assignees)`);
+    weeks.forEach(([id, w]) => orphans.run(id, w));
   })();
-  res.json({ cards: loadCards(team_id, week_start) });
+  res.json({ cards: weeks.flatMap(([id, w]) => loadCards(id, w)) });
 });
 
 export default r;

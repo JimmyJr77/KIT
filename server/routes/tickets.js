@@ -5,7 +5,7 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { db, json, getSetting, setSetting } from '../db.js';
+import { db, json, getSetting, setSetting, withTeams, defaultAssignment } from '../db.js';
 import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../src/lib/assessment.js';
 import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
 import { recordWork } from '../worklog.js';
@@ -108,9 +108,9 @@ r.put('/pwin-weights', (req, res) => {
 
 /** People who own (created) at least one master ticket, for the Tickets page filter. */
 r.get('/owners', (req, res) => {
-  res.json({ owners: db.prepare(`SELECT u.id, u.first_name, u.last_name, u.team_id, tm.name AS team_name, COUNT(t.id) AS ticket_count
-    FROM tickets t JOIN users u ON u.id = t.created_by LEFT JOIN teams tm ON tm.id = u.team_id
-    GROUP BY u.id ORDER BY u.last_name, u.first_name`).all() });
+  res.json({ owners: withTeams(db.prepare(`SELECT u.id, u.first_name, u.last_name, COUNT(t.id) AS ticket_count
+    FROM tickets t JOIN users u ON u.id = t.created_by
+    GROUP BY u.id ORDER BY u.last_name, u.first_name`).all()) });
 });
 
 /**
@@ -125,7 +125,11 @@ r.get('/', (req, res) => {
   const owners = String(req.query.owners || '').split(',').map(Number).filter(Boolean);
   const types = String(req.query.types || '').split(',').filter(Boolean);
   const kind = ['bid', 'work'].includes(req.query.kind) ? req.query.kind : null; // bid or work tickets only
-  const rows = db.prepare(`SELECT t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name, ot.name AS owner_team,
+  const territories = String(req.query.territories || '').split(',').map(Number).filter(Boolean);
+  const rows = db.prepare(`SELECT t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name,
+      d.first_name AS director_first_name, d.last_name AS director_last_name, tr.name AS territory_name, tr.position AS territory_position,
+      (SELECT GROUP_CONCAT(name, ', ') FROM (SELECT tm.name FROM user_teams ut JOIN teams tm ON tm.id = ut.team_id
+        WHERE ut.user_id = o.id ORDER BY tm.name)) AS owner_team,
       (SELECT COUNT(*) FROM priority_cards c WHERE c.ticket_id = t.id) AS card_count,
       (SELECT COUNT(*) FROM ticket_comments m WHERE m.ticket_id = t.id AND m.parent_id IS NULL AND m.kind = 'question') AS question_count,
       (SELECT COUNT(*) FROM ticket_comments m WHERE m.ticket_id = t.id AND m.parent_id IS NULL AND m.kind = 'comment') AS comment_count,
@@ -135,15 +139,17 @@ r.get('/', (req, res) => {
         COALESCE((SELECT MAX(MAX(m.created_at, COALESCE(m.updated_at, ''))) FROM ticket_comments m WHERE m.ticket_id = t.id), ''),
         COALESCE((SELECT MAX(MAX(n.created_at, COALESCE(n.updated_at, ''))) FROM card_notes n JOIN priority_cards c ON c.id = n.card_id WHERE c.ticket_id = t.id), ''),
         COALESCE((SELECT MAX(f.created_at) FROM ticket_files f WHERE f.ticket_id = t.id), '')) AS last_activity
-    FROM tickets t LEFT JOIN users o ON o.id = t.created_by LEFT JOIN teams ot ON ot.id = o.team_id
+    FROM tickets t LEFT JOIN users o ON o.id = t.created_by LEFT JOIN users d ON d.id = t.bd_director_id
+      LEFT JOIN territories tr ON tr.id = t.territory_id
     WHERE (t.opportunity_title LIKE @q OR t.organization LIKE @q)
-      AND (@mine = 0 OR t.created_by = @me OR EXISTS (SELECT 1 FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id
+      AND (@mine = 0 OR t.created_by = @me OR t.bd_director_id = @me OR EXISTS (SELECT 1 FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id
         WHERE c.ticket_id = t.id AND a.user_id = @me))
-      AND (@team IS NULL OR o.team_id = @team)
+      AND (@team IS NULL OR EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = o.id AND ut.team_id = @team))
       AND (@owners = '[]' OR t.created_by IN (SELECT value FROM json_each(@owners)))
       AND (@types = '[]' OR t.account_type IN (SELECT value FROM json_each(@types)))
       AND (@kind IS NULL OR t.ticket_type = @kind)
-    ORDER BY last_activity DESC`).all({ q, mine: scope === 'mine' ? 1 : 0, me: req.user.id, team, owners: JSON.stringify(owners), types: JSON.stringify(types), kind });
+      AND (@territories = '[]' OR t.territory_id IN (SELECT value FROM json_each(@territories)))
+    ORDER BY last_activity DESC`).all({ q, mine: scope === 'mine' ? 1 : 0, me: req.user.id, team, owners: JSON.stringify(owners), types: JSON.stringify(types), kind, territories: JSON.stringify(territories) });
   // Task counts come from each card's checklist JSON.
   const lists = db.prepare('SELECT ticket_id, checklist FROM priority_cards').all();
   const tasks = {};
@@ -162,17 +168,76 @@ r.get('/', (req, res) => {
   }) });
 });
 
-/** Create a ticket on its own, without a priority. Body: { ticket_type: 'bid' | 'work', opportunity_title, organization, account_type, pipeline_status, value }. */
+/**
+ * Create a ticket on its own, without a priority. Body: { ticket_type: 'bid' | 'work', opportunity_title, organization,
+ * account_type, pipeline_status, value, bd_director_id, territory_id }. A bid ticket left without a director or territory
+ * gets the defaults (see defaultAssignment).
+ */
 r.post('/', (req, res) => {
   const type = req.body?.ticket_type === 'work' ? 'work' : 'bid';
   const tf = ticketFields(req.body);
   if (!tf.opportunity_title) return res.status(400).json({ error: type === 'work' ? 'Title is required' : 'Opportunity title is required' });
   const fields = type === 'work' ? { ...tf, pipeline_status: null, value: null } : tf;
-  const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by)
-    VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @value, @ticket_type, @created_by)`)
-    .run({ ...fields, ticket_type: type, created_by: req.user.id }).lastInsertRowid;
+  const assign = type === 'bid' ? bidAssignment(req.body, req.user.id, fields.account_type) : NO_ASSIGNMENT;
+  const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by,
+      bd_director_id, territory_id, projected_win_date, win_date_undetermined)
+    VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @value, @ticket_type, @created_by,
+      @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined)`)
+    .run({ ...fields, ...assign, ticket_type: type, created_by: req.user.id }).lastInsertRowid;
   recordWork(req.user, { kind: 'ticket', ticket_id: id, summary: fields.opportunity_title });
   res.json({ ticket: ticketRow(id) });
+});
+
+/** What a work ticket (which has no director, territory or win date) is created with. */
+export const NO_ASSIGNMENT = { bd_director_id: null, territory_id: null, projected_win_date: null, win_date_undetermined: 0 };
+
+/** A bid ticket's BD director, territory and projected win date from a request body; defaults for a missing director or territory. */
+export function bidAssignment(body = {}, userId, accountType) {
+  const d = defaultAssignment(userId, accountType);
+  const has = (k) => body[k] !== undefined && body[k] !== '';
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(body.projected_win_date || '') ? body.projected_win_date : null;
+  return {
+    bd_director_id: has('bd_director_id') ? Number(body.bd_director_id) || null : d.bd_director_id,
+    territory_id: has('territory_id') ? Number(body.territory_id) || null : d.territory_id,
+    projected_win_date: date,
+    win_date_undetermined: !date && body.win_date_undetermined ? 1 : 0,
+  };
+}
+
+/**
+ * Body: { bd_director_id?, territory_id?, projected_win_date?, win_date_undetermined? } (null clears). Who a bid ticket
+ * belongs to and when it's expected to be won. Marking the date undetermined clears the date, and setting a date clears it.
+ */
+r.put('/:id/assignment', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only bid tickets have a BD director and territory' });
+  const b = req.body || {};
+  const sets = [];
+  const vals = { id: t.id };
+  if (b.bd_director_id !== undefined) {
+    vals.d = Number(b.bd_director_id) || null;
+    if (vals.d && !db.prepare('SELECT 1 FROM users WHERE id = ? AND active = 1').get(vals.d)) return res.status(400).json({ error: 'Unknown person' });
+    sets.push('bd_director_id = @d');
+  }
+  if (b.territory_id !== undefined) {
+    vals.tr = Number(b.territory_id) || null;
+    if (vals.tr && !db.prepare('SELECT 1 FROM territories WHERE id = ?').get(vals.tr)) return res.status(400).json({ error: 'Unknown territory' });
+    sets.push('territory_id = @tr');
+  }
+  if (b.projected_win_date !== undefined) {
+    vals.wd = b.projected_win_date || null;
+    if (vals.wd && !/^\d{4}-\d{2}-\d{2}$/.test(vals.wd)) return res.status(400).json({ error: 'Projected win date must be a date' });
+    sets.push('projected_win_date = @wd');
+    if (vals.wd) sets.push('win_date_undetermined = 0');
+  }
+  if (b.win_date_undetermined !== undefined) {
+    vals.wu = b.win_date_undetermined ? 1 : 0;
+    sets.push('win_date_undetermined = @wu');
+    if (vals.wu) sets.push('projected_win_date = NULL');
+  }
+  if (sets.length) db.prepare(`UPDATE tickets SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = @id`).run(vals);
+  res.json({ ticket: ticketRow(t.id) });
 });
 
 // ---- Ticket-wide tasks, strategy and win assessment
@@ -409,7 +474,9 @@ r.get('/:id/timeline', (req, res) => {
     LEFT JOIN users u ON u.id = t.created_by LEFT JOIN events e ON e.id = t.event_id WHERE t.id = ?`).get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const ticket = { id: t.id, ticket_type: t.ticket_type, owner_id: t.created_by, opportunity_title: t.opportunity_title, organization: t.organization, pipeline_status: t.pipeline_status, value: t.value, created_at: t.created_at,
-    pwin: ticketPwin(t), event_id: t.event_id ?? null, event_name: t.event_name ?? null };
+    pwin: ticketPwin(t), event_id: t.event_id ?? null, event_name: t.event_name ?? null,
+    bd_director_id: t.bd_director_id ?? null, territory_id: t.territory_id ?? null,
+    projected_win_date: t.projected_win_date ?? null, win_date_undetermined: !!t.win_date_undetermined };
   const events = [{ type: 'ticket', at: t.created_at, author: t.first_name ? { id: t.created_by, first_name: t.first_name, last_name: t.last_name } : null }];
 
   const cards = db.prepare(`SELECT c.*, tm.name AS team_name, u.first_name, u.last_name FROM priority_cards c

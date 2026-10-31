@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "description": "Knexus Intelligence Toolkit — BD management tool",
   "type": "module",
-  "engines": { "node": "22.x" },
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "concurrently -n api,web -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite",
@@ -15,6 +17,8 @@
     "start": "NODE_ENV=production node server/index.js",
     "seed": "node server/scripts/seed.js",
     "seed:demo": "node server/scripts/seed.js --demo",
+    "seed:demo-data": "node server/scripts/demoData.js",
+    "seed:demo-financials": "node server/scripts/demoFinancials.js",
     "gsa:import": "node server/scripts/importGsa.js"
   },
   "dependencies": {
@@ -32,6 +36,7 @@
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^1.61.0",
     "multer": "^2.5.0",
+    "pptxgenjs": "4.0.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.4"

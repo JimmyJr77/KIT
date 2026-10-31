@@ -27,7 +27,8 @@ const s = (v) => (v == null ? '' : String(v).trim());
 // ---- The Marketing team
 
 const MARKETING = 'Marketing';
-export const marketingTeam = () => db.prepare(`SELECT u.id, u.first_name, u.last_name FROM users u JOIN teams t ON t.id = u.team_id
+export const marketingTeam = () => db.prepare(`SELECT u.id, u.first_name, u.last_name FROM users u
+  JOIN user_teams ut ON ut.user_id = u.id JOIN teams t ON t.id = ut.team_id
   WHERE t.name = ? AND u.active = 1 ORDER BY u.last_name, u.first_name`).all(MARKETING);
 /** Marketing takes support requests and keeps the library, and so can admins. */
 export const isMarketing = (user) => user.role === 'admin' || marketingTeam().some((u) => u.id === user.id);

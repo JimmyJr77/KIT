@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, json } from '../db.js';
+import { db, json, withTeams } from '../db.js';
 import { estimateFlight, estimateCar, mcpStatus, VEHICLE_CLASSES, placeLabel } from '../services/estimators.js';
 import { mileageRate } from '../services/gsa.js';
 import { quarterFor, tripCosts, upcomingQuarters, PURPOSES } from '../../src/lib/travelCalc.js';
@@ -45,22 +45,34 @@ r.get('/meta', (req, res) => {
   res.json({ purposes: PURPOSES, vehicleClasses: VEHICLE_CLASSES, mileageRate: mileageRate(), integrations: mcpStatus() });
 });
 
+/** Each trip's traveler's teams: team_name ("BD, Marketing"). */
+function withTravelerTeams(trips) {
+  const teams = new Map(withTeams([...new Set(trips.map((t) => t.traveler_id))].map((id) => ({ id }))).map((u) => [u.id, u.team_name]));
+  return trips.map((t) => ({ ...t, team_name: teams.get(t.traveler_id) || null }));
+}
+
+// A team filter matches trips by anyone on that team.
+const ON_TEAM = 'traveler_id IN (SELECT user_id FROM user_teams WHERE team_id = @team)';
+
 r.get('/', (req, res) => {
   const where = [];
   const params = {};
   if (req.query.traveler) { where.push('t.traveler_id = @traveler'); params.traveler = Number(req.query.traveler); }
+  if (req.query.team) { where.push(`t.${ON_TEAM}`); params.team = Number(req.query.team); }
   if (req.query.quarter) { where.push('t.quarter = @quarter'); params.quarter = req.query.quarter; }
   const rows = db.prepare(`${SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY t.date_from DESC`).all(params);
-  res.json({ trips: rows.map(hydrate) });
+  res.json({ trips: withTravelerTeams(rows.map(hydrate)) });
 });
 
-/** Estimated spend for this quarter and the next three, optionally for one traveler. */
+/** Estimated spend for this quarter and the next three, optionally for one traveler or team. */
 r.get('/outlook', (req, res) => {
   const quarters = upcomingQuarters(4);
   const traveler = Number(req.query.traveler) || null;
+  const team = Number(req.query.team) || null;
   const rows = db.prepare(`SELECT quarter, COUNT(*) AS trips, COALESCE(SUM(total_estimate), 0) AS total FROM trips
     WHERE quarter IN (SELECT value FROM json_each(@quarters)) AND (@traveler IS NULL OR traveler_id = @traveler)
-    GROUP BY quarter`).all({ quarters: JSON.stringify(quarters), traveler });
+    AND (@team IS NULL OR ${ON_TEAM})
+    GROUP BY quarter`).all({ quarters: JSON.stringify(quarters), traveler, team });
   res.json({ quarters: quarters.map((q) => ({ quarter: q, trips: 0, total: 0, ...rows.find((r) => r.quarter === q) })) });
 });
 

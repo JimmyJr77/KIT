@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UsersRound, FileChartColumn, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
+import { ledTeams } from '../pages/MyTeam.jsx';
 
 const NAV = [
   { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/reports', label: 'Reports', icon: FileChartColumn },
   { to: '/events', label: 'Events', icon: CalendarDays },
   { to: '/travel', label: 'Travel', icon: Plane },
   { to: '/priorities', label: 'Weekly Priorities', icon: ListChecks },
@@ -86,8 +88,9 @@ export default function Layout() {
   const Toggle = collapsed ? PanelLeftOpen : PanelLeftClose;
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <aside className={`flex shrink-0 flex-col overflow-hidden whitespace-nowrap bg-brand-900 text-slate-200 transition-[width] duration-200 ${collapsed ? 'w-16' : 'w-60'}`}>
+    // When printing, drop the sidebar and the fixed-height frame so the page flows across sheets.
+    <div className="flex h-screen overflow-hidden print:block print:h-auto print:overflow-visible">
+      <aside className={`flex shrink-0 flex-col overflow-hidden whitespace-nowrap bg-brand-900 text-slate-200 transition-[width] duration-200 print:hidden ${collapsed ? 'w-16' : 'w-60'}`}>
         <div className={`flex items-center gap-2.5 py-5 ${collapsed ? 'justify-center px-2' : 'px-5'}`}>
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand-500 text-lg font-bold text-white" title={collapsed ? 'KIT — Knexus Intelligence Toolkit' : undefined}>K</div>
           {!collapsed && (
@@ -102,6 +105,7 @@ export default function Layout() {
         </nav>
         <div className={`space-y-1 pb-2 ${collapsed ? 'px-2' : 'px-3'}`}>
           <NavItem to="/settings" label="Settings" icon={Settings} collapsed={collapsed} />
+          {ledTeams(user).length > 0 && <NavItem to="/my-team" label={ledTeams(user).length === 1 ? 'My team' : 'My teams'} icon={UsersRound} collapsed={collapsed} />}
           {isAdmin && <NavItem to="/admin" label="Admin Access" icon={ShieldCheck} count={pendingRequests} collapsed={collapsed} />}
           <button onClick={toggle} title={collapsed ? 'Expand sidebar' : 'Minimize sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Minimize sidebar'}
             className={`flex items-center gap-3 rounded-md py-2 text-sm text-slate-400 transition hover:bg-white/5 hover:text-white ${collapsed ? 'w-full justify-center px-0' : 'w-full px-3'}`}>
@@ -128,7 +132,7 @@ export default function Layout() {
           </button>
         </div>
       </aside>
-      <main className="min-w-0 flex-1 overflow-y-auto">
+      <main className="min-w-0 flex-1 overflow-y-auto print:overflow-visible">
         <Outlet />
       </main>
     </div>

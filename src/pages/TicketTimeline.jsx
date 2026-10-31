@@ -11,6 +11,7 @@ import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx'
 import { ReplyBox } from './CommentPanel.jsx';
 import PriorityPanel from './PriorityPanel.jsx';
 import { PlanRail, PlanDrawer } from './TicketPlanning.jsx';
+import { AssignmentBar } from './TicketAssignment.jsx';
 
 const FILTERS = [
   ['all', 'Everything', () => true],
@@ -81,6 +82,7 @@ export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) 
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {data && (
         <div className="space-y-5">
+          {t.ticket_type !== 'work' && <AssignmentBar ticket={t} onChanged={refresh} />}
           <Composer ticketId={t.id} onPosted={refresh} />
 
           <div className="flex flex-wrap gap-1.5">

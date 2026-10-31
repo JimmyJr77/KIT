@@ -1,10 +1,10 @@
 import { Router } from 'express';
-import { db } from '../db.js';
+import { db, json, setUserTeams, withTeams } from '../db.js';
 import {
   findUserByIdentifier, checkPassword, setSession, clearSession, requireAuth,
   publicUser, isApproved, hashPassword,
 } from '../auth.js';
-import { validateProfile } from './users.js';
+import { validateProfile, teamIdsFrom } from './users.js';
 
 const r = Router();
 
@@ -16,7 +16,7 @@ r.post('/login', (req, res) => {
   }
   if (!isApproved(user.email)) return res.status(403).json({ error: 'This account is not approved for access' });
   setSession(res, user);
-  res.json({ user: publicUser(user) });
+  res.json({ user: publicUser(withTeams(user)) });
 });
 
 // First-time activation for an email an admin has approved.
@@ -28,12 +28,14 @@ r.post('/register', (req, res) => {
   const approval = db.prepare('SELECT * FROM approved_accounts WHERE email = ?').get(data.email);
   if (!approval) return res.status(403).json({ error: 'That email has not been approved. Ask an admin for access.' });
   try {
-    const info = db.prepare(`INSERT INTO users (first_name, last_name, email, phone, phone_digits, username, title, team_id, role, password_hash)
-      VALUES (@first_name, @last_name, @email, @phone, @phone_digits, @username, @title, @team_id, @role, @password_hash)`)
+    const info = db.prepare(`INSERT INTO users (first_name, last_name, email, phone, phone_digits, username, title, role, password_hash)
+      VALUES (@first_name, @last_name, @email, @phone, @phone_digits, @username, @title, @role, @password_hash)`)
       .run({ ...data, role: approval.role, password_hash: hashPassword(password) });
+    // Teams an admin assigned to the approved email come first, then any the person picked.
+    setUserTeams(info.lastInsertRowid, [...json.parse(approval.team_ids, []), ...(teamIdsFrom(req.body) || [])]);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
     setSession(res, user);
-    res.json({ user: publicUser(user) });
+    res.json({ user: publicUser(withTeams(user)) });
   } catch (e) {
     res.status(409).json({ error: uniqueMessage(e) });
   }
@@ -70,7 +72,7 @@ r.post('/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-r.get('/me', requireAuth, (req, res) => res.json({ user: publicUser(req.user) }));
+r.get('/me', requireAuth, (req, res) => res.json({ user: publicUser(withTeams(req.user)) }));
 
 export function uniqueMessage(e) {
   const m = String(e.message);

@@ -5,9 +5,33 @@ import { ago, fullStamp } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import { ContactForm, ContactDetail, RelationshipBadge, RELATIONSHIP, contactName, contactLine } from './ContactEditor.jsx';
+import AccountObjectives from './AccountObjectives.jsx';
 
-/** The master CRM: everyone added anywhere in the app, with how well we know them and what tickets they're on. */
+/** The CRM: customer contacts, and the account development objectives BD directors are working on with each customer. */
 export default function Crm() {
+  const [tab, setTabState] = useState(() => { try { return localStorage.getItem('kit.crm.tab') || 'contacts'; } catch { return 'contacts'; } });
+  const setTab = (t) => { setTabState(t); try { localStorage.setItem('kit.crm.tab', t); } catch { /* ignore */ } };
+  const tabs = (
+    <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="tablist">
+      {[['contacts', 'Contacts'], ['objectives', 'Account objectives']].map(([k, l]) => (
+        <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+          className={`rounded px-3 ${tab === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
+      ))}
+    </div>
+  );
+  if (tab === 'objectives') {
+    return (
+      <div className="space-y-5 p-8">
+        <PageHeader title="CRM" subtitle="Account objectives: what each BD director is working toward with a customer, and by when.">{tabs}</PageHeader>
+        <AccountObjectives />
+      </div>
+    );
+  }
+  return <Contacts tabs={tabs} />;
+}
+
+/** The master contact list: everyone added anywhere in the app, with how well we know them and what tickets they're on. */
+function Contacts({ tabs }) {
   const [q, setQ] = useState('');
   const [minLevel, setMinLevel] = useState('');
   const [contacts, setContacts] = useState(null);
@@ -25,6 +49,7 @@ export default function Crm() {
   return (
     <div className="space-y-5 p-8">
       <PageHeader title="CRM" subtitle="Everyone we know across our accounts. People added on a ticket show up here too.">
+        {tabs}
         <select className="input h-9 w-56 py-0" value={minLevel} onChange={(e) => setMinLevel(e.target.value)} aria-label="Relationship">
           <option value="">Any relationship</option>
           {RELATIONSHIP.slice(1).map((r) => <option key={r.level} value={r.level}>{r.level}+ · {r.label}</option>)}

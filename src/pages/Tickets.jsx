@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Package, CheckSquare, MessageSquare, Paperclip, ListOrdered, UserRound, Plus, ArrowDownAZ, Columns3, Archive, RotateCcw } from 'lucide-react';
+import { Search, Package, CheckSquare, MessageSquare, Paperclip, ListOrdered, UserRound, Plus, ArrowDownAZ, Columns3, Archive, RotateCcw, Ticket as TicketIcon, DollarSign, Zap, MapPin } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ago, fullName, fullStamp, ticketKind } from '../lib/format.js';
@@ -30,11 +30,23 @@ export default function Tickets() {
   // Alphabetical cards or swim lanes; the choice is remembered on this browser.
   const [view, setViewState] = useState(() => { try { return localStorage.getItem('kit.tickets.view') || 'az'; } catch { return 'az'; } });
   const setView = (v) => { setViewState(v); try { localStorage.setItem('kit.tickets.view', v); } catch { /* ignore */ } };
+  // Which ticket types show: bid, work, or both. Also remembered on this browser.
+  const [types, setTypesState] = useState(() => { try { return JSON.parse(localStorage.getItem('kit.tickets.types')) || ['bid', 'work']; } catch { return ['bid', 'work']; } });
+  // Group the A–Z cards by territory or BD director, and narrow to one territory. Both remembered on this browser.
+  const [groupBy, setGroupByState] = useState(() => { try { return localStorage.getItem('kit.tickets.group') || 'none'; } catch { return 'none'; } });
+  const setGroupBy = (v) => { setGroupByState(v); try { localStorage.setItem('kit.tickets.group', v); } catch { /* ignore */ } };
+  const [territory, setTerritory] = useState('');
+  const territories = useApi('/territories');
+  const toggleType = (k) => setTypesState((ts) => {
+    const next = ts.includes(k) ? ts.filter((x) => x !== k) : [...ts, k];
+    try { localStorage.setItem('kit.tickets.types', JSON.stringify(next)); } catch { /* ignore */ }
+    return next;
+  });
   const openId = Number(params.get('open')) || null;
 
   // Account holders: people who own at least one master ticket, narrowed to the chosen team.
   const ownerOptions = (ownersApi.data?.owners || [])
-    .filter((o) => !teamId || o.team_id === Number(teamId))
+    .filter((o) => !teamId || (o.team_ids || []).includes(Number(teamId)))
     .map((o) => ({ value: o.id, label: fullName(o), sub: `${o.team_name || 'No team'} · ${o.ticket_count} ticket${o.ticket_count === 1 ? '' : 's'}` }));
   // Drop selected people who aren't on the newly chosen team.
   useEffect(() => {
@@ -55,9 +67,11 @@ export default function Tickets() {
 
   const open = (id) => setParams(id ? { open: String(id) } : {});
   // Archived tickets leave both views; they live in the archive.
-  const live = (tickets || []).filter((t) => !t.archived)
+  const ofType = (tickets || []).filter((t) => types.includes(t.ticket_type === 'work' ? 'work' : 'bid'))
+    .filter((t) => !territory || (territory === 'none' ? !t.territory_id : t.territory_id === Number(territory)));
+  const live = ofType.filter((t) => !t.archived)
     .sort((a, b) => a.opportunity_title.localeCompare(b.opportunity_title, undefined, { sensitivity: 'base' }));
-  const archived = (tickets || []).filter((t) => t.archived);
+  const archived = ofType.filter((t) => t.archived);
   const restore = async (t) => { await api.put(`/tickets/${t.id}/lane`, { archived: false }); load(); };
 
   return (
@@ -92,6 +106,17 @@ export default function Tickets() {
             </button>
           ))}
         </div>
+        <div className="flex h-[38px] gap-0.5 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="group" aria-label="Ticket types">
+          {[['bid', 'Bid tickets'], ['work', 'Work tickets']].map(([k, l]) => {
+            const on = types.includes(k);
+            return (
+              <button key={k} type="button" aria-pressed={on} onClick={() => toggleType(k)} title={`${on ? 'Hide' : 'Show'} ${l.toLowerCase()}`} aria-label={l}
+                className={`grid w-[34px] place-items-center rounded ${on ? 'bg-brand-600 text-white' : 'text-slate-400 hover:text-slate-700'}`}>
+                <TicketTypeIcon kind={k} dim={!on} />
+              </button>
+            );
+          })}
+        </div>
         <button type="button" className="btn relative h-[38px] w-[38px] p-0" onClick={() => setArchiveOpen(true)}
           title={`Archive: done tickets, archived after 14 days or by hand${archived.length ? ` (${archived.length})` : ''}`} aria-label="Archive">
           <Archive size={16} />
@@ -99,6 +124,18 @@ export default function Tickets() {
             <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-slate-500 px-1 text-[10px] font-semibold text-white">{archived.length}</span>
           )}
         </button>
+        <select className="input h-[38px] w-48 py-0 text-sm" value={territory} onChange={(e) => setTerritory(e.target.value)} aria-label="Territory">
+          <option value="">All territories</option>
+          {(territories.data?.territories || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          <option value="none">No territory</option>
+        </select>
+        {view === 'az' && (
+          <select className="input h-[38px] w-44 py-0 text-sm" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} aria-label="Group cards by">
+            <option value="none">A–Z, no grouping</option>
+            <option value="territory">By territory</option>
+            <option value="director">By BD director</option>
+          </select>
+        )}
         {scope === 'filter' && (
           <div className="min-w-72 flex-1">
             <label className="label">Account holders</label>
@@ -111,7 +148,7 @@ export default function Tickets() {
       {tickets && !live.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <Package size={28} className="mx-auto mb-2 text-slate-300" />
-          {q ? 'No tickets match your search.' : scope === 'mine'
+          {!types.length ? 'Turn on bid or work tickets to see them.' : q ? 'No tickets match your search.' : types.length === 1 ? `No ${types[0]} tickets here.` : scope === 'mine'
             ? `No master tickets yet, ${user.first_name}. They appear here once you create a priority or are assigned to one.`
             : 'No master tickets yet.'}
         </div>
@@ -119,8 +156,16 @@ export default function Tickets() {
 
       {view === 'lanes' && tickets && live.length > 0 && <TicketLanes tickets={live} onOpen={open} onChanged={load} />}
 
-      {view === 'az' && <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
-        {live.map((t) => (
+      {view === 'az' && groupsOf(live, groupBy).map((g) => (
+        <section key={g.key} className="space-y-2">
+          {g.label && (
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+              {groupBy === 'territory' ? <MapPin size={14} className="text-teal-600" /> : <UserRound size={14} className="text-slate-500" />}
+              {g.label} <span className="text-xs font-normal text-slate-400">{g.tickets.length} ticket{g.tickets.length === 1 ? '' : 's'}</span>
+            </h2>
+          )}
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
+        {g.tickets.map((t) => (
           <button key={t.id} type="button" onClick={() => open(t.id)}
             className={`flex flex-col rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-brand-500 hover:shadow-md ${openId === t.id ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
             <div className="mb-1 flex items-start justify-between gap-2">
@@ -128,7 +173,11 @@ export default function Tickets() {
                 <div className="min-w-0">
                   <div className="font-semibold leading-snug text-slate-900">{t.opportunity_title}</div>
                   <div className="truncate text-xs text-slate-500">{t.organization || `Ticket #${t.id}`}</div>
-                  {t.owner_first_name && (
+                  {t.ticket_type !== 'work' ? (
+                    <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-slate-400" title="BD director">
+                      <UserRound size={11} /> {t.director_first_name ? `${t.director_first_name} ${t.director_last_name}` : 'No BD director'}
+                    </div>
+                  ) : t.owner_first_name && (
                     <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-slate-400">
                       <UserRound size={11} /> {t.owner_first_name} {t.owner_last_name}{t.owner_team && ` · ${t.owner_team}`}
                     </div>
@@ -141,6 +190,7 @@ export default function Tickets() {
               <span className={`rounded px-1.5 py-0.5 font-semibold ${t.ticket_type === 'work' ? 'bg-slate-200 text-slate-700' : 'bg-brand-50 text-brand-700'}`}>{ticketKind(t)}</span>
               {t.pipeline_status && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{t.pipeline_status}</span>}
               {t.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">{usd(t.value).replace('.00', '')}</span>}
+              {t.territory_name && <span className="flex items-center gap-1 rounded bg-teal-50 px-1.5 py-0.5 text-teal-800"><MapPin size={11} /> {t.territory_name}</span>}
             </div>
             <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-100 pt-2 text-xs text-slate-500">
               <Stat icon={ListOrdered} n={t.card_count} label="priorit" plural={['y', 'ies']} />
@@ -151,7 +201,9 @@ export default function Tickets() {
             </div>
           </button>
         ))}
-      </div>}
+      </div>
+        </section>
+      ))}
 
       {archiveOpen && (
         <SidePanel title="Archive" subtitle="Done tickets leave the board 14 days after reaching Done, or when archived by hand" onClose={() => setArchiveOpen(false)}>
@@ -191,4 +243,36 @@ function Stat({ icon: Icon, n, label, plural, accent }) {
       <Icon size={12} /> {n} {label}{n === 1 ? plural[0] : plural[1]}
     </span>
   );
+}
+
+/** A ticket with a badge in its lower right: a green dollar for bid tickets, a yellow lightning bolt for work tickets. */
+function TicketTypeIcon({ kind, dim }) {
+  const bid = kind === 'bid';
+  const Badge = bid ? DollarSign : Zap;
+  return (
+    <span className="relative inline-block h-[18px] w-[18px]" aria-hidden="true">
+      <TicketIcon size={16} className="absolute top-0 left-0" />
+      <span className={`absolute -right-0.5 -bottom-0.5 grid h-[11px] w-[11px] place-items-center rounded-full ring-[1.5px] ring-white
+        ${bid ? 'bg-emerald-500 text-white' : 'bg-amber-400 text-amber-950'} ${dim ? 'opacity-60' : ''}`}>
+        <Badge size={8} strokeWidth={3} fill={bid ? 'none' : 'currentColor'} />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The A–Z cards as groups: one unlabeled group, or one per territory (in the territory list's order) or per BD
+ * director (by name). Tickets without one come last. Cards stay A–Z within each group.
+ */
+function groupsOf(tickets, by) {
+  if (by !== 'territory' && by !== 'director') return [{ key: 'all', label: null, tickets }];
+  const groups = new Map();
+  tickets.forEach((t) => {
+    const [key, label, order] = by === 'territory'
+      ? (t.territory_id ? [`t${t.territory_id}`, t.territory_name, t.territory_position] : ['none', 'No territory', Infinity])
+      : (t.bd_director_id ? [`d${t.bd_director_id}`, `${t.director_first_name} ${t.director_last_name}`, `${t.director_last_name} ${t.director_first_name}`] : ['none', 'No BD director', '\uffff']);
+    if (!groups.has(key)) groups.set(key, { key, label, order, tickets: [] });
+    groups.get(key).tickets.push(t);
+  });
+  return [...groups.values()].sort((a, b) => (typeof a.order === 'number' ? a.order - b.order : String(a.order).localeCompare(String(b.order))));
 }

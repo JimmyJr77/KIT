@@ -32,7 +32,8 @@ export default function WeeklyPriorities() {
   const teams = useApi('/teams');
   const allUsers = useApi('/users');
   const meta = useApi('/priorities/meta');
-  const [teamId, setTeamId] = useState(user.team_id || 1);
+  // Open on your team's board; someone on several teams (or none) starts on All.
+  const [teamId, setTeamId] = useState(user.team_ids?.length === 1 ? user.team_ids[0] : 'all');
   const [weekDate, setWeekDate] = useState(todayIso());
   const [board, setBoard] = useState(null);
   const [lanes, setLanes] = useState({});
@@ -68,8 +69,10 @@ export default function WeeklyPriorities() {
   const members = (board?.members || []).filter((m) => !filter.length || filter.includes(m.id));
   const editable = board && board.weekStart >= board.currentWeekStart;
   const planning = board?.planning;
-  // On the All board each team has its own lock, so check the member's team.
-  const planningClosedFor = (m) => (board?.team.id === 'all' ? !!planning?.closed_teams.includes(m?.team_id) : !!planning?.closed);
+  // On the All board each team has its own lock; someone's new cards are work once all their teams have closed planning.
+  const planningClosedFor = (m) => (board?.team.id === 'all'
+    ? !!m?.team_ids?.length && m.team_ids.every((id) => planning?.closed_teams.includes(id))
+    : !!planning?.closed);
   const [planningBusy, setPlanningBusy] = useState(false);
   const togglePlanning = async () => {
     const closing = !planning.closed;
@@ -82,9 +85,18 @@ export default function WeeklyPriorities() {
       setPlanningBusy(false);
     }
   };
-  // Lane order is stored per team, so drag and drop is limited to single-team boards.
-  const draggable = editable && board.team.id !== 'all';
+  const draggable = editable;
   const usersById = useMemo(() => Object.fromEntries((allUsers.data?.users || []).map((u) => [u.id, u])), [allUsers.data]);
+
+  // Teams check in on different days, so a picked week's start date can fall in another team's previous week.
+  // Keep the same week relative to this week instead (this week stays this week).
+  const changeTeam = (id) => {
+    if (board) {
+      const offset = Math.round((Date.parse(board.weekStart) - Date.parse(board.currentWeekStart)) / (7 * 864e5));
+      setWeekDate(addDays(todayIso(), offset * 7));
+    }
+    setTeamId(id);
+  };
 
   const changeCheckin = async (id, dow) => {
     await api.put(`/teams/${id}/checkin`, { checkin_dow: Number(dow) });
@@ -184,7 +196,7 @@ export default function WeeklyPriorities() {
         <div className="flex flex-wrap items-end gap-4">
           <div className="w-52">
             <label className="label">Team</label>
-            <select className="input" value={teamId} onChange={(e) => setTeamId(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
+            <select className="input" value={teamId} onChange={(e) => changeTeam(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
               <option value="all">All</option>
               {teams.data?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
@@ -229,7 +241,7 @@ export default function WeeklyPriorities() {
           <div className={orientation === 'rows' ? 'inline-flex min-w-full flex-col gap-3' : 'flex items-start gap-4'}>
             {members.map((m) => (
               <Lane key={m.id} member={m} orientation={orientation} asWork={planningClosedFor(m)} cardIds={lanes[m.id] || []} cardsById={cardsById}
-                usersById={usersById} editable={editable && (board.team.id !== 'all' || !!m.team_id)} draggable={draggable}
+                usersById={usersById} editable={editable && (board.team.id !== 'all' || !!m.team_ids?.length)} draggable={draggable}
                 onOpen={(card) => setPanel({ card })} onNew={() => setPanel({ newFor: m.id })}
                 onToggleTask={toggleTask} threads={threadsFor(m, lanes[m.id] || [])}
                 onOpenThread={(t) => setThread({ id: t.id })}
@@ -257,8 +269,10 @@ export default function WeeklyPriorities() {
           defaultAssignee={panel.newFor}
           users={allUsers.data?.users || []}
           statuses={meta.data?.pipelineStatuses || []}
-          teamId={board.team.id === 'all' ? newMember?.team_id : board.team.id}
-          weekStart={board.team.id === 'all' ? board.teamWeeks[newMember?.team_id] : board.weekStart}
+          teamId={board.team.id}
+          weekStart={board.weekStart}
+          teamChoices={board.team.id === 'all' && !panel.card
+            ? (newMember?.teams || []).map((t) => ({ id: t.id, name: t.name, week: board.teamWeeks[t.id] })) : undefined}
           readOnly={!editable}
           asWork={planningClosedFor(newMember)}
           onClose={() => setPanel(null)}

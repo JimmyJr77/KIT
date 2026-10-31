@@ -1,6 +1,6 @@
 // Seeds the initial admin account (and optional demo users with --demo).
 import 'dotenv/config';
-import { db } from '../db.js';
+import { db, setUserTeams } from '../db.js';
 import { hashPassword, formatPhone, digitsOnly } from '../auth.js';
 
 const teamId = (name) => db.prepare('SELECT id FROM teams WHERE name = ?').get(name).id;
@@ -18,9 +18,10 @@ function ensureUser({ first_name, last_name, email, username, phone, title, team
   db.prepare('INSERT OR IGNORE INTO approved_accounts (email, role) VALUES (?, ?)').run(email, role);
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) return console.log(`exists: ${email}`);
   const p = formatPhone(phone);
-  db.prepare(`INSERT INTO users (first_name, last_name, email, phone, phone_digits, username, title, team_id, role, password_hash)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(first_name, last_name, email, p, p ? digitsOnly(p) : null, username, title, teamId(team), role, hashPassword(password));
+  const id = db.prepare(`INSERT INTO users (first_name, last_name, email, phone, phone_digits, username, title, role, password_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(first_name, last_name, email, p, p ? digitsOnly(p) : null, username, title, role, hashPassword(password)).lastInsertRowid;
+  setUserTeams(id, [teamId(team)]);
   console.log(`created: ${email} (${username})`);
 }
 

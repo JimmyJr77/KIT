@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, BriefcaseBusiness, Ticket, Trash2, UserPlus, AlertTriangle } from 'lucide-react';
+import { Search, BriefcaseBusiness, Ticket, Trash2, UserPlus, AlertTriangle, Landmark, ReceiptText, Plus, MapPin } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
-import { fullName, shortDate, parseUtc } from '../lib/format.js';
+import { fullName, shortDate, parseUtc, todayIso } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
@@ -80,6 +80,7 @@ export default function Delivery() {
               {p.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-700">{money(p.value)}</span>}
               <span className="text-slate-400">Won {wonOn(p.awarded_at)}</span>
             </div>
+            {p.value > 0 && <FundedBar program={p} />}
             <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs">
               {p.program_manager ? (
                 <span className="flex items-center gap-1.5 text-slate-700"><Avatar user={p.program_manager} size="xs" /> <span><span className="text-slate-400">PM</span> {fullName(p.program_manager)}</span></span>
@@ -154,6 +155,15 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
           </label>
         </section>
 
+        {(p.bd_director || p.territory_name) && (
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+            {p.bd_director && <span>Won by <span className="font-medium text-slate-700">{fullName(p.bd_director)}</span></span>}
+            {p.territory_name && <span className="flex items-center gap-1 rounded bg-teal-50 px-1.5 py-0.5 text-teal-800"><MapPin size={11} /> {p.territory_name}</span>}
+          </p>
+        )}
+
+        <MoneySection program={p} onChange={onChange} onError={setError} onSaveValue={(value) => update({ value })} />
+
         <section>
           <h3 className="label">Program Manager</h3>
           <UserCombobox users={users} teams={teams} value={p.program_manager?.id ?? null}
@@ -209,5 +219,99 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
         </section>
       </div>
     </SidePanel>
+  );
+}
+
+/** How much of a contract's value is funded. */
+function FundedBar({ program: p }) {
+  const pct = Math.min(100, Math.round((p.funded / p.value) * 100));
+  return (
+    <div className="mt-2" title={`${money(p.funded)} funded of ${money(p.value)}; ${money(p.unfunded)} unfunded`}>
+      <div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} /></div>
+      <div className="mt-0.5 text-[11px] text-slate-500">{pct}% funded · {money(p.billed)} billed</div>
+    </div>
+  );
+}
+
+const KINDS = { funding: { label: 'Funding received', icon: Landmark, tint: 'text-emerald-700' }, billing: { label: 'Revenue billed', icon: ReceiptText, tint: 'text-sky-700' } };
+
+/**
+ * The contract's money: its value, how much of it is funded (backlog funded / unfunded), and revenue billed
+ * (the "bill" side of book-to-bill). Entries are added and removed here.
+ */
+function MoneySection({ program: p, onChange, onError, onSaveValue }) {
+  const blank = { kind: 'funding', amount: '', entry_date: todayIso(), note: '' };
+  const [entry, setEntry] = useState(blank);
+  const [value, setValue] = useState(p.value ?? '');
+  const [busy, setBusy] = useState(false);
+  const valueDirty = String(value) !== String(p.value ?? '');
+  const add = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    onError('');
+    try { onChange((await api.post(`/delivery/${p.id}/entries`, entry)).program); setEntry({ ...blank, kind: entry.kind }); } catch (err) { onError(err.message); } finally { setBusy(false); }
+  };
+  const remove = async (x) => {
+    if (!confirm(`Remove this ${x.kind === 'funding' ? 'funding' : 'billing'} entry of ${money(x.amount)}?`)) return;
+    onChange((await api.del(`/delivery/entries/${x.id}`)).program);
+  };
+  const tile = (label, amount, tint, sub) => (
+    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+      <div className="text-[11px] font-medium text-slate-500 uppercase">{label}</div>
+      <div className={`text-base font-semibold tabular-nums ${tint}`}>{amount == null ? '—' : money(amount)}</div>
+      {sub && <div className="text-[11px] text-slate-400">{sub}</div>}
+    </div>
+  );
+  return (
+    <section className="space-y-3">
+      <h3 className="label">Funding and billing</h3>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {tile('Contract value', p.value, 'text-slate-900')}
+        {tile('Funded', p.funded, 'text-emerald-700', p.value ? `${Math.round((p.funded / p.value) * 100)}% of value` : null)}
+        {tile('Unfunded', p.unfunded, 'text-amber-700', 'Backlog not yet funded')}
+        {tile('Billed', p.billed, 'text-sky-700', p.funded ? `${Math.round((p.billed / p.funded) * 100)}% of funded` : null)}
+      </div>
+      <label className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-slate-500">Contract value ($)</span>
+        <input type="number" min="0" className="input h-8 w-44 py-0 text-sm" value={value} onChange={(e) => setValue(e.target.value)} />
+        {valueDirty && <button type="button" className="btn-primary h-8 px-3 py-0 text-xs" onClick={() => onSaveValue(value)}>Save value</button>}
+        <span className="text-xs text-slate-400">Starts as the bid's value; change it to the awarded ceiling if it differs.</span>
+      </label>
+
+      {/* Type, amount and date on one line; the note and Add on the next, so nothing is squeezed in a narrow panel. */}
+      <form onSubmit={add} className="space-y-2 rounded-lg bg-slate-50 p-3">
+        <div className="grid gap-2 sm:grid-cols-3">
+          <select className="input text-sm" value={entry.kind} onChange={(e) => setEntry({ ...entry, kind: e.target.value })} aria-label="Entry type">
+            <option value="funding">Funding received</option>
+            <option value="billing">Revenue billed</option>
+          </select>
+          <input type="number" min="0" step="0.01" className="input text-sm" placeholder="Amount ($)" value={entry.amount} onChange={(e) => setEntry({ ...entry, amount: e.target.value })} aria-label="Amount" required />
+          <input type="date" className="input text-sm" value={entry.entry_date} onChange={(e) => setEntry({ ...entry, entry_date: e.target.value })} aria-label="Date" required />
+        </div>
+        <div className="flex gap-2">
+          <input className="input min-w-0 flex-1 text-sm" placeholder={entry.kind === 'funding' ? 'Note, e.g. Mod P00003, FY27 increment' : 'Note, e.g. October invoice'} value={entry.note} onChange={(e) => setEntry({ ...entry, note: e.target.value })} aria-label="Note" />
+          <button className="btn-primary shrink-0 text-sm" disabled={busy}><Plus size={14} /> Add</button>
+        </div>
+      </form>
+
+      {p.entries.length ? (
+        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+          {p.entries.map((x) => {
+            const k = KINDS[x.kind];
+            return (
+              <li key={x.id} className="group flex items-center gap-3 px-3 py-2 text-sm">
+                <k.icon size={15} className={`shrink-0 ${k.tint}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-slate-800"><span className={`font-semibold tabular-nums ${k.tint}`}>{money(x.amount)}</span> <span className="text-slate-500">{k.label.toLowerCase()}</span></div>
+                  <div className="truncate text-xs text-slate-400">{[shortDate(x.entry_date, { month: 'short', day: 'numeric', year: 'numeric' }), x.note, x.created_by && `added by ${fullName(x.created_by)}`].filter(Boolean).join(' · ')}</div>
+                </div>
+                <button type="button" onClick={() => remove(x)} aria-label="Remove entry" title="Remove"
+                  className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600 focus:opacity-100"><Trash2 size={14} /></button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : <p className="text-sm text-slate-400">No funding or billing recorded yet.</p>}
+    </section>
   );
 }

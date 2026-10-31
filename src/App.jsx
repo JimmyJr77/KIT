@@ -16,6 +16,8 @@ import Delivery from './pages/Delivery.jsx';
 import Marketing from './pages/Marketing.jsx';
 import Settings from './pages/Settings.jsx';
 import AdminAccess from './pages/AdminAccess.jsx';
+import MyTeam from './pages/MyTeam.jsx';
+import Reports from './pages/Reports.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -33,6 +35,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route path="/profile" element={<Profile />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/reports" element={<Reports />} />
         <Route path="/events" element={<Events />} />
         <Route path="/travel" element={<Travel />} />
         <Route path="/priorities" element={<WeeklyPriorities />} />
@@ -44,6 +47,7 @@ export default function App() {
         <Route path="/marketing" element={<Marketing />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/admin" element={<AdminAccess />} />
+        <Route path="/my-team" element={<MyTeam />} />
         <Route path="/alerts" element={<Alerts />} />
         <Route path="*" element={<Navigate to="/priorities" replace />} />
       </Route>

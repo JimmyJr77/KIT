@@ -1,10 +1,15 @@
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Package, Check, Square, ChevronRight } from 'lucide-react';
 import { useApi } from '../lib/data.js';
 import { fullName, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
+import MyDashboard from './MyDashboard.jsx';
+import CompanyOverview from './CompanyOverview.jsx';
+import Financials from './Financials.jsx';
+import ReportCard from '../components/ReportCard.jsx';
 
 const money = (n) => usd(n).replace('.00', '');
 const pct = (n) => (n == null ? '—' : `${Math.round(n * 100)}%`);
@@ -26,23 +31,54 @@ function summarize(weeks) {
   };
 }
 
+const TABS = [
+  ['me', 'My dashboard', MyDashboard],
+  ['overview', 'Company overview', CompanyOverview],
+  ['financials', 'Financials', Financials],
+  ['team', 'Team', TeamDashboard],
+];
+
+/** Dashboards: your own, the company at a glance, financials by team, and team priority close-out. The tab is in the URL. */
 export default function Dashboard() {
+  const [params, setParams] = useSearchParams();
+  const tab = TABS.find(([k]) => k === params.get('tab')) || TABS[0];
+  const Body = tab[2];
+  return (
+    <div className="space-y-6 p-8">
+      <PageHeader title="Dashboard" subtitle={{
+        me: 'Your priorities, tasks, trips and numbers.',
+        overview: 'The whole company at a glance.',
+        financials: 'Pipeline, forecast, bookings, backlog and book-to-bill, by team.',
+        team: 'Priority close-out, work added while priorities were open, and checklists.',
+      }[tab[0]]}>
+        <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="tablist" aria-label="Dashboards">
+          {TABS.map(([k, l]) => (
+            <button key={k} type="button" role="tab" aria-selected={tab[0] === k} onClick={() => setParams(k === 'me' ? {} : { tab: k })}
+              className={`rounded px-3 whitespace-nowrap ${tab[0] === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
+          ))}
+        </div>
+      </PageHeader>
+      <Body />
+    </div>
+  );
+}
+
+/** Team priority close-out (the original dashboard). */
+function TeamDashboard() {
   const { data } = useApi('/dashboard');
   const teams = useApi('/teams');
   const [teamId, setTeamId] = useState('all');
   const [includeCurrent, setIncludeCurrent] = useState(false);
 
   const people = useMemo(() => (data?.people || [])
-    .filter((p) => teamId === 'all' || p.team_id === Number(teamId))
+    .filter((p) => teamId === 'all' || (p.team_ids || []).includes(Number(teamId)))
     .map((p) => ({ ...p, stats: summarize(p.weeks.filter((w) => includeCurrent || !w.current)) })), [data, teamId, includeCurrent]);
 
   const teamCloseout = mean(people.map((p) => p.stats.closeout).filter((x) => x != null));
   const teamWork = mean(people.map((p) => p.stats.workWhileOpen).filter((x) => x != null));
 
   return (
-    <div className="space-y-6 p-8">
-      <PageHeader title="Dashboard" subtitle="Priority close-out, work added while priorities were open, checklists, and the pipeline." />
-
+    <div className="space-y-6">
       <div className="flex flex-wrap items-end gap-4">
         <div className="w-52">
           <label className="label">Team</label>
@@ -56,6 +92,9 @@ export default function Dashboard() {
           Include this week (still in progress)
         </label>
       </div>
+
+      {/* BD's report card: the team's measures and each director's, shown for BD and for everyone. */}
+      {(teamId === 'all' || teams.data?.teams.find((t) => t.id === Number(teamId))?.name === 'BD') && <ReportCard />}
 
       {data && (
         <>

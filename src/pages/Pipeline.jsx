@@ -53,7 +53,7 @@ export default function Pipeline() {
 
   // BD account owners (everyone on the BD team), alphabetical, then the account types.
   const filterOptions = useMemo(() => [
-    ...(users.data?.users || []).filter((u) => u.team_name === 'BD')
+    ...(users.data?.users || []).filter((u) => (u.teams || []).some((t) => t.name === 'BD'))
       .sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }))
       .map((u) => ({ value: `o:${u.id}`, label: fullName(u), group: 'BD account owners' })),
     ...(meta.data?.accountTypes || []).map((t) => ({ value: `t:${t}`, label: t, group: 'Account types' })),

@@ -6,8 +6,11 @@ import PageHeader from '../components/PageHeader.jsx';
 
 const pick = (u) => ({
   first_name: u.first_name, last_name: u.last_name, email: u.email, phone: u.phone || '',
-  username: u.username, title: u.title || '', team_id: u.team_id || '',
+  username: u.username, title: u.title || '', team_ids: u.team_ids || [],
 });
+
+/** Team id → 'member' | 'lead', for coloring someone's team tags. */
+export const rolesOf = (u) => Object.fromEntries((u?.teams || []).map((t) => [t.id, t.role]));
 
 export default function Profile() {
   const { user, setUser } = useAuth();
@@ -29,7 +32,7 @@ export default function Profile() {
     <div className="mx-auto max-w-5xl space-y-6 p-8">
       <PageHeader title="Profile" subtitle="Your contact details and team" />
       <form onSubmit={save} className="panel space-y-5">
-        <ProfileFields value={form} onChange={setForm} />
+        <ProfileFields value={form} onChange={setForm} roles={rolesOf(user)} />
         <div className="flex items-center gap-3">
           <button className="btn-primary">Save profile</button>
           {msg && <span className={`text-sm ${msg.ok ? 'text-emerald-600' : 'text-red-600'}`}>{msg.text}</span>}

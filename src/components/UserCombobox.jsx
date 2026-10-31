@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search, X } from 'lucide-react';
 import { fullName } from '../lib/format.js';
 
-/** Single-select user search with a team filter dropdown. */
+/** Single-select user search, with a team filter dropdown when `teams` are given. */
 export default function UserCombobox({ users = [], teams = [], value, onChange, placeholder = 'Search people…', allowClear = true }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -14,7 +14,7 @@ export default function UserCombobox({ users = [], teams = [], value, onChange, 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     return users.filter((u) =>
-      (!team || u.team_id === Number(team)) &&
+      (!team || (u.team_ids || []).includes(Number(team))) &&
       (!s || `${fullName(u)} ${u.username} ${u.email} ${u.title || ''}`.toLowerCase().includes(s)));
   }, [users, q, team]);
 
@@ -36,10 +36,12 @@ export default function UserCombobox({ users = [], teams = [], value, onChange, 
               <Search size={14} className="absolute top-2.5 left-2.5 text-slate-400" />
               <input autoFocus className="input py-1.5 pl-8" placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
-            <select className="input w-36 py-1.5" value={team} onChange={(e) => setTeam(e.target.value)}>
-              <option value="">All teams</option>
-              {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            {teams.length > 0 && (
+              <select className="input w-36 py-1.5" value={team} onChange={(e) => setTeam(e.target.value)}>
+                <option value="">All teams</option>
+                {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            )}
           </div>
           <ul className="max-h-64 overflow-y-auto py-1">
             {filtered.map((u) => (

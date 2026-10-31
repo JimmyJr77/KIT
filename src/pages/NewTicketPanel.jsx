@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import SidePanel from '../components/SidePanel.jsx';
+import { useAuth } from '../lib/auth.jsx';
+import { AssignmentFields } from './TicketAssignment.jsx';
 
 const TYPES = [
   ['bid', 'Bid Ticket', 'To win a contract. Has a value and pipeline status.'],
@@ -14,7 +16,13 @@ const TYPES = [
  */
 export default function NewTicketPanel({ bidOnly, stage = '', onClose, onCreated }) {
   const meta = useApi('/priorities/meta');
+  const { user } = useAuth();
   const [form, setForm] = useState({ ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', pipeline_status: stage, value: '' });
+  // A BD director creating a bid directs it by default, in their territory when they cover just one.
+  const [assign, setAssign] = useState({
+    bd_director_id: user.teams?.some((t) => t.name === 'BD') ? user.id : '',
+    territory_id: user.territories?.length === 1 ? user.territories[0].id : '',
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -27,7 +35,8 @@ export default function NewTicketPanel({ bidOnly, stage = '', onClose, onCreated
     setBusy(true);
     setError('');
     try {
-      const { ticket } = await api.post('/tickets', form);
+      const { ticket } = await api.post('/tickets', isWork ? form
+        : { ...form, ...assign, bd_director_id: assign.bd_director_id || null, territory_id: assign.territory_id || null });
       onCreated(ticket);
     } catch (e) {
       setError(e.message);
@@ -91,6 +100,7 @@ export default function NewTicketPanel({ bidOnly, stage = '', onClose, onCreated
             </div>
           </div>
         )}
+        {!isWork && <div className="grid grid-cols-2 gap-3"><AssignmentFields value={assign} onChange={setAssign} /></div>}
         <button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />
       </form>
     </SidePanel>

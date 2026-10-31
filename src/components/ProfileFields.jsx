@@ -1,10 +1,12 @@
 import { formatPhoneInput } from '../lib/format.js';
 import { useApi } from '../lib/data.js';
+import TeamPicker from './TeamPicker.jsx';
 
-export const EMPTY_PROFILE = { first_name: '', last_name: '', email: '', phone: '', username: '', title: '', team_id: '' };
+export const EMPTY_PROFILE = { first_name: '', last_name: '', email: '', phone: '', username: '', title: '', team_ids: [] };
 
 
-export default function ProfileFields({ value, onChange, disabled }) {
+/** `roles` (team id → 'member' | 'lead') colors the team tags of someone who leads a team. */
+export default function ProfileFields({ value, onChange, disabled, roles }) {
   const { data } = useApi('/teams');
   const teams = data?.teams || [];
   const set = (k) => (e) => onChange({ ...value, [k]: k === 'phone' ? formatPhoneInput(e.target.value) : e.target.value });
@@ -37,11 +39,8 @@ export default function ProfileFields({ value, onChange, disabled }) {
         <input className="input" value={value.title || ''} onChange={set('title')} disabled={disabled} />
       </div>
       <div>
-        <label className="label">Team</label>
-        <select className="input" value={value.team_id || ''} onChange={set('team_id')} disabled={disabled}>
-          <option value="">Select a team…</option>
-          {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
+        <label className="label">Teams</label>
+        <TeamPicker teams={teams} value={value.team_ids || []} roles={roles} onChange={(v) => onChange({ ...value, team_ids: v })} disabled={disabled} />
       </div>
     </div>
   );

@@ -11,7 +11,11 @@ import { useApi } from '../lib/data.js';
 const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', pipeline_status: '', value: '' };
 
 /** Slide-out panel for creating or editing a priority card (and its ticket). */
-export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, readOnly, asWork, onBack: back, onClose: close, onSaved, onNotesChanged }) {
+/**
+ * `teamChoices` ([{ id, name, week }]) is for a new card on the All board: the assignee's teams. With more than one,
+ * the panel asks which team the card belongs to.
+ */
+export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, teamChoices, readOnly, asWork, onBack: back, onClose: close, onSaved, onNotesChanged }) {
   const { user } = useAuth();
   const meta = useApi('/priorities/meta');
   const isNew = !card;
@@ -31,6 +35,8 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [pendingNotes, setPendingNotes] = useState([]);
+  const [teamPick, setTeamPick] = useState(teamChoices?.length === 1 ? teamChoices[0].id : '');
+  const picked = teamChoices?.find((t) => t.id === Number(teamPick));
   const notesDirty = useRef(false);
   const setNotesDirty = useCallback((v) => { notesDirty.current = v; }, []);
 
@@ -53,13 +59,14 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   const save = async () => {
     setError('');
     if (!form.assignees.length) return setError('Assign at least one person');
+    if (isNew && teamChoices && !picked) return setError('Choose which team this is for');
     if (!ticket.opportunity_title.trim()) return setError(ticketMode === 'existing' && !ticketId ? 'Select an existing ticket' : ticket.ticket_type === 'work' ? 'Title is required' : 'Opportunity Title is required');
     if (notesDirty.current && !confirm('A note you\'re writing hasn\'t been saved and will be discarded. Continue?')) return;
     setSaving(true);
     try {
       if (isNew) {
         await api.post('/priorities/cards', {
-          ...form, team_id: teamId, week_start: weekStart, ticket, new_notes: pendingNotes,
+          ...form, team_id: picked ? picked.id : teamId, week_start: picked ? picked.week : weekStart, ticket, new_notes: pendingNotes,
           ticket_id: ticketMode === 'existing' ? ticketId : null,
         });
       } else {
@@ -114,6 +121,14 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
         </header>
 
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+          {isNew && !ro && teamChoices?.length > 1 && (
+            <Field label="Team">
+              <select className="input" value={teamPick} onChange={(e) => setTeamPick(e.target.value)}>
+                <option value="">Choose a team…</option>
+                {teamChoices.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </Field>
+          )}
           {/* Ticket */}
           <section className="space-y-3 rounded-lg bg-slate-50 p-4">
             <div className="flex items-center justify-between">

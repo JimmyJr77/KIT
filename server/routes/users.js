@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db } from '../db.js';
+import { db, json, setUserTeams, setTeamRole, isTeamLead, withTeams } from '../db.js';
 import { requireAdmin, publicUser, formatPhone, digitsOnly, checkPassword, hashPassword } from '../auth.js';
 import { uniqueMessage } from './auth.js';
 
@@ -13,7 +13,6 @@ export function validateProfile(body = {}) {
     email: s(body.email).toLowerCase(),
     username: s(body.username),
     title: s(body.title) || null,
-    team_id: body.team_id ? Number(body.team_id) : null,
     phone: null,
     phone_digits: null,
   };
@@ -28,11 +27,18 @@ export function validateProfile(body = {}) {
   return { data };
 }
 
-const LIST_SQL = `SELECT u.*, t.name AS team_name FROM users u LEFT JOIN teams t ON t.id = u.team_id`;
+/** The teams in a profile body: team_ids, or a single team_id from older clients. Undefined when neither is sent. */
+export function teamIdsFrom(body = {}) {
+  if (Array.isArray(body.team_ids)) return body.team_ids.map(Number).filter(Boolean);
+  if (body.team_id !== undefined) return body.team_id ? [Number(body.team_id)] : [];
+  return undefined;
+}
+
+const LIST_SQL = 'SELECT u.* FROM users u';
 
 r.get('/', (req, res) => {
   const rows = db.prepare(`${LIST_SQL} WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all();
-  res.json({ users: rows.map(publicUser) });
+  res.json({ users: withTeams(rows).map(publicUser) });
 });
 
 function updateUser(id, body, res, { allowRole }) {
@@ -41,9 +47,11 @@ function updateUser(id, body, res, { allowRole }) {
   const role = allowRole && ['admin', 'member'].includes(body.role) ? body.role : undefined;
   try {
     db.prepare(`UPDATE users SET first_name=@first_name, last_name=@last_name, email=@email, phone=@phone,
-      phone_digits=@phone_digits, username=@username, title=@title, team_id=@team_id
+      phone_digits=@phone_digits, username=@username, title=@title
       ${role ? ', role=@role' : ''} WHERE id=@id`).run({ ...data, id, ...(role ? { role } : {}) });
-    res.json({ user: publicUser(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(id)) });
+    const teamIds = teamIdsFrom(body);
+    if (teamIds) setUserTeams(id, teamIds);
+    res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(id))) });
   } catch (e) {
     res.status(409).json({ error: uniqueMessage(e) });
   }
@@ -69,6 +77,15 @@ r.put('/me/password', (req, res) => {
 
 r.put('/:id', requireAdmin, (req, res) => updateUser(Number(req.params.id), req.body, res, { allowRole: true }));
 
+/** Body: { role: 'member' | 'lead' }. Site admins can set it on any team; a team's lead can set it on their own team. */
+r.put('/:id/teams/:teamId', (req, res) => {
+  const teamId = Number(req.params.teamId);
+  if (req.user.role !== 'admin' && !isTeamLead(req.user.id, teamId)) return res.status(403).json({ error: 'Only an admin or this team\'s lead can change that' });
+  if (!['member', 'lead'].includes(req.body?.role)) return res.status(400).json({ error: 'Role must be member or lead' });
+  if (!setTeamRole(Number(req.params.id), teamId, req.body.role)) return res.status(404).json({ error: 'They aren\'t on that team' });
+  res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(req.params.id))) });
+});
+
 r.delete('/:id', requireAdmin, (req, res) => {
   if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: "You can't deactivate yourself" });
   db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(req.params.id);
@@ -77,9 +94,16 @@ r.delete('/:id', requireAdmin, (req, res) => {
 
 // ---- Approved accounts (admin) ----
 r.get('/approved', requireAdmin, (req, res) => {
-  const rows = db.prepare(`SELECT a.*, u.id AS user_id, u.first_name, u.last_name
-    FROM approved_accounts a LEFT JOIN users u ON u.email = a.email AND u.active = 1 ORDER BY a.email`).all();
-  res.json({ approved: rows });
+  const rows = db.prepare(`SELECT a.*, u.id AS account_id, u.active, u.first_name, u.last_name
+    FROM approved_accounts a LEFT JOIN users u ON u.email = a.email ORDER BY a.email`).all();
+  // Anyone with an account, even a deactivated one, keeps their teams on it (that's where PUT saves them);
+  // only emails never activated keep them on the approval. user_id is set for active accounts only.
+  const teams = new Map(withTeams(rows.filter((a) => a.account_id).map((a) => ({ id: a.account_id }))).map((u) => [u.id, u.team_ids]));
+  res.json({
+    approved: rows.map(({ account_id, active, ...a }) => ({
+      ...a, user_id: active ? account_id : null, team_ids: account_id ? teams.get(account_id) : json.parse(a.team_ids, []),
+    })),
+  });
 });
 
 r.post('/approved', requireAdmin, (req, res) => {
@@ -89,6 +113,17 @@ r.post('/approved', requireAdmin, (req, res) => {
   db.prepare(`INSERT INTO approved_accounts (email, role, added_by) VALUES (?, ?, ?)
     ON CONFLICT(email) DO UPDATE SET role = excluded.role`).run(email, role, req.user.id);
   db.prepare('UPDATE users SET active = 1 WHERE email = ?').run(email);
+  res.json({ ok: true });
+});
+
+/** Body: { team_ids }. Sets the teams of whoever has (or will activate) this approved email. */
+r.put('/approved/:email', requireAdmin, (req, res) => {
+  const a = db.prepare('SELECT * FROM approved_accounts WHERE email = ?').get(req.params.email);
+  if (!a) return res.status(404).json({ error: 'That email is not approved' });
+  const ids = teamIdsFrom(req.body) || [];
+  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(a.email);
+  if (user) setUserTeams(user.id, ids);
+  else db.prepare('UPDATE approved_accounts SET team_ids = ? WHERE email = ?').run(json.str(ids), a.email);
   res.json({ ok: true });
 });
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, ContactRound, ArrowLeft, Search, Link2, Unlink, Footprints, GripVertical, Flag, Pencil, ArrowUp, ArrowDown, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users } from 'lucide-react';
+import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Footprints, GripVertical, Flag, Pencil, ArrowUp, ArrowDown, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users } from 'lucide-react';
 import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -680,11 +680,42 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
     <DrawerShell title="Strategy" subtitle="How we win this account" onClose={onClose}
       footer={plan && <SaveBar dirty={dirty} busy={busy} error={error} savedAt={plan.strategy_updated_at} savedBy={plan.strategy_updated_by} onSave={save} />}>
       {plan ? (
-        <textarea className="input h-full min-h-[60vh] resize-none text-sm leading-relaxed" value={value} onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.preventDefault(), dirty && save())}
-          placeholder={'Win themes, customer hot buttons, discriminators, teaming approach, price-to-win, and the actions that get us there…'} />
+        <div className="space-y-5">
+          <section className="space-y-1.5">
+            <h4 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><PenLine size={13} /> Your strategy</h4>
+            <textarea className="input min-h-[38vh] resize-y text-sm leading-relaxed" value={value} onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.preventDefault(), dirty && save())}
+              aria-label="Your strategy"
+              placeholder={'Win themes, customer hot buttons, discriminators, teaming approach, price-to-win, and the actions that get us there…'} />
+          </section>
+          <SuggestedStrategy />
+        </div>
       ) : <p className="text-sm text-slate-400">Loading…</p>}
     </DrawerShell>
+  );
+}
+
+/**
+ * Where an AI-suggested strategy will go, drawn from the ticket's details, contacts, process steps and assessment.
+ * Not connected yet: this is a placeholder, and nothing here is sent anywhere or saved.
+ */
+function SuggestedStrategy() {
+  return (
+    <section className="space-y-1.5" aria-label="Suggested strategy">
+      <h4 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+        <Sparkles size={13} className="text-violet-500" /> Suggested strategy
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-normal text-slate-500 normal-case">Coming soon</span>
+      </h4>
+      <div className="space-y-3 rounded-lg border border-dashed border-violet-200 bg-violet-50/40 p-4">
+        <p className="text-sm text-slate-600">
+          An AI-suggested strategy will appear here, drawn from this ticket's details, contacts, process steps and win assessment.
+          It stays separate from yours: copy what's useful into Your strategy.
+        </p>
+        <button type="button" className="btn px-3 py-1.5 text-xs" disabled title="Not connected yet">
+          <Sparkles size={13} /> Generate suggestion
+        </button>
+      </div>
+    </section>
   );
 }
 
