@@ -1,6 +1,6 @@
 // BD financial figures, shared by the dashboards, the BD report card and the reports. All money is in dollars.
 //   Pipeline: open bids, by stage. Qualified pipeline: open bids from Qualified onward.
-//   Expected revenue: each open bid's value × its PWIN, by the quarter of its projected win date. Bids without a PWIN
+//   Projected bookings: each open bid's value × its PWIN, by the quarter of its projected win date. Bids without a PWIN
 //     count at full value and are reported apart, so it's clear how much of the forecast is PWIN-adjusted.
 //   Bookings: contracts won (delivery programs), on the day they were awarded.
 //   Backlog: what's left to bill on active contracts, split into funded (funded − billed) and unfunded (value − funded).
@@ -13,9 +13,9 @@ import { quarterRange } from './forecast.js';
 
 export { quarterRange };
 
-export const OPEN_STAGES = ['Identified', 'Qualified', 'Capture', 'Proposal', 'Submitted'];
-export const QUALIFIED_STAGES = ['Qualified', 'Capture', 'Proposal', 'Submitted'];
-export const CLOSED_STAGES = ['Awarded', 'Lost', 'No Bid'];
+export const OPEN_STAGES = ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation'];
+export const QUALIFIED_STAGES = ['Qualified', 'Capture', 'Proposal', 'Under Evaluation'];
+export const CLOSED_STAGES = ['Awarded', 'Lost'];
 export const localToday = () => new Date().toLocaleDateString('en-CA');
 
 /** `count` quarters starting `offset` quarters from the one containing `date` ("2026 Q4", …). */
@@ -62,7 +62,7 @@ export function byStage(list, stages) {
 }
 
 /**
- * Expected revenue from open bids by the quarter of their projected win date, for the next `count` quarters, with
+ * Projected bookings from open bids by the quarter of their projected win date, for the next `count` quarters, with
  * PWIN-adjusted and unadjusted money apart. Bids beyond that are "Later"; the rest fall in three pools: undetermined
  * (flagged so), overdue (the date has passed but the bid is still open), and no date (never set).
  */

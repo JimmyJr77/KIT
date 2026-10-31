@@ -3,8 +3,8 @@
 //   Bid tickets move on their own, unless locked:
 //     no activity since it was created → To-do; activity within 7 days → In work;
 //     7–14 days quiet → Stale / waiting; 14+ days quiet → back to To-do.
-//   A bid that's Awarded, Lost, or No Bid is Done, locked or not.
-//   Done tickets archive 14 days after reaching Done, or sooner by hand.
+//   A bid that's Awarded or Lost is Done, locked or not.
+//   Done tickets archive 14 days after reaching Done. Any ticket can be archived by hand, from any lane.
 
 export const LANES = [
   { key: 'todo', label: 'To-do' },
@@ -12,7 +12,7 @@ export const LANES = [
   { key: 'stale', label: 'Stale / waiting' },
   { key: 'done', label: 'Done' },
 ];
-export const CLOSED_STAGES = ['Awarded', 'Lost', 'No Bid'];
+export const CLOSED_STAGES = ['Awarded', 'Lost'];
 export const ARCHIVE_AFTER_DAYS = 14;
 
 const DAY = 864e5;
@@ -30,8 +30,8 @@ export function laneFor(t, now = Date.now()) {
 
 /** Done tickets leave the board for the archive 14 days after reaching Done, or when archived by hand. */
 export function isArchived(t, lane, now = Date.now()) {
+  if (t.archived_at) return true; // archived by hand, from any lane
   if (lane !== 'done') return false;
-  if (t.archived_at) return true;
   return !!t.done_at && now - utc(t.done_at) >= ARCHIVE_AFTER_DAYS * DAY;
 }
 

@@ -11,6 +11,12 @@ export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+// While the sample data is hidden, temporary views stand in for the tables (see server/sample/registry.js), and views
+// can't be written to. So every write names the real table: "UPDATE tickets" runs as "UPDATE main.tickets".
+const WRITE = /^(\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+)("?)(\w+)\2(?![\w.])/i;
+const prepare = db.prepare.bind(db);
+db.prepare = (sql) => prepare(sql.replace(WRITE, (m, verb, q, name) => `${verb}main.${q}${name}${q}`));
+
 export const TEAMS = ['BD', 'Operations', 'Technical Solutioning', 'Marketing', 'Admin'];
 
 export const DEFAULT_SETTINGS = {
@@ -301,27 +307,27 @@ addColumn('tickets', 'lane_locked', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('tickets', 'done_at', 'TEXT');      // when it reached Done; it archives 14 days later
 addColumn('tickets', 'archived_at', 'TEXT');  // archived early by hand
 db.exec(`
--- A bid that's won, lost, or no-bid is done: it moves to Done, unlocked. Reopening it brings it back.
+-- A bid that's won or lost is done: it moves to Done, unlocked. Reopening it brings it back.
 CREATE TRIGGER IF NOT EXISTS tickets_lane_on_close AFTER UPDATE OF pipeline_status ON tickets
-WHEN NEW.ticket_type = 'bid' AND NEW.pipeline_status IN ('Awarded', 'Lost', 'No Bid')
-  AND (OLD.pipeline_status IS NULL OR OLD.pipeline_status NOT IN ('Awarded', 'Lost', 'No Bid'))
+WHEN NEW.ticket_type = 'bid' AND NEW.pipeline_status IN ('Awarded', 'Lost')
+  AND (OLD.pipeline_status IS NULL OR OLD.pipeline_status NOT IN ('Awarded', 'Lost'))
 BEGIN
   UPDATE tickets SET done_at = datetime('now'), lane = NULL, lane_locked = 0, archived_at = NULL WHERE id = NEW.id;
 END;
 CREATE TRIGGER IF NOT EXISTS tickets_lane_on_reopen AFTER UPDATE OF pipeline_status ON tickets
-WHEN NEW.ticket_type = 'bid' AND OLD.pipeline_status IN ('Awarded', 'Lost', 'No Bid')
-  AND (NEW.pipeline_status IS NULL OR NEW.pipeline_status NOT IN ('Awarded', 'Lost', 'No Bid'))
+WHEN NEW.ticket_type = 'bid' AND OLD.pipeline_status IN ('Awarded', 'Lost')
+  AND (NEW.pipeline_status IS NULL OR NEW.pipeline_status NOT IN ('Awarded', 'Lost'))
 BEGIN
   UPDATE tickets SET done_at = NULL, archived_at = NULL WHERE id = NEW.id;
 END;
 CREATE TRIGGER IF NOT EXISTS tickets_lane_on_insert AFTER INSERT ON tickets
-WHEN NEW.ticket_type = 'bid' AND NEW.pipeline_status IN ('Awarded', 'Lost', 'No Bid')
+WHEN NEW.ticket_type = 'bid' AND NEW.pipeline_status IN ('Awarded', 'Lost')
 BEGIN
   UPDATE tickets SET done_at = datetime('now') WHERE id = NEW.id;
 END;
 `);
 // Bids already closed before lanes existed are done as of their last update.
-db.exec(`UPDATE tickets SET done_at = updated_at WHERE ticket_type = 'bid' AND pipeline_status IN ('Awarded', 'Lost', 'No Bid') AND done_at IS NULL`);
+db.exec(`UPDATE tickets SET done_at = updated_at WHERE ticket_type = 'bid' AND pipeline_status IN ('Awarded', 'Lost') AND done_at IS NULL`);
 
 // A work ticket made from an event's marketing support request links back to the event.
 addColumn('tickets', 'event_id', 'INTEGER REFERENCES events(id) ON DELETE SET NULL');
@@ -439,6 +445,9 @@ if (!hadTerritories) {
   `);
 }
 
+// Archived priority cards leave the boards (and close-out counts) but keep everything on them until deleted for good.
+addColumn('priority_cards', 'archived_at', 'TEXT');
+
 // ---- BD financials: when wins are expected, how the pipeline moves, money on won contracts, goals, and account plans.
 
 // When a bid is expected to be won, or flagged as not yet known (the "undetermined" pool).
@@ -448,6 +457,26 @@ addColumn('tickets', 'win_date_undetermined', 'INTEGER NOT NULL DEFAULT 0');
 // One row each time a bid ticket's stage, value, director, territory or projected win date changes, so the pipeline
 // can be shown as it stood on any past date (latest row on or before that date). Triggers catch every way of editing.
 const hadHistory = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ticket_history'").get();
+
+// Why a bid was lost, as Pipedrive records it (a lost deal's lost reason).
+addColumn('tickets', 'lost_reason', 'TEXT');
+
+// Stages named as Pipedrive names them: Identified → Prospecting, Submitted → Under Evaluation, and No Bid → Lost (with
+// "No Bid" kept as the lost reason). Every saved copy of a stage is renamed in place. The history trigger is dropped
+// first (it's recreated just below) so a rename isn't logged as a stage change, which would reset time in stage.
+const STAGE_RENAMES = { Identified: 'Prospecting', Submitted: 'Under Evaluation', 'No Bid': 'Lost' };
+const oldStages = Object.keys(STAGE_RENAMES).map((s) => `'${s}'`).join(', ');
+if (db.prepare(`SELECT 1 FROM tickets WHERE pipeline_status IN (${oldStages})`).get()) {
+  const has = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+  const rename = `CASE pipeline_status ${Object.entries(STAGE_RENAMES).map(([a, b]) => `WHEN '${a}' THEN '${b}'`).join(' ')} END`;
+  db.transaction(() => {
+    db.exec('DROP TRIGGER IF EXISTS ticket_history_on_update');
+    db.exec("UPDATE tickets SET lost_reason = 'No Bid' WHERE pipeline_status = 'No Bid' AND lost_reason IS NULL");
+    for (const t of ['tickets', 'ticket_history', 'forecast_snapshots'].filter(has)) {
+      db.exec(`UPDATE ${t} SET pipeline_status = ${rename} WHERE pipeline_status IN (${oldStages})`);
+    }
+  })();
+}
 db.exec(`
 CREATE TABLE IF NOT EXISTS ticket_history (
   id INTEGER PRIMARY KEY,
@@ -682,6 +711,83 @@ db.transaction(() => {
     SELECT id, trim(notes), created_by, updated_at FROM priority_cards WHERE trim(COALESCE(notes, '')) != ''`).run();
   db.prepare(`UPDATE priority_cards SET notes = NULL WHERE notes IS NOT NULL`).run();
 })();
+
+// ---- Pipedrive: a home on bid tickets for everything a Pipedrive deal holds, so deals can be brought over whole.
+// pipedrive_id on each row is the Pipedrive record it came from, so a sync can match it again instead of duplicating it.
+addColumn('tickets', 'pipedrive_id', 'INTEGER');
+addColumn('tickets', 'currency', 'TEXT');        // ISO code; null means USD
+addColumn('tickets', 'probability', 'INTEGER');  // Pipedrive's hand-set deal probability, 0-100 (apart from KIT's PWIN)
+addColumn('tickets', 'labels', 'TEXT');          // JSON array of label names
+addColumn('tickets', 'source', 'TEXT');          // where the deal came from (Pipedrive's source / origin channel)
+addColumn('tickets', 'custom_fields', 'TEXT');   // JSON array of { name, value }: Pipedrive custom fields, and any others
+addColumn('ticket_contacts', 'is_primary', 'INTEGER NOT NULL DEFAULT 0'); // the deal's main contact person
+addColumn('contacts', 'pipedrive_id', 'INTEGER');
+addColumn('ticket_comments', 'pinned', 'INTEGER NOT NULL DEFAULT 0'); // kind 'note' is a Pipedrive note; notes can be pinned
+addColumn('ticket_comments', 'pipedrive_id', 'INTEGER');
+// Pipedrive activities are tasks with a type (call, meeting, task, deadline, email, lunch), a due date and an assignee.
+addColumn('ticket_tasks', 'activity_type', 'TEXT');
+addColumn('ticket_tasks', 'due_date', 'TEXT');   // YYYY-MM-DD
+addColumn('ticket_tasks', 'due_time', 'TEXT');   // HH:MM
+addColumn('ticket_tasks', 'duration', 'TEXT');   // HH:MM
+addColumn('ticket_tasks', 'assignee_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+addColumn('ticket_tasks', 'location', 'TEXT');
+addColumn('ticket_tasks', 'note', 'TEXT');
+addColumn('ticket_tasks', 'pipedrive_id', 'INTEGER');
+// The rest of a Pipedrive activity's fields, plus a few of KIT's own, for the Activity section on a bid ticket.
+addColumn('ticket_tasks', 'video_call', 'TEXT');   // a meeting link
+addColumn('ticket_tasks', 'description', 'TEXT');
+addColumn('ticket_tasks', 'priority', 'TEXT');     // High | Medium | Low
+addColumn('ticket_tasks', 'organization', 'TEXT');
+addColumn('ticket_tasks', 'phone', 'TEXT');
+addColumn('ticket_tasks', 'email', 'TEXT');
+addColumn('ticket_tasks', 'goals', 'TEXT');
+addColumn('ticket_tasks', 'flagged', 'INTEGER NOT NULL DEFAULT 0');
+db.exec(`
+-- The people (contacts) taking part in an activity: Pipedrive's participants.
+CREATE TABLE IF NOT EXISTS task_participants (
+  task_id INTEGER NOT NULL REFERENCES ticket_tasks(id) ON DELETE CASCADE,
+  contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  PRIMARY KEY (task_id, contact_id)
+);
+`);
+addColumn('ticket_files', 'url', 'TEXT');        // a linked file (Google Drive, OneDrive…) rather than an upload
+addColumn('ticket_files', 'pipedrive_id', 'INTEGER');
+db.exec(`
+-- People who follow a ticket (Pipedrive deal followers).
+CREATE TABLE IF NOT EXISTS ticket_followers (
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (ticket_id, user_id)
+);
+-- Emails linked to a ticket (Pipedrive's synced mail on a deal). Attachments are ticket_files with email_id set.
+CREATE TABLE IF NOT EXISTS ticket_emails (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  subject TEXT,
+  from_address TEXT,
+  to_addresses TEXT,
+  cc_addresses TEXT,
+  body TEXT,
+  sent_at TEXT NOT NULL,
+  pipedrive_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ticket_emails_ticket ON ticket_emails(ticket_id);
+-- Products on a ticket (Pipedrive deal products): what's being sold, how many, and at what price.
+CREATE TABLE IF NOT EXISTS ticket_products (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  quantity REAL NOT NULL DEFAULT 1,
+  item_price REAL NOT NULL DEFAULT 0,
+  discount REAL NOT NULL DEFAULT 0,   -- percent off
+  comments TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  pipedrive_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS ticket_products_ticket ON ticket_products(ticket_id);
+`);
+addColumn('ticket_files', 'email_id', 'INTEGER REFERENCES ticket_emails(id) ON DELETE CASCADE');
 
 const insertTeam = db.prepare('INSERT OR IGNORE INTO teams (name) VALUES (?)');
 TEAMS.forEach((t) => insertTeam.run(t));

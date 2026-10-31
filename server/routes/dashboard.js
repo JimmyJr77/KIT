@@ -18,6 +18,7 @@ r.get('/', (req, res) => {
   const rows = db.prepare(`SELECT c.id, c.ticket_id, c.team_id, c.week_start, c.title, c.is_planned, c.completed, c.checklist,
       a.user_id, a.position, t.opportunity_title, t.pipeline_status
     FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id JOIN tickets t ON t.id = c.ticket_id
+    WHERE c.archived_at IS NULL
     ORDER BY c.week_start DESC, a.position`).all();
 
   const byUser = new Map(users.map((u) => [u.id, { ...u, weeks: new Map(), tickets: new Map() }]));
@@ -54,7 +55,10 @@ r.get('/', (req, res) => {
     tickets: [...tickets.values()].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })),
   }));
 
-  const pipelineRows = db.prepare("SELECT pipeline_status, COUNT(*) AS count, COALESCE(SUM(value), 0) AS value FROM tickets WHERE ticket_type = 'bid' GROUP BY pipeline_status").all();
+  // ?director= narrows the pipeline to bids that person is BD director on.
+  const director = Number(req.query.director) || null;
+  const pipelineRows = db.prepare(`SELECT pipeline_status, COUNT(*) AS count, COALESCE(SUM(value), 0) AS value FROM tickets
+    WHERE ticket_type = 'bid' ${director ? 'AND bd_director_id = ?' : ''} GROUP BY pipeline_status`).all(...(director ? [director] : []));
   const pipeline = [...PIPELINE_STATUSES, null].map((status) => {
     const p = pipelineRows.find((x) => (x.pipeline_status || null) === status);
     return { status, count: p?.count || 0, value: p?.value || 0 };
@@ -93,7 +97,7 @@ r.get('/me', (req, res) => {
   const myTeams = db.prepare('SELECT t.* FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE ut.user_id = ?').all(me);
   const weeks = myTeams.map((t) => [t.id, weekStartFor(today, t.checkin_dow)]);
   const cards = weeks.flatMap(([teamId, week]) => db.prepare(`SELECT c.*, t.opportunity_title FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id
-    JOIN tickets t ON t.id = c.ticket_id WHERE a.user_id = ? AND c.team_id = ? AND c.week_start = ? ORDER BY a.position`).all(me, teamId, week));
+    JOIN tickets t ON t.id = c.ticket_id WHERE a.user_id = ? AND c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL ORDER BY a.position`).all(me, teamId, week));
   const items = cards.flatMap((c) => json.parse(c.checklist, []));
   const out = {
     priorities: {
@@ -126,6 +130,13 @@ r.get('/me', (req, res) => {
   res.json(out);
 });
 
+/** Projected bookings by quarter (this one and the next six) plus the undetermined pool, PWIN-adjusted and no-PWIN money apart. */
+const projected = (exp) => ({
+  quarters: exp.quarters.map((x) => ({ quarter: x.quarter, count: x.count, adjusted: x.adjusted.weighted, unadjusted: x.unadjusted.value, weighted: x.weighted })),
+  undetermined: { count: exp.undetermined.count, adjusted: exp.undetermined.adjusted.weighted, unadjusted: exp.undetermined.unadjusted.value,
+    weighted: exp.undetermined.weighted, value: exp.undetermined.value },
+});
+
 /** The whole company at a glance: people, pipeline, forecast, bookings, backlog, delivery, travel and priorities. */
 r.get('/overview', (req, res) => {
   const today = localToday();
@@ -138,7 +149,7 @@ r.get('/overview', (req, res) => {
   const teams = db.prepare(`SELECT t.id, t.name, COUNT(u.id) AS people FROM teams t LEFT JOIN user_teams ut ON ut.team_id = t.id
     LEFT JOIN users u ON u.id = ut.user_id AND u.active = 1 GROUP BY t.id ORDER BY t.name`).all();
   // Priorities this week: every team's current week.
-  const weekCards = db.prepare('SELECT * FROM teams').all().flatMap((t) => db.prepare('SELECT is_planned, completed FROM priority_cards WHERE team_id = ? AND week_start = ?')
+  const weekCards = db.prepare('SELECT * FROM teams').all().flatMap((t) => db.prepare('SELECT is_planned, completed FROM priority_cards WHERE team_id = ? AND week_start = ? AND archived_at IS NULL')
     .all(t.id, weekStartFor(today, t.checkin_dow)));
   res.json({
     people: db.prepare('SELECT COUNT(*) AS n FROM users WHERE active = 1').get().n,
@@ -151,7 +162,8 @@ r.get('/overview', (req, res) => {
       undetermined: exp.undetermined.value,
     },
     bookings: bookingsVsTarget(null),
-    bookingsByQuarter: bookingsByQuarter(deals, 4),
+    bookingsByQuarter: bookingsByQuarter(deals, 8),
+    projectedBookings: projected(expected(list, 7)),
     backlog: backlog(deals),
     delivery: {
       active: deals.filter((p) => p.status === 'Active').length,

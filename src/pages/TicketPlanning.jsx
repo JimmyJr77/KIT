@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Footprints, GripVertical, Flag, Pencil, ArrowUp, ArrowDown, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users } from 'lucide-react';
+import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Footprints, GripVertical, Flag, Pencil, ArrowUp, ArrowDown, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck } from 'lucide-react';
 import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -10,16 +10,19 @@ import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import { PROCESS_TYPES, REVIEW_AREAS } from '../lib/process.js';
+import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
 /** The menu items along the ticket pane's left edge. Strategy and the win assessment are for bid tickets only. */
 export const PLAN_TOOLS = [
   { key: 'strategy', label: 'Strategy', icon: ChessPawn, bidOnly: true },
   { key: 'steps', label: 'Next steps', icon: Footprints, bidOnly: true },
+  { key: 'activities', label: 'Activity', icon: CalendarCheck, bidOnly: true },
   { key: 'tasks', label: 'Tasks', icon: SquareCheck },
   { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
   { key: 'people', label: 'People', icon: ContactRound },
   { key: 'process', label: 'Process flow', icon: Workflow, bidOnly: true },
+  { key: 'details', label: 'Deal details', icon: ClipboardList, bidOnly: true },
 ];
 
 export function PlanRail({ ticket, active, onSelect }) {
@@ -33,16 +36,18 @@ export function PlanRail({ ticket, active, onSelect }) {
 
 /** The extra pane for whichever menu item is open. `onChanged` refreshes the timeline after a save. */
 export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty }) {
+  if (tool === 'activities') return <ActivitiesDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'tasks') return <TasksDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
   if (tool === 'people') return <PeopleDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
   if (tool === 'steps') return <StepsDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'strategy') return <StrategyDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'process') return <ProcessDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
+  if (tool === 'details') return <DetailsDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'assessment') return <AssessmentDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   return null;
 }
 
-function DrawerShell({ title, subtitle, onClose, footer, children }) {
+export function DrawerShell({ title, subtitle, onClose, footer, children }) {
   return (
     <>
       <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
@@ -113,7 +118,7 @@ function TasksDrawer({ ticket, onClose, onChanged }) {
             <button type="button" className="btn-primary px-2.5" onClick={add} disabled={!text.trim() || busy} aria-label="Add task"><Plus size={16} /></button>
           </div>
           {data && (
-            <TaskGroup items={data.general.map((k) => ({ key: `g${k.id}`, text: k.text, done: k.done, onToggle: () => toggleGeneral(k), onDelete: () => removeGeneral(k) }))}
+            <TaskGroup items={data.general.map((k) => ({ key: `g${k.id}`, text: k.text, sub: activityLine(k), note: k.note, done: k.done, onToggle: () => toggleGeneral(k), onDelete: () => removeGeneral(k) }))}
               empty="No general tasks yet." />
           )}
         </section>
@@ -131,6 +136,10 @@ function TasksDrawer({ ticket, onClose, onChanged }) {
   );
 }
 
+/** A task's activity details (from a Pipedrive activity): type, when, how long, where and who. */
+const activityLine = (k) => [k.activity_type, k.due_date && `due ${shortDate(k.due_date)}${k.due_time ? ` ${k.due_time}` : ''}`,
+  k.duration && `${k.duration} long`, k.location, k.assignee_name].filter(Boolean).join(' · ');
+
 /** A list split into to-do and done; finished items sit at the bottom. */
 function TaskGroup({ items, empty }) {
   if (!items.length) return empty ? <p className="mt-2 text-xs text-slate-400">{empty}</p> : null;
@@ -140,7 +149,11 @@ function TaskGroup({ items, empty }) {
       {sorted.map((i) => (
         <li key={i.key} className="group flex items-start gap-2 rounded px-1 py-0.5 hover:bg-white">
           <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600" checked={!!i.done} onChange={i.onToggle} />
-          <span className={`flex-1 text-sm ${i.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{i.text}</span>
+          <span className="min-w-0 flex-1">
+            <span className={`block text-sm ${i.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{i.text}</span>
+            {i.sub && <span className="block text-[11px] text-slate-500">{i.sub}</span>}
+            {i.note && <span className="block text-[11px] whitespace-pre-wrap text-slate-400">{i.note}</span>}
+          </span>
           {i.onDelete && (
             <button type="button" onClick={i.onDelete} aria-label="Delete task" className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600"><Trash2 size={14} /></button>
           )}
@@ -162,6 +175,11 @@ function PeopleDrawer({ ticket, onClose, onChanged }) {
   const load = () => api.get(`/contacts/ticket/${ticket.id}`).then((d) => setPeople(d.contacts));
   useEffect(() => { load(); }, [ticket.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const back = () => { setView('list'); load(); };
+  const makePrimary = async (c) => {
+    await api.put(`/contacts/${c.id}/tickets/${ticket.id}/primary`, { primary: !c.is_primary });
+    load();
+    onChanged();
+  };
   const unlink = async (c) => {
     if (!confirm(`Take ${contactName(c)} off this ticket? They stay in the CRM.`)) return;
     await api.del(`/contacts/${c.id}/tickets/${ticket.id}`);
@@ -192,9 +210,15 @@ function PeopleDrawer({ ticket, onClose, onChanged }) {
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-semibold text-slate-800">{contactName(c)}</span>
                     <RelationshipBadge level={c.relationship} short />
+                    {c.is_primary && <span className="rounded bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-800">Primary</span>}
                   </div>
                   {contactLine(c) && <div className="truncate text-xs text-slate-500">{contactLine(c)}</div>}
                   <div className="text-[11px] text-slate-400">{c.interaction_count} interaction{c.interaction_count === 1 ? '' : 's'}{c.last_interaction_at ? ` · last ${stamp(c.last_interaction_at)}` : ''}</div>
+                </button>
+                <button type="button" onClick={() => makePrimary(c)} title={c.is_primary ? 'No longer the primary contact' : 'Make the primary contact'}
+                  aria-label={c.is_primary ? 'No longer the primary contact' : 'Make the primary contact'} aria-pressed={c.is_primary}
+                  className={`rounded p-1 hover:bg-slate-100 ${c.is_primary ? 'text-amber-500' : 'text-slate-300 opacity-0 group-hover:opacity-100 hover:text-amber-500'}`}>
+                  <Star size={14} fill={c.is_primary ? 'currentColor' : 'none'} />
                 </button>
                 <button type="button" onClick={() => unlink(c)} title="Take off this ticket" aria-label="Take off this ticket"
                   className="rounded p-1 text-slate-300 opacity-0 group-hover:opacity-100 hover:bg-slate-100 hover:text-slate-600"><Unlink size={14} /></button>
@@ -860,5 +884,158 @@ function ScorePicker({ value, onChange }) {
         </button>
       ))}
     </div>
+  );
+}
+
+// ---- Deal details
+
+const money = (n, currency) => {
+  try { return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD', maximumFractionDigits: 0 }).format(n); } catch { return `${n} ${currency}`; }
+};
+const lineTotal = (p) => p.quantity * p.item_price * (1 - p.discount / 100);
+const formOf = (d) => ({
+  lost_reason: d.lost_reason ?? '', probability: d.probability ?? '', currency: d.currency ?? '', source: d.source ?? '',
+  labels: d.labels.join(', '), followers: d.followers.map((u) => u.id), custom_fields: d.custom_fields,
+});
+
+/**
+ * The Pipedrive deal fields with no other place on the ticket: lost reason, probability, currency, source, labels,
+ * followers, custom fields and products. Everything else in a deal already has a home (stage, value, dates, people,
+ * notes, activities, files, emails), so a deal can be brought over whole.
+ */
+function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
+  const [data, setData] = useState(null);
+  const [form, setForm] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const load = (d) => { setData(d); setForm(formOf(d)); };
+  useEffect(() => {
+    api.get(`/tickets/${ticket.id}/details`).then(load);
+    api.get('/users').then((d) => setUsers(d.users));
+  }, [ticket.id]);
+  const dirty = !!data && JSON.stringify(form) !== JSON.stringify(formOf(data));
+  useEffect(() => { onDirty?.(dirty); }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const setField = (i, k, v) => setForm((f) => ({ ...f, custom_fields: f.custom_fields.map((x, j) => (j === i ? { ...x, [k]: v } : x)) }));
+
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      load(await api.put(`/tickets/${ticket.id}/details`, { ...form, labels: form.labels.split(',') }));
+      onChanged();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const products = async (call) => {
+    setError('');
+    // Only the product list changes; unsaved edits to the fields above are kept.
+    try { setData(await call()); onChanged(); } catch (e) { setError(e.message); }
+  };
+
+  const userOptions = users.filter((u) => u.active !== 0).map((u) => ({ value: u.id, label: fullName(u) }));
+  const lost = ticket.pipeline_status === 'Lost';
+
+  return (
+    <DrawerShell title="Deal details" subtitle={data?.pipedrive_id ? `Pipedrive deal #${data.pipedrive_id}` : 'Deal fields from Pipedrive, and any others'} onClose={onClose}
+      footer={form && <SaveBar dirty={dirty} busy={busy} error={error} onSave={save} />}>
+      {form ? (
+        <div className="space-y-5">
+          <section className="grid gap-3 sm:grid-cols-2">
+            {lost && (
+              <label className="sm:col-span-2">
+                <span className="label">Lost reason</span>
+                <input className="input" value={form.lost_reason} onChange={set('lost_reason')} placeholder="e.g. No Bid, price, incumbent kept it…" />
+              </label>
+            )}
+            <label>
+              <span className="label">Probability (%)</span>
+              <input className="input" type="number" min={0} max={100} value={form.probability} onChange={set('probability')} placeholder="Set by hand" />
+            </label>
+            <label>
+              <span className="label">Currency</span>
+              <input className="input uppercase" maxLength={3} value={form.currency} onChange={set('currency')} placeholder="USD" />
+            </label>
+            <label className="sm:col-span-2">
+              <span className="label">Source</span>
+              <input className="input" value={form.source} onChange={set('source')} placeholder="Where the deal came from" />
+            </label>
+            <label className="sm:col-span-2">
+              <span className="label">Labels</span>
+              <input className="input" value={form.labels} onChange={set('labels')} placeholder="Separate with commas: Hot, Recompete…" />
+            </label>
+            <div className="sm:col-span-2">
+              <span className="label">Followers</span>
+              <MultiSelect options={userOptions} value={form.followers} onChange={(v) => setForm((f) => ({ ...f, followers: v }))} placeholder="Type a name…" />
+            </div>
+          </section>
+
+          <section>
+            <h4 className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">Custom fields</h4>
+            <p className="mb-2 text-[11px] text-slate-400">Pipedrive custom fields come over here, by name. Add your own the same way.</p>
+            <div className="space-y-1.5">
+              {form.custom_fields.map((x, i) => (
+                <div key={i} className="flex gap-1.5">
+                  <input className="input w-2/5 text-sm" value={x.name} onChange={(e) => setField(i, 'name', e.target.value)} placeholder="Field" aria-label="Field name" />
+                  <input className="input flex-1 text-sm" value={x.value} onChange={(e) => setField(i, 'value', e.target.value)} placeholder="Value" aria-label="Field value" />
+                  <button type="button" className="btn-ghost px-1.5 text-slate-400 hover:text-red-600" aria-label="Remove field"
+                    onClick={() => setForm((f) => ({ ...f, custom_fields: f.custom_fields.filter((_, j) => j !== i) }))}><Trash2 size={14} /></button>
+                </div>
+              ))}
+              <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setForm((f) => ({ ...f, custom_fields: [...f.custom_fields, { name: '', value: '' }] }))}>
+                <Plus size={13} /> Add a field
+              </button>
+            </div>
+          </section>
+
+          <ProductsSection data={data} currency={form.currency || data.currency}
+            onAdd={(p) => products(() => api.post(`/tickets/${ticket.id}/products`, p))}
+            onDelete={(p) => confirm(`Remove “${p.name}”?`) && products(() => api.del(`/tickets/products/${p.id}`))} />
+        </div>
+      ) : <p className="text-sm text-slate-400">Loading…</p>}
+    </DrawerShell>
+  );
+}
+
+/** Products on the deal, each saved as it's added or removed (apart from the fields above). */
+function ProductsSection({ data, currency, onAdd, onDelete }) {
+  const blank = { name: '', quantity: '1', item_price: '', discount: '' };
+  const [p, setP] = useState(blank);
+  const set = (k) => (e) => setP((x) => ({ ...x, [k]: e.target.value }));
+  const add = async () => { if (p.name.trim()) { await onAdd(p); setP(blank); } };
+  const total = data.products.reduce((s, x) => s + lineTotal(x), 0);
+  return (
+    <section>
+      <h4 className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">Products</h4>
+      <p className="mb-2 text-[11px] text-slate-400">What's being sold on this deal. Saved as soon as you add or remove one.</p>
+      {data.products.length > 0 && (
+        <ul className="mb-2 divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+          {data.products.map((x) => (
+            <li key={x.id} className="group flex items-start gap-2 px-3 py-2 text-sm">
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-slate-800">{x.name}</div>
+                <div className="text-[11px] text-slate-500">
+                  {x.quantity} × {money(x.item_price, currency)}{x.discount ? ` · ${x.discount}% off` : ''}{x.comments ? ` · ${x.comments}` : ''}
+                </div>
+              </div>
+              <span className="shrink-0 tabular-nums text-slate-700">{money(lineTotal(x), currency)}</span>
+              <button type="button" onClick={() => onDelete(x)} aria-label={`Remove ${x.name}`} className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600"><Trash2 size={14} /></button>
+            </li>
+          ))}
+          <li className="flex justify-between px-3 py-2 text-xs font-semibold text-slate-700"><span>Total</span><span className="tabular-nums">{money(total, currency)}</span></li>
+        </ul>
+      )}
+      <div className="grid grid-cols-[1fr_4rem_6rem_4rem_auto] gap-1.5">
+        <input className="input text-sm" value={p.name} onChange={set('name')} placeholder="Product" aria-label="Product name" onKeyDown={(e) => e.key === 'Enter' && add()} />
+        <input className="input text-sm" type="number" min={0} value={p.quantity} onChange={set('quantity')} aria-label="Quantity" title="Quantity" />
+        <input className="input text-sm" type="number" min={0} value={p.item_price} onChange={set('item_price')} placeholder="Price" aria-label="Item price" />
+        <input className="input text-sm" type="number" min={0} max={100} value={p.discount} onChange={set('discount')} placeholder="% off" aria-label="Discount percent" />
+        <button type="button" className="btn-primary px-2" onClick={add} disabled={!p.name.trim()} aria-label="Add product"><Plus size={15} /></button>
+      </div>
+    </section>
   );
 }

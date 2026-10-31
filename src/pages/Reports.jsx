@@ -133,7 +133,7 @@ function Report({ r }) {
         <Section title="Pipeline by stage">
           <BarList rows={bd.stages.map((s) => ({ key: s.stage, label: s.stage, value: s.value, sub: `${s.count}` }))} />
         </Section>
-        <Section title="Expected revenue by quarter">
+        <Section title="Projected bookings by quarter">
           <StackedColumns categories={q.map((x) => x.quarter)} height={130}
             series={[{ key: 'adj', label: 'PWIN-adjusted', color: SERIES[0], values: q.map((x) => x.adjusted.weighted) }, { key: 'raw', label: 'No PWIN (full value)', color: SERIES[1], values: q.map((x) => x.unadjusted.value) }]} />
           <p className="mt-2 text-xs text-slate-500">

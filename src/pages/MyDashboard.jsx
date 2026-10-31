@@ -62,7 +62,7 @@ function MyNumbers({ bd }) {
         <StatTile label="Your open pipeline" value={compact(bd.open.value)} sub={`${bd.open.count} open bid${bd.open.count === 1 ? '' : 's'}`} />
         <StatTile label="Your qualified pipeline" value={compact(bd.qualified.value)} sub={`${bd.qualified.count} bid${bd.qualified.count === 1 ? '' : 's'}, Qualified onward`} />
       </div>
-      <ChartCard title="Your expected revenue by quarter" subtitle="Open bids by projected win date. PWIN-adjusted bids count at value × PWIN; bids without a PWIN count at full value."
+      <ChartCard title="Your projected bookings by quarter" subtitle="Open bids by projected win date. PWIN-adjusted bids count at value × PWIN; bids without a PWIN count at full value."
         table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'adj', label: 'PWIN-adjusted', align: 'right', format: fullMoney }, { key: 'raw', label: 'No PWIN (full value)', align: 'right', format: fullMoney }, { key: 'count', label: 'Bids', align: 'right' }],
           rows: q.map((x) => ({ quarter: x.quarter, adj: x.adjusted.weighted, raw: x.unadjusted.value, count: x.count })) }}>
         <StackedColumns categories={q.map((x) => x.quarter)} height={140}

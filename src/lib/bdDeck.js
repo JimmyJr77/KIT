@@ -121,8 +121,8 @@ export function buildDeck(pptx, r) {
   ps.addChart(pptx.ChartType.bar, [{ name: 'Value', labels: bd.stages.map((s) => `${s.stage} (${s.count})`), values: bd.stages.map((s) => s.value) }],
     { ...chartBase, x: 0.5, y: 1.6, w: 12.3, h: 5.2, barDir: 'bar', chartColors: [SERIES[0]], showValue: true, showLegend: false, catAxisOrientation: 'maxMin', barGapWidthPct: 60 });
 
-  // 6. Expected revenue by quarter
-  const ex = page(pptx, 'Expected revenue by quarter', 'Open bids by projected win date. With a PWIN: value × PWIN. Without one: full value, shown apart.', r);
+  // 6. Projected bookings by quarter
+  const ex = page(pptx, 'Projected bookings by quarter', 'Open bids by projected win date. With a PWIN: value × PWIN. Without one: full value, shown apart.', r);
   ex.addChart(pptx.ChartType.bar, [
     { name: 'PWIN-adjusted (value × PWIN)', labels: q.map((x) => x.quarter), values: q.map((x) => x.adjusted.weighted) },
     { name: 'No PWIN yet (full value)', labels: q.map((x) => x.quarter), values: q.map((x) => x.unadjusted.value) },

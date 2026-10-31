@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X, Archive } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, pointerWithin, useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, horizontalListSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -190,6 +190,7 @@ export default function WeeklyPriorities() {
           <button className="btn" onClick={() => { const o = orientation === 'rows' ? 'columns' : 'rows'; setOrientation(o); writePref('kit.priorities.orientation', o); }}>
             <ArrowLeftRight size={15} /> {orientation === 'rows' ? 'Members as columns' : 'Members as rows'}
           </button>
+          <button className="btn" onClick={() => navigate('/archive?tab=cards')} title="Archived priority cards"><Archive size={15} /> Archive</button>
           <button className="btn" onClick={() => setSettingsOpen(true)}><Settings size={15} /> Settings</button>
         </PageHeader>
 

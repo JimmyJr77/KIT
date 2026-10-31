@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Check, Square, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Check, Square, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, Archive, RotateCcw, Mail, Pin, ExternalLink, Tag } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -18,10 +18,11 @@ const FILTERS = [
   ['card', 'Priorities', (e) => e.type === 'card'],
   ['talk', 'Comments & notes', (e) => e.type === 'comment' || e.type === 'note'],
   ['file', 'Documents', (e) => e.type === 'file'],
+  ['email', 'Emails', (e) => e.type === 'email'],
 ];
 const SAVE_KEY = /Mac|iP(hone|ad)/.test(navigator.platform) ? '⌘↵' : 'Ctrl+↵';
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
-const eventKey = (e) => `${e.type}-${e.card?.id ?? e.note?.id ?? e.comment?.id ?? e.file?.id ?? 0}`;
+const eventKey = (e) => `${e.type}-${e.card?.id ?? e.note?.id ?? e.comment?.id ?? e.file?.id ?? e.email?.id ?? 0}`;
 
 /**
  * Right-hand pane with everything that has happened on a master ticket, newest first.
@@ -76,12 +77,16 @@ export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) 
               <CalendarDays size={11} /> {t.event_name}
             </Link>
           )}
+          {t.lost_reason && <span className="rounded bg-red-50 px-1.5 text-red-700" title="Lost reason">{t.lost_reason}</span>}
+          {t.probability != null && <span className="rounded bg-slate-100 px-1.5 text-slate-600" title="Deal probability, set by hand (Pipedrive)">{t.probability}% probability</span>}
+          {t.labels?.map((l) => <span key={l} className="flex items-center gap-0.5 rounded bg-violet-50 px-1.5 text-violet-700"><Tag size={10} /> {l}</span>)}
           {t.pwin && <span className="rounded bg-brand-50 px-1.5 font-semibold text-brand-700" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>PWIN {t.pwin.score}%</span>}
         </span>
       )}>
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {data && (
         <div className="space-y-5">
+          <ArchiveBar ticket={t} onChanged={refresh} />
           {t.ticket_type !== 'work' && <AssignmentBar ticket={t} onChanged={refresh} />}
           <Composer ticketId={t.id} onPosted={refresh} />
 
@@ -141,6 +146,7 @@ function Marker({ event, ticket }) {
   const box = 'relative z-10 grid h-8 w-8 shrink-0 self-start place-items-center rounded-full ring-4 ring-white';
   if (event.type === 'comment' || event.type === 'note') return <PostMarker author={event.author} ticket={ticket} />;
   if (event.type === 'card') return <span className={`${box} bg-brand-600 font-mono text-[9px] font-bold tracking-tighter text-white`} title="Priority ticket">123</span>;
+  if (event.type === 'email') return <span className={`${box} bg-sky-100 text-sky-700`} title="Email"><Mail size={15} /></span>;
   if (event.type === 'file') return <span className={`${box} bg-emerald-100 text-emerald-700`} title="Document"><FileText size={15} /></span>;
   return <span className={`${box} bg-slate-200 text-slate-600`} title={ticketKind(ticket)}><Ticket size={15} /></span>;
 }
@@ -148,7 +154,7 @@ function Marker({ event, ticket }) {
 function Meta({ event, children }) {
   return (
     <div className="flex flex-wrap items-baseline gap-x-1.5 pr-16 text-xs text-slate-500">
-      <span><span className="font-semibold text-slate-800">{fullName(event.author) || 'Someone'}</span> {children}</span>
+      <span><span className="font-semibold text-slate-800">{event.type === 'email' ? event.email.from || 'Someone' : fullName(event.author) || 'Someone'}</span> {children}</span>
       <span className="text-[11px] text-slate-400" title={fullStamp(event.at)}>{stamp(event.at)}</span>
     </div>
   );
@@ -220,7 +226,9 @@ function Event({ event: e, ticket, onChanged, onOpenCard }) {
     onChanged();
   };
   // Comments under a standalone comment are replies to it; under anything else they're attached to the item.
-  const replyTo = e.type === 'comment' ? { parentId: e.comment.id } : { target: { type: e.type, id: e.card?.id ?? e.note?.id ?? e.file?.id ?? ticket.id } };
+  const replyTo = e.type === 'comment' ? { parentId: e.comment.id } : { target: { type: e.type, id: e.card?.id ?? e.note?.id ?? e.file?.id ?? e.email?.id ?? ticket.id } };
+  const isNote = e.type === 'comment' && e.comment.kind === 'note';
+  const pin = async () => { await api.put(`/tickets/comments/${e.comment.id}/pin`, { pinned: !e.comment.pinned }); onChanged(); };
   const isOwner = e.author?.id === ticket.owner_id;
 
   return (
@@ -267,13 +275,19 @@ function Event({ event: e, ticket, onChanged, onOpenCard }) {
               <Meta event={e}>
                 {e.type === 'note'
                   ? <>added a note on <span className="font-medium text-slate-700">{e.note.card_title || 'a priority'}</span></>
-                  : isOwner ? 'added a note' : 'commented'}
+                  : isOwner || isNote ? 'added a note' : 'commented'}
                 {e.type === 'comment' && e.comment.card_title && <> on <span className="font-medium text-slate-700">{e.comment.card_title}</span></>}
+                {isNote && (
+                  <button type="button" onClick={pin} title={e.comment.pinned ? 'Unpin this note' : 'Pin this note to the top'}
+                    className={`ml-1 inline-flex items-center gap-0.5 rounded px-1 text-[11px] ${e.comment.pinned ? 'bg-amber-100 font-medium text-amber-800' : 'text-slate-400 hover:text-slate-700'}`}>
+                    <Pin size={11} /> {e.comment.pinned ? 'Pinned' : 'Pin'}
+                  </button>
+                )}
               </Meta>
               {editing
                 ? <EditBox initial={post.body} onSave={save} onCancel={() => setEditing(false)} />
                 : (
-                  <p className={`mt-1.5 rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap text-slate-800 ${isOwner || e.type === 'note' ? 'bg-amber-50/70' : 'bg-white ring-1 ring-slate-200'}`}>
+                  <p className={`mt-1.5 rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap text-slate-800 ${isOwner || isNote || e.type === 'note' ? 'bg-amber-50 ring-1 ring-amber-300' : 'bg-white ring-1 ring-slate-200'}`}>
                     <MentionText text={post.body} />
                   </p>
                 )}
@@ -283,13 +297,35 @@ function Event({ event: e, ticket, onChanged, onOpenCard }) {
 
           {e.type === 'file' && (
             <>
-              <Meta event={e}>uploaded a document{e.file.step_type && <> to <span className="font-medium text-slate-700">{e.file.step_type}</span></>}</Meta>
-              <a href={`/api/tickets/files/${e.file.id}`} className="mt-1.5 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:border-brand-500">
+              <Meta event={e}>
+                {e.file.url ? 'linked a document' : 'uploaded a document'}
+                {e.file.step_type && <> to <span className="font-medium text-slate-700">{e.file.step_type}</span></>}
+                {e.file.email_id && ' from an email'}
+              </Meta>
+              <a href={`/api/tickets/files/${e.file.id}`} target={e.file.url ? '_blank' : undefined} rel={e.file.url ? 'noreferrer' : undefined}
+                className="mt-1.5 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:border-brand-500">
                 <FileText size={16} className="shrink-0 text-emerald-600" />
                 <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{e.file.name}</span>
-                <span className="shrink-0 text-[11px] text-slate-400">{bytes(e.file.size)}</span>
-                <Download size={14} className="shrink-0 text-slate-400" />
+                {e.file.size != null && <span className="shrink-0 text-[11px] text-slate-400">{bytes(e.file.size)}</span>}
+                {e.file.url ? <ExternalLink size={14} className="shrink-0 text-slate-400" /> : <Download size={14} className="shrink-0 text-slate-400" />}
               </a>
+            </>
+          )}
+
+          {e.type === 'email' && (
+            <>
+              <Meta event={e}>sent an email{e.email.to && <> to <span className="text-slate-600">{e.email.to}</span></>}</Meta>
+              <details className="mt-1.5 rounded-lg border border-slate-200 bg-white text-sm open:shadow-sm">
+                <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2">
+                  <Mail size={15} className="shrink-0 text-sky-600" />
+                  <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{e.email.subject || '(no subject)'}</span>
+                  <ChevronRight size={14} className="shrink-0 text-slate-400" />
+                </summary>
+                <div className="border-t border-slate-100 px-3 py-2">
+                  {e.email.cc && <p className="mb-1 text-[11px] text-slate-500">Cc: {e.email.cc}</p>}
+                  <p className="text-sm break-words whitespace-pre-wrap text-slate-700">{e.email.body || 'No message body.'}</p>
+                </div>
+              </details>
             </>
           )}
         </div>
@@ -401,5 +437,33 @@ function Composer({ ticketId, onPosted }) {
         </button>
       </div>
     </section>
+  );
+}
+
+/** Archive the ticket (it leaves the boards; restore it here or from the Archive page), or restore an archived one. */
+function ArchiveBar({ ticket, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const set = async (archived) => {
+    setBusy(true);
+    try { await api.put(`/tickets/${ticket.id}/lane`, { archived }); onChanged(); } finally { setBusy(false); }
+  };
+  if (ticket.archived) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">
+        <span className="flex items-center gap-1.5"><Archive size={14} /> This ticket is archived and off the boards.</span>
+        <span className="flex items-center gap-2">
+          <Link to={`/archive?tab=${ticket.ticket_type === 'work' ? 'work' : 'bid'}`} className="text-xs text-brand-700 hover:underline">Open the archive</Link>
+          <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => set(false)} disabled={busy}><RotateCcw size={13} /> Restore</button>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex justify-end">
+      <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500" onClick={() => set(true)} disabled={busy}
+        title="Take this ticket off the boards. Restore it any time from the Archive page.">
+        <Archive size={13} /> Archive ticket
+      </button>
+    </div>
   );
 }

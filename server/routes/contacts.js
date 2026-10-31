@@ -52,7 +52,8 @@ r.get('/', (req, res) => {
 r.get('/ticket/:ticketId', (req, res) => {
   const rows = db.prepare(`${LIST_SQL} JOIN ticket_contacts tc ON tc.contact_id = c.id WHERE tc.ticket_id = ?
     ORDER BY c.relationship DESC, COALESCE(c.last_name, c.first_name) COLLATE NOCASE`).all(req.params.ticketId);
-  res.json({ contacts: withTickets(rows) });
+  const primary = db.prepare('SELECT contact_id FROM ticket_contacts WHERE ticket_id = ? AND is_primary = 1').get(req.params.ticketId)?.contact_id;
+  res.json({ contacts: withTickets(rows).map((c) => ({ ...c, is_primary: c.id === primary })) });
 });
 
 /** One contact with its interaction log, newest first. */
@@ -128,6 +129,19 @@ r.put('/:id/tickets/:ticketId', (req, res) => {
   db.prepare('INSERT OR IGNORE INTO ticket_contacts (ticket_id, contact_id, added_by) VALUES (?, ?, ?)').run(req.params.ticketId, req.params.id, req.user.id);
   touchTicket(req.params.ticketId);
   res.json({ contact: one(req.params.id) });
+});
+
+/** Make a linked contact the ticket's primary contact (Pipedrive's deal contact person), or with `{ primary: false }` clear it. */
+r.put('/:id/tickets/:ticketId/primary', (req, res) => {
+  if (!db.prepare('SELECT 1 FROM ticket_contacts WHERE ticket_id = ? AND contact_id = ?').get(req.params.ticketId, req.params.id)) {
+    return res.status(404).json({ error: 'That contact isn’t on this ticket' });
+  }
+  db.transaction(() => {
+    db.prepare('UPDATE ticket_contacts SET is_primary = 0 WHERE ticket_id = ?').run(req.params.ticketId);
+    if (req.body?.primary !== false) db.prepare('UPDATE ticket_contacts SET is_primary = 1 WHERE ticket_id = ? AND contact_id = ?').run(req.params.ticketId, req.params.id);
+  })();
+  touchTicket(req.params.ticketId);
+  res.json({ ok: true });
 });
 
 /** Take a contact off a ticket. They stay in the CRM. */

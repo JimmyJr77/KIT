@@ -13,7 +13,7 @@ const HINT = {
   todo: 'New tickets, and bids quiet for 14+ days',
   in_work: 'Bids with activity in the last 7 days',
   stale: 'Bids quiet for 7–14 days',
-  done: `Won, lost, no-bid, or finished. Archives after 14 days.`,
+  done: `Won, lost, or finished. Archives after 14 days.`,
 };
 
 /**

@@ -6,7 +6,7 @@ import { notifyMentions } from '../mentions.js';
 
 const r = Router();
 
-export const PIPELINE_STATUSES = ['Identified', 'Qualified', 'Capture', 'Proposal', 'Submitted', 'Awarded', 'Lost', 'No Bid'];
+export const PIPELINE_STATUSES = ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation', 'Awarded', 'Lost'];
 export const ACCOUNT_TYPES = ['Army', 'Air Force', 'Navy / Marine'];
 export const TICKET_TYPES = ['bid', 'work'];
 
@@ -24,9 +24,9 @@ const team = (id) => db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
 function loadCards(teamId, weekStart) {
   const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.value, t.ticket_type
     FROM priority_cards c JOIN tickets t ON t.id = c.ticket_id
-    WHERE c.team_id = ? AND c.week_start = ? ORDER BY c.id`).all(teamId, weekStart);
+    WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL ORDER BY c.id`).all(teamId, weekStart);
   const assignees = db.prepare(`SELECT a.* FROM card_assignees a JOIN priority_cards c ON c.id = a.card_id
-    WHERE c.team_id = ? AND c.week_start = ?`).all(teamId, weekStart);
+    WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL`).all(teamId, weekStart);
   const notes = db.prepare(`SELECT n.*, u.first_name, u.last_name FROM card_notes n
     JOIN priority_cards c ON c.id = n.card_id LEFT JOIN users u ON u.id = n.author_id
     WHERE c.team_id = ? AND c.week_start = ? ORDER BY n.created_at DESC, n.id DESC`).all(teamId, weekStart);
@@ -291,6 +291,14 @@ r.put('/cards/:id/checklist/:index', (req, res) => {
   res.json({ card: loadCard(card.id) });
 });
 
+/** Body: { archived: boolean }. Archiving takes a card off the board; restoring puts it back. */
+r.put('/cards/:id/archive', (req, res) => {
+  const card = db.prepare('SELECT id FROM priority_cards WHERE id = ?').get(req.params.id);
+  if (!card) return res.status(404).json({ error: 'Not found' });
+  db.prepare(`UPDATE priority_cards SET archived_at = ${req.body?.archived ? "datetime('now')" : 'NULL'}, updated_at = datetime('now') WHERE id = ?`).run(card.id);
+  res.json({ ok: true });
+});
+
 r.delete('/cards/:id', (req, res) => {
   db.prepare('DELETE FROM priority_cards WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
@@ -348,7 +356,8 @@ r.put('/lanes', (req, res) => {
   const weeks = team_id === 'all'
     ? Object.entries(allTeamWeeks(week_start).teamWeeks).map(([id, w]) => [Number(id), w])
     : [[Number(team_id), week_start]];
-  const weekCards = new Set(weeks.flatMap(([id, w]) => db.prepare('SELECT id FROM priority_cards WHERE team_id = ? AND week_start = ?')
+  // Archived cards aren't on the board, so a reorder never touches them.
+  const weekCards = new Set(weeks.flatMap(([id, w]) => db.prepare('SELECT id FROM priority_cards WHERE team_id = ? AND week_start = ? AND archived_at IS NULL')
     .all(id, w).map((c) => c.id)));
   db.transaction(() => {
     const del = db.prepare('DELETE FROM card_assignees WHERE user_id = ? AND card_id = ?');
@@ -359,7 +368,7 @@ r.put('/lanes', (req, res) => {
       ids.map(Number).filter((id) => weekCards.has(id)).forEach((id, i) => ins.run(id, Number(userId), i));
     }
     // A card must always belong to someone; drop any orphaned by the move.
-    const orphans = db.prepare(`DELETE FROM priority_cards WHERE team_id = ? AND week_start = ?
+    const orphans = db.prepare(`DELETE FROM priority_cards WHERE team_id = ? AND week_start = ? AND archived_at IS NULL
       AND id NOT IN (SELECT card_id FROM card_assignees)`);
     weeks.forEach(([id, w]) => orphans.run(id, w));
   })();

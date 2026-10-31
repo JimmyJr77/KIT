@@ -39,7 +39,7 @@ function histories(ids) {
   rows.forEach((r) => { if (!map.has(r.ticket_id)) map.set(r.ticket_id, []); map.get(r.ticket_id).push(r); });
   return map;
 }
-const rank = (s) => ['Identified', 'Qualified', 'Capture', 'Proposal', 'Submitted', 'Awarded'].indexOf(s);
+const rank = (s) => ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation', 'Awarded'].indexOf(s);
 
 /** The report card for one director (`director` = user id) or the whole team (null), over period `p`. */
 export function reportCard(director, p) {
@@ -104,7 +104,7 @@ export function reportCard(director, p) {
     status: target && remaining === 0 ? 'good' : status(coverageRatio, THRESHOLDS.coverage),
   };
 
-  // 4. Win rate: decisions in the period (No Bid isn't a decision on the merits, so it's left out).
+  // 4. Win rate: bids won or lost in the period.
   const decided = list.filter((tk) => ['Awarded', 'Lost'].includes(tk.pipeline_status) && within(closedOn(tk)));
   const won = decided.filter((tk) => tk.pipeline_status === 'Awarded');
   const winRate = {

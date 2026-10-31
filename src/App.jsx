@@ -18,6 +18,7 @@ import Settings from './pages/Settings.jsx';
 import AdminAccess from './pages/AdminAccess.jsx';
 import MyTeam from './pages/MyTeam.jsx';
 import Reports from './pages/Reports.jsx';
+import Archive from './pages/Archive.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -36,6 +37,7 @@ export default function App() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/archive" element={<Archive />} />
         <Route path="/events" element={<Events />} />
         <Route path="/travel" element={<Travel />} />
         <Route path="/priorities" element={<WeeklyPriorities />} />

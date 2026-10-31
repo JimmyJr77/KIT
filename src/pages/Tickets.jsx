@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Package, CheckSquare, MessageSquare, Paperclip, ListOrdered, UserRound, Plus, ArrowDownAZ, Columns3, Archive, RotateCcw, Ticket as TicketIcon, DollarSign, Zap, MapPin } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -11,13 +11,14 @@ import MultiSelect from '../components/MultiSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel from './NewTicketPanel.jsx';
 import TicketLanes from './TicketLanes.jsx';
-import SidePanel from '../components/SidePanel.jsx';
-import { stamp } from '../lib/format.js';
+import DirectorSelect from '../components/DirectorSelect.jsx';
+import { byDirector } from '../lib/directors.js';
 
 /** Every master ticket the user created or has priorities on. */
 export default function Tickets() {
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const teams = useApi('/teams');
   const ownersApi = useApi('/tickets/owners');
   const [scope, setScope] = useState('mine'); // mine | all | filter
@@ -26,7 +27,6 @@ export default function Tickets() {
   const [q, setQ] = useState('');
   const [tickets, setTickets] = useState(null);
   const [creating, setCreating] = useState(false);
-  const [archiveOpen, setArchiveOpen] = useState(false);
   // Alphabetical cards or swim lanes; the choice is remembered on this browser.
   const [view, setViewState] = useState(() => { try { return localStorage.getItem('kit.tickets.view') || 'az'; } catch { return 'az'; } });
   const setView = (v) => { setViewState(v); try { localStorage.setItem('kit.tickets.view', v); } catch { /* ignore */ } };
@@ -36,6 +36,7 @@ export default function Tickets() {
   const [groupBy, setGroupByState] = useState(() => { try { return localStorage.getItem('kit.tickets.group') || 'none'; } catch { return 'none'; } });
   const setGroupBy = (v) => { setGroupByState(v); try { localStorage.setItem('kit.tickets.group', v); } catch { /* ignore */ } };
   const [territory, setTerritory] = useState('');
+  const [director, setDirector] = useState('');
   const territories = useApi('/territories');
   const toggleType = (k) => setTypesState((ts) => {
     const next = ts.includes(k) ? ts.filter((x) => x !== k) : [...ts, k];
@@ -68,11 +69,11 @@ export default function Tickets() {
   const open = (id) => setParams(id ? { open: String(id) } : {});
   // Archived tickets leave both views; they live in the archive.
   const ofType = (tickets || []).filter((t) => types.includes(t.ticket_type === 'work' ? 'work' : 'bid'))
-    .filter((t) => !territory || (territory === 'none' ? !t.territory_id : t.territory_id === Number(territory)));
+    .filter((t) => !territory || (territory === 'none' ? !t.territory_id : t.territory_id === Number(territory)))
+    .filter(byDirector(director));
   const live = ofType.filter((t) => !t.archived)
     .sort((a, b) => a.opportunity_title.localeCompare(b.opportunity_title, undefined, { sensitivity: 'base' }));
   const archived = ofType.filter((t) => t.archived);
-  const restore = async (t) => { await api.put(`/tickets/${t.id}/lane`, { archived: false }); load(); };
 
   return (
     <div className="space-y-5 p-8">
@@ -117,7 +118,7 @@ export default function Tickets() {
             );
           })}
         </div>
-        <button type="button" className="btn relative h-[38px] w-[38px] p-0" onClick={() => setArchiveOpen(true)}
+        <button type="button" className="btn relative h-[38px] w-[38px] p-0" onClick={() => navigate(`/archive?tab=${types.length === 1 ? types[0] : 'bid'}`)}
           title={`Archive: done tickets, archived after 14 days or by hand${archived.length ? ` (${archived.length})` : ''}`} aria-label="Archive">
           <Archive size={16} />
           {archived.length > 0 && (
@@ -129,6 +130,7 @@ export default function Tickets() {
           {(territories.data?.territories || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           <option value="none">No territory</option>
         </select>
+        <DirectorSelect tickets={tickets} value={director} onChange={setDirector} className="h-[38px] w-48" />
         {view === 'az' && (
           <select className="input h-[38px] w-44 py-0 text-sm" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} aria-label="Group cards by">
             <option value="none">A–Z, no grouping</option>
@@ -205,27 +207,6 @@ export default function Tickets() {
         </section>
       ))}
 
-      {archiveOpen && (
-        <SidePanel title="Archive" subtitle="Done tickets leave the board 14 days after reaching Done, or when archived by hand" onClose={() => setArchiveOpen(false)}>
-          {archived.length ? (
-            <ul className="space-y-2">
-              {archived.map((t) => (
-                <li key={t.id} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3">
-                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => { setArchiveOpen(false); open(t.id); }}>
-                    <div className="truncate text-sm font-semibold text-slate-800 hover:text-brand-700">{t.opportunity_title}</div>
-                    <div className="text-xs text-slate-500">
-                      {[ticketKind(t), t.pipeline_status, t.archived_at ? `archived ${stamp(t.archived_at)}` : t.done_at ? `done ${stamp(t.done_at)}` : null].filter(Boolean).join(' · ')}
-                    </div>
-                  </button>
-                  <button type="button" className="btn shrink-0 px-2.5 py-1 text-xs" onClick={() => restore(t)} title="Put it back in Done for another 14 days">
-                    <RotateCcw size={13} /> Restore
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="text-sm text-slate-400">Nothing archived{scope === 'mine' ? ' among your tickets' : ''} yet.</p>}
-        </SidePanel>
-      )}
 
       {creating && (
         <NewTicketPanel onClose={() => setCreating(false)}

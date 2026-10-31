@@ -6,7 +6,7 @@ import { addDays } from '../lib/travelCalc.js';
 import { StatTile, Meter, ChartCard, BarList, StackedColumns, LineChart, DataTable, SERIES, compact, fullMoney, pct } from '../components/Charts.jsx';
 
 /**
- * Financials by team. BD: pipeline by stage, expected revenue by quarter (PWIN-adjusted or not), the undetermined pool,
+ * Financials by team. BD: pipeline by stage, projected bookings by quarter (PWIN-adjusted or not), the undetermined pool,
  * qualified pipeline by territory and director, how the pipeline changed, bookings funded / unfunded, backlog and
  * book-to-bill. Operations: the contracts it delivers. Every team: estimated travel spend.
  */
@@ -77,7 +77,7 @@ function BdFinancials({ director, territory }) {
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(10.5rem,1fr))]">
         <StatTile label="Open pipeline" value={compact(data.open.value)} sub={`${data.open.count} bids · ${compact(data.open.weighted)} PWIN-weighted`} />
         <StatTile label="Qualified pipeline" value={compact(data.qualified.value)} sub={`${data.qualified.count} bids, Qualified onward`} />
-        <StatTile label="Expected next 4 quarters" value={compact(forecast)} sub={`PWIN-weighted · ${pct(adjustedShare)} of the bid value has a PWIN`} />
+        <StatTile label="Projected bookings, next 4 quarters" value={compact(forecast)} sub={`PWIN-weighted · ${pct(adjustedShare)} of the bid value has a PWIN`} />
         {/* Targets are set per director, so there's nothing to compare a single territory against. */}
         <StatTile label={`Booked in ${qBooked.quarter}`} value={compact(qBooked.value)} sub={territory ? 'Targets are set per BD director' : null}>
           {!territory && <Meter value={qBooked.value} target={qTarget || null} />}
@@ -94,7 +94,7 @@ function BdFinancials({ director, territory }) {
           <BarList rows={data.stages.map((s) => ({ key: s.stage, label: s.stage, value: s.value, sub: `${s.count}` }))} />
         </ChartCard>
 
-        <ChartCard title="Expected revenue by quarter" subtitle="Open bids by projected win date. With a PWIN: value × PWIN. Without one: full value, shown apart."
+        <ChartCard title="Projected bookings by quarter" subtitle="Open bids by projected win date. With a PWIN: value × PWIN. Without one: full value, shown apart."
           table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'adj', label: 'PWIN-adjusted', align: 'right', format: fullMoney }, { key: 'adjRaw', label: '(unadjusted value)', align: 'right', format: fullMoney },
             { key: 'raw', label: 'No PWIN', align: 'right', format: fullMoney }, { key: 'count', label: 'Bids', align: 'right' }],
             rows: q.map((x) => ({ quarter: x.quarter, adj: x.adjusted.weighted, adjRaw: x.adjusted.value, raw: x.unadjusted.value, count: x.count })) }}>

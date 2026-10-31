@@ -65,14 +65,24 @@ export default function Dashboard() {
 
 /** Team priority close-out (the original dashboard). */
 function TeamDashboard() {
-  const { data } = useApi('/dashboard');
-  const teams = useApi('/teams');
   const [teamId, setTeamId] = useState('all');
+  const [personId, setPersonId] = useState('all');
   const [includeCurrent, setIncludeCurrent] = useState(false);
+  const { data } = useApi(personId === 'all' ? '/dashboard' : `/dashboard?director=${personId}`);
+  const teams = useApi('/teams');
 
-  const people = useMemo(() => (data?.people || [])
-    .filter((p) => teamId === 'all' || (p.team_ids || []).includes(Number(teamId)))
-    .map((p) => ({ ...p, stats: summarize(p.weeks.filter((w) => includeCurrent || !w.current)) })), [data, teamId, includeCurrent]);
+  const onTeam = useMemo(() => (data?.people || []).filter((p) => teamId === 'all' || (p.team_ids || []).includes(Number(teamId))), [data, teamId]);
+  const person = onTeam.find((p) => p.id === Number(personId));
+  const people = useMemo(() => (person ? [person] : onTeam)
+    .map((p) => ({ ...p, stats: summarize(p.weeks.filter((w) => includeCurrent || !w.current)) })), [onTeam, person, includeCurrent]);
+  const bdTeam = teams.data?.teams.find((t) => t.name === 'BD');
+  const showReportCard = person ? (person.team_ids || []).includes(bdTeam?.id) : teamId === 'all' || Number(teamId) === bdTeam?.id;
+
+  const pickTeam = (id) => {
+    setTeamId(id);
+    // Keep the person only if they're on the new team.
+    if (person && id !== 'all' && !(person.team_ids || []).includes(Number(id))) setPersonId('all');
+  };
 
   const teamCloseout = mean(people.map((p) => p.stats.closeout).filter((x) => x != null));
   const teamWork = mean(people.map((p) => p.stats.workWhileOpen).filter((x) => x != null));
@@ -82,9 +92,16 @@ function TeamDashboard() {
       <div className="flex flex-wrap items-end gap-4">
         <div className="w-52">
           <label className="label">Team</label>
-          <select className="input" value={teamId} onChange={(e) => setTeamId(e.target.value)}>
+          <select className="input" value={teamId} onChange={(e) => pickTeam(e.target.value)}>
             <option value="all">All</option>
             {teams.data?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+        <div className="w-52">
+          <label className="label">Person</label>
+          <select className="input" value={personId} onChange={(e) => setPersonId(e.target.value)}>
+            <option value="all">Everyone</option>
+            {onTeam.map((p) => <option key={p.id} value={p.id}>{fullName(p)}</option>)}
           </select>
         </div>
         <label className="flex items-center gap-2 pb-2.5 text-sm text-slate-600">
@@ -94,7 +111,7 @@ function TeamDashboard() {
       </div>
 
       {/* BD's report card: the team's measures and each director's, shown for BD and for everyone. */}
-      {(teamId === 'all' || teams.data?.teams.find((t) => t.id === Number(teamId))?.name === 'BD') && <ReportCard />}
+      {showReportCard && (person ? <ReportCard key={person.id} director={person.id} title={`${fullName(person)}'s BD report card`} /> : <ReportCard />)}
 
       {data && (
         <>
@@ -149,7 +166,7 @@ function TeamDashboard() {
             </div>
           </Section>
 
-          <Section title="Pipeline" note={`${data.totals.tickets} bid ticket${data.totals.tickets === 1 ? '' : 's'} worth ${money(data.totals.value)} in total.`}>
+          <Section title="Pipeline" note={`${data.totals.tickets} bid ticket${data.totals.tickets === 1 ? '' : 's'} worth ${money(data.totals.value)} in total${person ? ` with ${fullName(person)} as BD director` : ''}.`}>
             <Pipeline rows={data.pipeline} />
           </Section>
 

@@ -12,11 +12,13 @@ import MultiSelect from '../components/MultiSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel from './NewTicketPanel.jsx';
 import PwinSettings from './PwinSettings.jsx';
+import DirectorSelect from '../components/DirectorSelect.jsx';
+import { byDirector } from '../lib/directors.js';
 
 const NO_STAGE = '__none__';
 const money = (n) => usd(n).replace('.00', '');
 // Closed-out stages are set apart from the active pipeline.
-const CLOSED = new Set(['Awarded', 'Lost', 'No Bid']);
+const CLOSED = new Set(['Awarded', 'Lost']);
 
 /** Master tickets as a board, one column per pipeline stage. Drag a ticket to move it to another stage. */
 export default function Pipeline() {
@@ -25,6 +27,7 @@ export default function Pipeline() {
   const [scope, setScope] = useState('all');
   const [filters, setFilters] = useState([]); // "o:<user id>" for account owners, "t:<account type>" for account types
   const [q, setQ] = useState('');
+  const [director, setDirector] = useState('');
   const [tickets, setTickets] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [dragId, setDragId] = useState(null);
@@ -61,12 +64,12 @@ export default function Pipeline() {
 
   const stages = meta.data?.pipelineStatuses || [];
   const columns = useMemo(() => {
-    const byStage = (s) => (tickets || []).filter((t) => (t.pipeline_status || NO_STAGE) === s);
+    const byStage = (s) => (tickets || []).filter(byDirector(director)).filter((t) => (t.pipeline_status || NO_STAGE) === s);
     const cols = stages.map((s) => ({ key: s, label: s, tickets: byStage(s) }));
     const none = byStage(NO_STAGE);
     // Tickets with no stage get their own column, shown only when there are some.
     return none.length ? [{ key: NO_STAGE, label: 'No stage', tickets: none }, ...cols] : cols;
-  }, [tickets, stages]);
+  }, [tickets, stages, director]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
 
@@ -111,6 +114,7 @@ export default function Pipeline() {
           </div>
           <button type="button" onClick={() => setCreating(true)} title="New ticket" aria-label="New ticket"
             className="btn-primary h-[38px] w-[38px] shrink-0 p-0"><Plus size={18} /></button>
+          <DirectorSelect tickets={tickets} value={director} onChange={setDirector} className="h-[38px] w-48" />
           {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
         </div>
       </div>

@@ -11,6 +11,7 @@ import ProfileFields from '../components/ProfileFields.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import Avatar from '../components/Avatar.jsx';
 import BookingTargetsPanel from '../components/BookingTargets.jsx';
+import SampleDataPanel from '../components/SampleDataPanel.jsx';
 import { TerritoryTags, AddTerritorySelect, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
 
 /** Admins only: access requests from the sign-in page, approved accounts, and the team directory. */
@@ -35,6 +36,7 @@ function AdminPage() {
       <DirectoryPanel approved={approved} users={users} teams={teamList} territories={territories.data?.territories || []} onError={setError} />
       <TerritoriesPanel territories={territories} onChanged={users.reload} />
       <BookingTargetsPanel />
+      <SampleDataPanel />
     </div>
   );
 }

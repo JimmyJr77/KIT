@@ -6,7 +6,7 @@ import { quarterFor } from '../src/lib/travelCalc.js';
 import { pwin } from '../src/lib/assessment.js';
 import { pwinModel } from './routes/tickets.js';
 
-const CLOSED = ['Awarded', 'Lost', 'No Bid'];
+const CLOSED = ['Awarded', 'Lost'];
 const localToday = () => new Date().toLocaleDateString('en-CA');
 
 /** First and last day of a quarter like "2026 Q4". */

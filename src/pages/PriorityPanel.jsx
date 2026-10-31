@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Search, Ticket, ArrowLeft } from 'lucide-react';
+import { X, Plus, Trash2, Search, Ticket, ArrowLeft, Archive } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, ticketKind } from '../lib/format.js';
@@ -80,6 +80,11 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
     }
   };
 
+  // Archiving takes the card off the board; it can be restored from the Archive page.
+  const archive = async () => {
+    await api.put(`/priorities/cards/${card.id}/archive`, { archived: true });
+    onSaved();
+  };
   const remove = async () => {
     if (!confirm('Delete this priority card? The ticket is kept.')) return;
     await api.del(`/priorities/cards/${card.id}`);
@@ -251,6 +256,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
             {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
             <div className="flex gap-2">
               <button className="btn-primary flex-1" onClick={save} disabled={saving}>{saving ? 'Saving…' : isNew ? (asWork ? 'Add work' : 'Add priority') : 'Save changes'}</button>
+              {!isNew && !ro && <button className="btn" onClick={archive} title="Archive: take it off the board (restore it from the Archive page)" aria-label="Archive this priority card"><Archive size={15} /></button>}
               {!isNew && <button className="btn-danger" onClick={remove}><Trash2 size={15} /></button>}
             </div>
           </footer>

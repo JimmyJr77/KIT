@@ -12,13 +12,15 @@ export default function CompanyOverview() {
   if (!data) return <p className="text-sm text-slate-400">Loading…</p>;
   const { pipeline: pl, bookings: bk, backlog: bl } = data;
   const bq = data.bookingsByQuarter;
+  const pb = data.projectedBookings;
+  const proj = [...pb.quarters, { quarter: 'Date TBD', ...pb.undetermined }];
   return (
     <div className="space-y-6">
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(10.5rem,1fr))]">
         <StatTile label={`Booked in ${bk.quarter.label}`} value={compact(bk.quarter.booked)}><Meter value={bk.quarter.booked} target={bk.quarter.target} /></StatTile>
         <StatTile label={`Booked in ${bk.year.label}`} value={compact(bk.year.booked)}><Meter value={bk.year.booked} target={bk.year.target} /></StatTile>
         <StatTile label="Qualified pipeline" value={compact(pl.qualified.value)} sub={`${pl.qualified.count} bids, Qualified onward · ${compact(pl.open.value)} open in all`} />
-        <StatTile label="Expected next 4 quarters" value={compact(pl.forecastNext4)} sub={`PWIN-weighted · ${compact(pl.undetermined)} more undetermined`} />
+        <StatTile label="Projected bookings, next 4 quarters" value={compact(pl.forecastNext4)} sub={`PWIN-weighted · ${compact(pl.undetermined)} more undetermined`} />
         <StatTile label="Backlog" value={compact(bl.total)} sub={`${compact(bl.fundedBacklog)} funded · ${compact(bl.unfundedBacklog)} unfunded`} />
         <StatTile label="Active contracts" value={data.delivery.active}
           sub={data.delivery.needsPm ? <Link to="/delivery" className="font-medium text-amber-700 hover:underline">{data.delivery.needsPm} need a Program Manager</Link> : `${compact(data.delivery.billedThisQuarter)} billed this quarter`} />
@@ -27,21 +29,30 @@ export default function CompanyOverview() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <ChartCard title="Open pipeline by stage" subtitle="Value of open bids in each stage"
-          table={{ columns: [{ key: 'stage', label: 'Stage' }, { key: 'count', label: 'Bids', align: 'right' }, { key: 'value', label: 'Value', align: 'right', format: fullMoney }], rows: pl.stages }}>
-          <BarList rows={pl.stages.map((s) => ({ key: s.stage, label: s.stage, value: s.value, sub: `${s.count} bid${s.count === 1 ? '' : 's'}` }))} />
-        </ChartCard>
-        <ChartCard title="Bookings, last four quarters" subtitle="Contracts won, and how much of each quarter's wins is funded so far"
+        <ChartCard title="Bookings, last eight quarters" subtitle="Contracts won, and how much of each quarter's wins is funded so far"
           table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'Wins', align: 'right' }, { key: 'funded', label: 'Funded', align: 'right', format: fullMoney }, { key: 'unfunded', label: 'Unfunded', align: 'right', format: fullMoney }, { key: 'value', label: 'Booked', align: 'right', format: fullMoney }], rows: bq }}>
           <StackedColumns categories={bq.map((q) => q.quarter)} height={150}
             series={[{ key: 'funded', label: 'Funded', color: SERIES[0], values: bq.map((q) => q.funded) }, { key: 'unfunded', label: 'Unfunded', color: SERIES[1], values: bq.map((q) => q.unfunded) }]} />
         </ChartCard>
+        <ChartCard title="Projected bookings, next seven quarters"
+          subtitle="Open bids at value × PWIN, by expected win quarter, or TBD if the win date is undetermined"
+          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'Bids', align: 'right' }, { key: 'adjusted', label: 'PWIN-adjusted', align: 'right', format: fullMoney }, { key: 'unadjusted', label: 'No PWIN (full value)', align: 'right', format: fullMoney }, { key: 'weighted', label: 'Projected', align: 'right', format: fullMoney }], rows: proj }}>
+          <StackedColumns categories={proj.map((q) => q.quarter)} height={150}
+            series={[{ key: 'adj', label: 'PWIN-adjusted', color: SERIES[0], values: proj.map((q) => q.adjusted) }, { key: 'raw', label: 'No PWIN (full value)', color: SERIES[1], values: proj.map((q) => q.unadjusted) }]} />
+        </ChartCard>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
+        <ChartCard title="Open pipeline by stage" subtitle="Value of open bids in each stage"
+          table={{ columns: [{ key: 'stage', label: 'Stage' }, { key: 'count', label: 'Bids', align: 'right' }, { key: 'value', label: 'Value', align: 'right', format: fullMoney }], rows: pl.stages }}>
+          <BarList rows={pl.stages.map((s) => ({ key: s.stage, label: s.stage, value: s.value, sub: `${s.count} bid${s.count === 1 ? '' : 's'}` }))} />
+        </ChartCard>
         <ChartCard title="People by team" subtitle={`${data.people} people; someone on two teams counts in both`}>
           <BarList rows={data.teams.map((t) => ({ key: t.id, label: t.name, value: t.people }))} format={(n) => String(n)} />
         </ChartCard>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <header className="mb-2 flex items-center gap-2">
             <CalendarDays size={15} className="text-brand-600" />

@@ -202,7 +202,7 @@ function NoteItem({ note, readOnly, canChange, onSave, onDelete, onDirty }) {
     <li className={`group relative rounded-lg border px-3 py-2.5 transition ${
       mode === 'edit' ? 'border-brand-500 bg-white ring-2 ring-brand-100'
         : mode === 'confirm-delete' ? 'border-red-200 bg-red-50/60'
-          : note.pending ? 'border-dashed border-slate-300 bg-white' : 'border-slate-200 bg-slate-50/70'
+          : note.pending ? 'border-dashed border-amber-300 bg-white' : 'border-amber-300 bg-amber-50 shadow-sm'
     }`}>
       {mode === 'edit' ? (
         <>
@@ -253,7 +253,7 @@ function NoteItem({ note, readOnly, canChange, onSave, onDelete, onDirty }) {
           {mode === 'view' && (
             <div ref={menuRef} className="absolute top-1.5 right-1.5">
               <button type="button" aria-label="Note actions" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}
-                className={`rounded p-1 text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 ${menu ? 'bg-slate-200/70 text-slate-700' : 'opacity-0 group-focus-within:opacity-100 group-hover:opacity-100'}`}>
+                className={`rounded p-1 text-slate-400 hover:bg-amber-100 hover:text-slate-700 ${menu ? 'bg-amber-100 text-slate-700' : 'opacity-0 group-focus-within:opacity-100 group-hover:opacity-100'}`}>
                 <MoreHorizontal size={15} />
               </button>
               {menu && (

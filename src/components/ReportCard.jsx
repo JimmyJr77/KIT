@@ -50,7 +50,7 @@ function explain(key, t) {
     },
     winRate: {
       assesses: 'Whether we are pursuing and winning the right work.',
-      how: 'Bids won ÷ bids decided (won or lost) in the period, by count; the share by dollar value is shown beside it. No Bid isn\'t counted, since we chose not to compete. Wins are dated by their contract\'s award date.',
+      how: 'Bids won ÷ bids decided (won or lost) in the period, by count; the share by dollar value is shown beside it. Wins are dated by their contract\'s award date.',
       scale: [`${pctOf(t.winRate.good)} or more`, `${pctOf(t.winRate.watch)} to ${pctOf(t.winRate.good)}`, `Under ${pctOf(t.winRate.watch)}`],
       needs: 'Bids closed as Awarded or Lost.',
     },
@@ -77,22 +77,16 @@ function explain(key, t) {
 
 /**
  * "How the report card is configured": every measure, what it assesses, how it's worked out, its status thresholds
- * and the data it needs, in one window. `focus` (a measure key) scrolls to and highlights that measure.
+ * and the data it needs, in one window.
  */
-function ConfigDialog({ measures, thresholds, period, focus, onClose }) {
+function ConfigDialog({ measures, thresholds, period, onClose }) {
   const box = useRef(null);
   useEffect(() => {
     const key = (e) => e.key === 'Escape' && onClose();
     document.addEventListener('keydown', key);
     box.current?.focus();
-    if (focus) {
-      const el = box.current?.querySelector(`[data-measure="${focus}"]`);
-      el?.scrollIntoView({ block: 'start' });
-      el?.classList.add('ring-2', 'ring-brand-500');
-      setTimeout(() => el?.classList.remove('ring-2', 'ring-brand-500'), 1800);
-    }
     return () => document.removeEventListener('keydown', key);
-  }, [focus, onClose]);
+  }, [onClose]);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div ref={box} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="rc-config-title"
@@ -114,7 +108,7 @@ function ConfigDialog({ measures, thresholds, period, focus, onClose }) {
           {measures.map((m, i) => {
             const e = explain(m.key, thresholds);
             return e && (
-              <section key={m.key} data-measure={m.key} className="scroll-mt-2 rounded-lg border border-slate-200 p-3 transition-shadow">
+              <section key={m.key} className="rounded-lg border border-slate-200 p-3 transition-shadow">
                 <h4 className="font-semibold text-slate-900">{i + 1}. {m.title}</h4>
                 <p className="mb-2 text-xs text-slate-500 italic">{m.question}</p>
                 <dl className="grid gap-x-3 gap-y-1.5 text-xs sm:grid-cols-[7rem_1fr]">
@@ -172,7 +166,7 @@ export default function ReportCard({ director, title }) {
   const qs = new URLSearchParams({ kind: p.kind, label: p.value });
   if (director) qs.set('director', director);
   const { data } = useApi(`/financials/report-card?${qs}`);
-  const [info, setInfo] = useState(null); // null, 'all', or a measure key to jump to
+  const [info, setInfo] = useState(false);
 
   return (
     <section className="space-y-3">
@@ -180,7 +174,7 @@ export default function ReportCard({ director, title }) {
         <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
           <ClipboardCheck size={16} className="text-brand-600" /> {title || (director ? 'Your BD report card' : 'BD report card')}
         </h2>
-        <button type="button" onClick={() => setInfo('all')} className="mr-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+        <button type="button" onClick={() => setInfo(true)} className="mr-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-800"
           aria-haspopup="dialog" title="How each measure is worked out, and its thresholds">
           <Info size={14} /> How it's configured
         </button>
@@ -190,33 +184,27 @@ export default function ReportCard({ director, title }) {
       </div>
       {!data ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className={`space-y-4 ${data ? '' : 'opacity-50'}`}>
-          <Measures card={data.card} onInfo={setInfo} />
+          <Measures card={data.card} />
           <Stalled list={data.card.measures.find((m) => m.key === 'progression').stalled} showDirector={!director} />
           {data.directors && <DirectorTable rows={data.directors} />}
         </div>
       )}
       {info && data && (
         <ConfigDialog measures={data.card.measures} thresholds={data.thresholds} period={p.value}
-          focus={info === 'all' ? null : info} onClose={() => setInfo(null)} />
+          onClose={() => setInfo(false)} />
       )}
     </section>
   );
 }
 
-function Measures({ card, onInfo }) {
+function Measures({ card }) {
   return (
     <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(14rem,1fr))]">
       {card.measures.map((m) => (
         <div key={m.key} className="flex flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <div className="flex items-center gap-1 text-sm font-semibold text-slate-800">
-                {m.title}
-                <button type="button" onClick={() => onInfo(m.key)} aria-label={`How ${m.title} is configured`} title={`How ${m.title} is configured`}
-                  className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
-                  <Info size={14} />
-                </button>
-              </div>
+              <div className="text-sm font-semibold text-slate-800">{m.title}</div>
               <div className="text-[11px] text-slate-500 italic">{m.question}</div>
             </div>
             <StatusChip status={m.status} />
