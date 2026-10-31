@@ -15,6 +15,7 @@ function summary(r) {
     r.pipelines && plural(r.pipelines, 'new pipeline'), part(r.dealsAdded, r.dealsUpdated, 'deal'), part(r.contactsAdded, r.contactsUpdated, 'contact'),
     part(r.activitiesAdded, r.activitiesUpdated, 'activity', 'activities'), part(r.notesAdded, r.notesUpdated, 'note'),
     r.filesAdded && plural(r.filesAdded, 'new file'),
+    r.notesSent && `${plural(r.notesSent, 'note')} sent to Pipedrive`, r.documentsSent && `${plural(r.documentsSent, 'document')} sent to Pipedrive`,
   ].filter(Boolean).join(' · ');
 }
 
@@ -47,9 +48,16 @@ export default function PipedrivePanel() {
         Pipedrive → KIT. Each Pipedrive pipeline gets a matching KIT pipeline; deals come over as bid tickets (closed ones already archived),
         with their people, activities, notes and files. People are matched to KIT accounts by email, and a deal owner without one gets an
         account they claim by activating with that email. Pipedrive wins on the fields it holds; KIT&apos;s own work on a ticket is kept.
-        It also syncs every night.
+        The other way, comments and documents added in KIT to a ticket from Pipedrive go to that deal as a note or file. It also
+        syncs every night.
       </p>
       {s && !s.configured && <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">Add PIPEDRIVE_API_KEY to the server settings to sync.</p>}
+      {s?.configured && !s.sending && (
+        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          Sending to Pipedrive is off on this server, so testing here never posts into your real deals. It&apos;s on in production
+          (or set PIPEDRIVE_PUSH=1).
+        </p>
+      )}
       {last && !s?.running && (
         <div className={`rounded-lg px-3 py-2 text-sm ${last.ok ? 'bg-emerald-50 text-emerald-900' : 'bg-red-50 text-red-800'}`}>
           <div className="flex items-center gap-1.5 font-medium">

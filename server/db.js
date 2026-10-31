@@ -756,6 +756,18 @@ addColumn('tickets', 'pipeline_id', 'INTEGER REFERENCES pipelines(id) ON DELETE 
 // person claims the account (sets a password) by activating with that email.
 addColumn('users', 'pending_activation', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('users', 'pipedrive_id', 'INTEGER');
+// KIT → Pipedrive: notes and documents written in KIT go to the deal too. pipedrive_pending marks a KIT edit (or pin)
+// that hasn't reached Pipedrive yet; pipedrive_note_id is the Pipedrive note a linked (not uploaded) document went to.
+addColumn('ticket_comments', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('ticket_files', 'pipedrive_note_id', 'INTEGER');
+db.exec(`
+-- Pipedrive notes and files deleted in KIT that Pipedrive hasn't deleted yet: retried each sync, and never imported again.
+CREATE TABLE IF NOT EXISTS pipedrive_deletes (
+  kind TEXT NOT NULL, -- note | file
+  pipedrive_id INTEGER NOT NULL,
+  PRIMARY KEY (kind, pipedrive_id)
+);
+`);
 addColumn('ticket_contacts', 'is_primary', 'INTEGER NOT NULL DEFAULT 0'); // the deal's main contact person
 addColumn('contacts', 'pipedrive_id', 'INTEGER');
 addColumn('ticket_comments', 'pinned', 'INTEGER NOT NULL DEFAULT 0'); // kind 'note' is a Pipedrive note; notes can be pinned

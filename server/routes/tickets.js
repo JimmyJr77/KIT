@@ -12,6 +12,7 @@ import { recordWork } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
 import { ticketFields } from './priorities.js';
 import { statusesFor, listPipelines } from '../pipelines.js';
+import { pushNote, pushFile, deleteInPipedrive, inBackground } from '../services/pipedrive.js';
 import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
 
 const r = Router();
@@ -582,6 +583,7 @@ r.post('/:id/comments', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(t.id, cardId, parentId, kind, body, req.user.id, target?.type ?? null, target?.id ?? null).lastInsertRowid;
   recordWork(req.user, { kind, ticket_id: t.id, card_id: cardId, ref_id: id, summary: body });
   notifyMentions(req.user, body, { ticket_id: t.id, card_id: cardId, comment_id: id });
+  inBackground(() => pushNote(id)); // goes to the Pipedrive deal as a note, when it's a ticket from Pipedrive
   res.json({ comment: commentOut(db.prepare(`${COMMENT_SQL} WHERE m.id = ?`).get(id)) });
 });
 
@@ -607,8 +609,9 @@ r.put('/comments/:id', (req, res) => {
   const body = String(req.body?.body || '').trim();
   if (!body) return res.status(400).json({ error: 'A comment can’t be empty' });
   if (body !== m.body) {
-    db.prepare("UPDATE ticket_comments SET body = ?, updated_at = datetime('now') WHERE id = ?").run(body, m.id);
+    db.prepare("UPDATE ticket_comments SET body = ?, updated_at = datetime('now'), pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?").run(body, m.id);
     notifyMentions(req.user, body, { ticket_id: m.ticket_id, card_id: m.card_id, comment_id: m.id }, m.body);
+    inBackground(() => pushNote(m.id));
   }
   res.json({ comment: commentOut(db.prepare(`${COMMENT_SQL} WHERE m.id = ?`).get(m.id)) });
 });
@@ -618,7 +621,8 @@ r.put('/comments/:id/pin', (req, res) => {
   const m = db.prepare('SELECT * FROM ticket_comments WHERE id = ?').get(req.params.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
   if (m.kind !== 'note') return res.status(400).json({ error: 'Only notes can be pinned' });
-  db.prepare('UPDATE ticket_comments SET pinned = ? WHERE id = ?').run(req.body?.pinned === false ? 0 : 1, m.id);
+  db.prepare('UPDATE ticket_comments SET pinned = ?, pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?').run(req.body?.pinned === false ? 0 : 1, m.id);
+  inBackground(() => pushNote(m.id));
   res.json({ comment: commentOut(db.prepare(`${COMMENT_SQL} WHERE m.id = ?`).get(m.id)) });
 });
 
@@ -627,6 +631,7 @@ r.delete('/comments/:id', (req, res) => {
   if (!m) return res.status(404).json({ error: 'Not found' });
   if (m.author_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the author can delete this' });
   db.prepare('DELETE FROM ticket_comments WHERE id = ?').run(m.id);
+  inBackground(() => deleteInPipedrive('note', m.pipedrive_id));
   // Its additional-work entries go with it (replies are removed along with their thread).
   db.prepare("DELETE FROM work_log WHERE kind IN ('question', 'comment', 'reply') AND ref_id NOT IN (SELECT id FROM ticket_comments)").run();
   res.json({ ok: true });
@@ -711,6 +716,7 @@ r.post('/process/:pid/files', upload.single('file'), (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?)`).run(p.ticket_id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id, p.id).lastInsertRowid;
   recordWork(req.user, { kind: 'file', ticket_id: p.ticket_id, ref_id: id, summary: req.file.originalname });
   touch(p.ticket_id);
+  inBackground(() => pushFile(id));
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
@@ -726,6 +732,7 @@ r.post('/:id/files', upload.single('file'), (req, res) => {
   const id = db.prepare(`INSERT INTO ticket_files (ticket_id, original_name, stored_name, mime_type, size, uploaded_by)
     VALUES (?, ?, ?, ?, ?, ?)`).run(t.id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id).lastInsertRowid;
   recordWork(req.user, { kind: 'file', ticket_id: t.id, ref_id: id, summary: req.file.originalname });
+  inBackground(() => pushFile(id)); // goes to the Pipedrive deal too, when it's a ticket from Pipedrive
   res.json({ file: { id, name: req.file.originalname, size: req.file.size, mime_type: req.file.mimetype } });
 });
 

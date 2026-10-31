@@ -1,6 +1,7 @@
-// Pipedrive → KIT sync. One way: Pipedrive is the source of truth for what it holds, so each sync updates the records
-// it brought in before (matched by pipedrive_id) and adds new ones. KIT's own work on a ticket (priorities, strategy,
-// assessments, comments) is never touched.
+// Pipedrive ↔ KIT. Pipedrive is the source of truth for what it holds, so each sync updates the records it brought in
+// before (matched by pipedrive_id) and adds new ones. KIT's own work on a ticket (priorities, strategy, assessments)
+// is never touched. The other way, notes and documents added in KIT to a ticket that came from Pipedrive are sent to
+// that deal as they're saved (and any that didn't make it are retried at each sync).
 //
 // What comes over: pipelines and their stages (KIT makes a pipeline to match each one), deals as bid tickets (closed
 // ones already archived, dated when they closed), people as CRM contacts, and each deal's activities, notes and files.
@@ -12,9 +13,12 @@ import { db, json, getSetting, setSetting } from '../db.js';
 import { hashPassword } from '../auth.js';
 import '../sample/registry.js'; // archived_rows, used to skip records archived by a full reset
 
-const API = 'https://api.pipedrive.com/v1';
+const API = process.env.PIPEDRIVE_API_URL || 'https://api.pipedrive.com/v1';
 const apiKey = () => process.env.PIPEDRIVE_API_KEY;
 export const pipedriveConfigured = () => !!apiKey();
+// Sending to Pipedrive writes to the company's real deals, so it's on in production only, unless PIPEDRIVE_PUSH=1
+// (so testing KIT locally never posts into Pipedrive).
+export const pushEnabled = () => pipedriveConfigured() && (process.env.NODE_ENV === 'production' || process.env.PIPEDRIVE_PUSH === '1');
 // Pipedrive keeps activity times in UTC; KIT shows them in the team's time zone.
 const TIME_ZONE = process.env.PIPEDRIVE_TIME_ZONE || 'America/New_York';
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
@@ -35,16 +39,19 @@ const MIME = { '.pdf': 'application/pdf', '.doc': 'application/msword', '.docx':
 
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
-async function call(p, query = {}, { raw = false } = {}) {
+async function call(p, query = {}, { raw = false, method = 'GET', body } = {}) {
   const u = new URL(`${API}/${p}`);
   Object.entries({ ...query, api_token: apiKey() }).forEach(([k, v]) => u.searchParams.set(k, v));
+  const init = { method };
+  if (body instanceof FormData) init.body = body;
+  else if (body) { init.body = JSON.stringify(body); init.headers = { 'Content-Type': 'application/json' }; }
   for (let attempt = 0; ; attempt += 1) {
-    const r = await fetch(u);
+    const r = await fetch(u, init);
     if (r.status === 429 && attempt < 6) { await sleep((Number(r.headers.get('retry-after')) || 2) * 1000); continue; }
-    if (!r.ok) throw new Error(`Pipedrive ${p}: ${r.status} ${r.statusText}`);
+    if (!r.ok) throw new Error(`Pipedrive ${method} ${p}: ${r.status} ${r.statusText}`);
     if (raw) return Buffer.from(await r.arrayBuffer());
     const j = await r.json();
-    if (!j.success) throw new Error(`Pipedrive ${p}: ${j.error || 'request failed'}`);
+    if (!j.success) throw new Error(`Pipedrive ${method} ${p}: ${j.error || 'request failed'}`);
     return j;
   }
 }
@@ -108,10 +115,100 @@ function fieldText(field, value) {
   return String(value);
 }
 
+// ---- KIT → Pipedrive: notes and documents
+
+// What goes to the deal as a note: comments on the ticket itself (not replies, and not ones attached to a priority,
+// document or email, which Pipedrive has nowhere to put), and Pipedrive notes edited or pinned in KIT.
+const NOTE_SQL = `SELECT m.*, t.pipedrive_id AS deal_id, u.first_name, u.last_name FROM ticket_comments m
+  JOIN tickets t ON t.id = m.ticket_id LEFT JOIN users u ON u.id = m.author_id
+  WHERE t.pipedrive_id IS NOT NULL AND m.parent_id IS NULL AND m.card_id IS NULL AND m.target_type IS NULL AND m.kind IN ('comment', 'note')`;
+const FILE_SQL = `SELECT f.*, t.pipedrive_id AS deal_id, u.first_name, u.last_name FROM ticket_files f
+  JOIN tickets t ON t.id = f.ticket_id LEFT JOIN users u ON u.id = f.uploaded_by
+  WHERE t.pipedrive_id IS NOT NULL AND f.email_id IS NULL`;
+// A note written in KIT says who wrote it, since Pipedrive shows everything sent with the API key as its owner's.
+const FROM_KIT = /^From KIT, by [^\n]*\n+/;
+const escapeHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const paragraphs = (t) => String(t).split(/\n{2,}/).map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
+const byLine = (r) => `<p><i>From KIT, by ${escapeHtml(`${r.first_name || ''} ${r.last_name || ''}`.trim() || 'someone')}</i></p>`;
+
+/** Send a note (new, edited or pinned) to its deal. Quietly does nothing if it doesn't belong in Pipedrive. */
+export async function pushNote(commentId) {
+  if (!pushEnabled()) return;
+  const m = db.prepare(`${NOTE_SQL} AND m.id = ?`).get(commentId);
+  if (!m || (m.pipedrive_id && !m.pipedrive_pending)) return;
+  // Notes that came from Pipedrive keep their own wording; KIT's say who wrote them.
+  const content = `${m.kind === 'comment' ? byLine(m) : ''}${paragraphs(m.body)}`;
+  const fields = { content, pinned_to_deal_flag: m.pinned ? 1 : 0 };
+  try {
+    if (m.pipedrive_id) await call(`notes/${m.pipedrive_id}`, {}, { method: 'PUT', body: fields });
+    else {
+      const { data } = await call('notes', {}, { method: 'POST', body: { ...fields, deal_id: m.deal_id } });
+      db.prepare('UPDATE ticket_comments SET pipedrive_id = ? WHERE id = ?').run(data.id, m.id);
+    }
+    db.prepare('UPDATE ticket_comments SET pipedrive_pending = 0 WHERE id = ?').run(m.id);
+  } catch (e) {
+    // Left as it is, it's sent again at the next sync.
+    console.error(`Pipedrive: couldn't send note ${m.id}: ${e.message}`);
+  }
+}
+
+/** Send a document to its deal: an upload as a file, a link as a note with the link. */
+export async function pushFile(fileId) {
+  if (!pushEnabled()) return;
+  const f = db.prepare(`${FILE_SQL} AND f.id = ?`).get(fileId);
+  if (!f || f.pipedrive_id || f.pipedrive_note_id) return;
+  try {
+    if (f.url) {
+      const content = `${byLine(f)}<p>Linked document: <a href="${escapeHtml(f.url)}">${escapeHtml(f.original_name)}</a></p>`;
+      const { data } = await call('notes', {}, { method: 'POST', body: { content, deal_id: f.deal_id } });
+      db.prepare('UPDATE ticket_files SET pipedrive_note_id = ? WHERE id = ?').run(data.id, f.id);
+    } else {
+      const form = new FormData();
+      form.append('file', new Blob([fs.readFileSync(path.join(uploadDir, f.stored_name))], { type: f.mime_type || 'application/octet-stream' }), f.original_name);
+      form.append('deal_id', String(f.deal_id));
+      const { data } = await call('files', {}, { method: 'POST', body: form });
+      db.prepare('UPDATE ticket_files SET pipedrive_id = ? WHERE id = ?').run(data.id, f.id);
+    }
+  } catch (e) {
+    console.error(`Pipedrive: couldn't send document ${f.id}: ${e.message}`);
+  }
+}
+
+/** Delete a note or file in Pipedrive that was deleted in KIT. If Pipedrive can't be reached, it's retried at the next sync. */
+export async function deleteInPipedrive(kind, pipedriveId) {
+  if (!pushEnabled() || !pipedriveId) return;
+  db.prepare('INSERT OR IGNORE INTO pipedrive_deletes (kind, pipedrive_id) VALUES (?, ?)').run(kind, pipedriveId);
+  try {
+    await call(`${kind === 'file' ? 'files' : 'notes'}/${pipedriveId}`, {}, { method: 'DELETE' });
+    db.prepare('DELETE FROM pipedrive_deletes WHERE kind = ? AND pipedrive_id = ?').run(kind, pipedriveId);
+  } catch (e) {
+    console.error(`Pipedrive: couldn't delete ${kind} ${pipedriveId}: ${e.message}`);
+  }
+}
+
+/** Run a send without holding up the request that caused it. */
+export const inBackground = (fn) => { if (pushEnabled()) fn().catch((e) => console.error('Pipedrive:', e.message)); };
+
+/** Send everything that hasn't reached Pipedrive yet: new or edited notes, documents, and deletions. */
+async function pushPending() {
+  const sent = { notesSent: 0, documentsSent: 0 };
+  if (!pushEnabled()) return sent;
+  for (const d of db.prepare('SELECT * FROM pipedrive_deletes').all()) await deleteInPipedrive(d.kind, d.pipedrive_id);
+  for (const m of db.prepare(`${NOTE_SQL} AND (m.pipedrive_id IS NULL OR m.pipedrive_pending = 1)`).all()) {
+    await pushNote(m.id);
+    if (db.prepare('SELECT pipedrive_id IS NOT NULL AND pipedrive_pending = 0 AS ok FROM ticket_comments WHERE id = ?').get(m.id)?.ok) sent.notesSent += 1;
+  }
+  for (const f of db.prepare(`${FILE_SQL} AND f.pipedrive_id IS NULL AND f.pipedrive_note_id IS NULL`).all()) {
+    await pushFile(f.id);
+    if (db.prepare('SELECT COALESCE(pipedrive_id, pipedrive_note_id) IS NOT NULL AS ok FROM ticket_files WHERE id = ?').get(f.id)?.ok) sent.documentsSent += 1;
+  }
+  return sent;
+}
+
 // ---- The sync
 
 let status = { running: false };
-export const syncStatus = () => ({ ...status, configured: pipedriveConfigured(), last: json.parse(getSetting('pipedrive_last_sync'), null) });
+export const syncStatus = () => ({ ...status, configured: pipedriveConfigured(), sending: pushEnabled(), last: json.parse(getSetting('pipedrive_last_sync'), null) });
 
 /** Start a sync in the background (one at a time). `by` is the KIT user who asked, or null for the nightly run. */
 export function startSync(by = null) {
@@ -134,6 +231,9 @@ export function startSync(by = null) {
 /** Read everything from Pipedrive, then write it to KIT in one transaction. Returns what changed. */
 export async function syncNow(by = null) {
   const phase = (p) => { status.phase = p; };
+  // KIT's unsent notes and documents go first, so reading Pipedrive back sees them rather than undoing them.
+  phase('Sending KIT notes and documents');
+  const sent = await pushPending();
   phase('Reading Pipedrive');
   const [users, pipelines, stages, dealFields, deals, persons, activities, notes, files] = await Promise.all([
     all('users'), all('pipelines'), all('stages'), all('dealFields'), all('deals', { status: 'all_not_deleted' }),
@@ -142,7 +242,10 @@ export async function syncNow(by = null) {
 
   // Download deal files KIT doesn't have yet (images pasted into notes stay with the notes in Pipedrive).
   phase('Downloading files');
-  const known = new Set(db.prepare('SELECT pipedrive_id FROM main.ticket_files WHERE pipedrive_id IS NOT NULL').all().map((f) => f.pipedrive_id));
+  const known = new Set([
+    ...db.prepare('SELECT pipedrive_id FROM main.ticket_files WHERE pipedrive_id IS NOT NULL').all().map((f) => f.pipedrive_id),
+    ...db.prepare("SELECT pipedrive_id FROM pipedrive_deletes WHERE kind = 'file'").all().map((f) => f.pipedrive_id),
+  ]);
   const dealIds = new Set(deals.map((d) => d.id));
   const wanted = files.filter((f) => f.deal_id && dealIds.has(f.deal_id) && !f.inline_flag && f.active_flag !== false);
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -160,7 +263,11 @@ export async function syncNow(by = null) {
 
   phase('Saving to KIT');
   try {
-    return db.transaction(() => write({ users, pipelines, stages, dealFields, deals, persons, activities, notes, files: wanted, downloaded, by }))();
+    const result = db.transaction(() => write({ users, pipelines, stages, dealFields, deals, persons, activities, notes, files: wanted, downloaded, by }))();
+    // Tickets just matched to a deal may hold notes and documents written in KIT; send them too.
+    phase('Sending KIT notes and documents');
+    const after = await pushPending();
+    return { ...result, notesSent: sent.notesSent + after.notesSent, documentsSent: sent.documentsSent + after.documentsSent };
   } catch (e) {
     // Nothing was saved, so the files just downloaded aren't needed.
     downloaded.forEach((d) => fs.rmSync(path.join(uploadDir, d.stored), { force: true }));
@@ -379,13 +486,20 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
     });
   });
 
-  const noteByPd = db.prepare(onLiveTicket('ticket_comments'));
+  const noteByPd = db.prepare(`SELECT x.id, x.pipedrive_pending FROM main.ticket_comments x JOIN main.tickets t ON t.id = x.ticket_id
+    WHERE x.pipedrive_id = ? AND t.archive_set_id IS NULL`);
+  // Notes deleted in KIT, and the notes KIT made for linked documents, aren't brought back as notes.
+  const notNotes = new Set([
+    ...db.prepare("SELECT pipedrive_id FROM pipedrive_deletes WHERE kind = 'note'").all().map((x) => x.pipedrive_id),
+    ...db.prepare('SELECT pipedrive_note_id FROM main.ticket_files WHERE pipedrive_note_id IS NOT NULL').all().map((x) => x.pipedrive_note_id),
+  ]);
   notes.forEach((n) => {
     const ticketId = tickets.get(n.deal_id);
-    const body = htmlToText(n.content);
-    if (!ticketId || !body) { tally('notesSkipped'); return; }
+    const body = htmlToText(n.content).replace(FROM_KIT, '');
+    if (!ticketId || !body || notNotes.has(n.id)) { tally('notesSkipped'); return; }
     const row = noteByPd.get(n.id);
     const fields = { ticket_id: ticketId, body, pinned: n.pinned_to_deal_flag ? 1 : 0 };
+    if (row?.pipedrive_pending) return; // edited in KIT and not sent yet: KIT's version wins
     if (row) {
       db.prepare('UPDATE ticket_comments SET ticket_id = @ticket_id, body = @body, pinned = @pinned WHERE id = @id').run({ ...fields, id: row.id });
       tally('notesUpdated');
