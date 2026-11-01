@@ -766,8 +766,8 @@ addColumn('tickets', 'pipeline_id', 'INTEGER REFERENCES pipelines(id) ON DELETE 
 // person claims the account (sets a password) by activating with that email.
 addColumn('users', 'pending_activation', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('users', 'pipedrive_id', 'INTEGER');
-// KIT → Pipedrive: notes and documents written in KIT go to the deal too. pipedrive_pending marks a KIT edit (or pin)
-// that hasn't reached Pipedrive yet; pipedrive_note_id is the Pipedrive note a linked (not uploaded) document went to.
+// KIT → Pipedrive goes only when an admin sends it. pipedrive_pending marks a KIT edit (or pin) to a Pipedrive note that
+// hasn't been sent yet; pipedrive_note_id is the Pipedrive note a linked (not uploaded) document went to.
 addColumn('ticket_comments', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('ticket_files', 'pipedrive_note_id', 'INTEGER');
 db.exec(`
@@ -782,7 +782,7 @@ CREATE TABLE IF NOT EXISTS labels (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `);
-// A change to a Pipedrive deal's labels made in KIT that hasn't reached Pipedrive yet.
+// A change to a Pipedrive deal's labels made in KIT that hasn't been sent to Pipedrive yet.
 addColumn('tickets', 'labels_pending', 'INTEGER NOT NULL DEFAULT 0');
 db.exec(`
 -- What travel actually cost: one total per entry, per traveler, dated by when it was spent. No breakdown needed.
@@ -802,9 +802,9 @@ CREATE INDEX IF NOT EXISTS travel_actuals_date ON travel_actuals(spent_on);
 db.exec(`INSERT OR IGNORE INTO labels (name) SELECT DISTINCT j.value FROM tickets t, json_each(t.labels) j
   WHERE t.labels IS NOT NULL AND json_valid(t.labels) AND TRIM(j.value) != ''`);
 db.exec(`
--- Pipedrive notes and files deleted in KIT that Pipedrive hasn't deleted yet: retried each sync, and never imported again.
+-- Pipedrive notes, files and activities deleted in KIT: never imported again, and deleted in Pipedrive when an admin sends.
 CREATE TABLE IF NOT EXISTS pipedrive_deletes (
-  kind TEXT NOT NULL, -- note | file
+  kind TEXT NOT NULL, -- note | file | activity
   pipedrive_id INTEGER NOT NULL,
   PRIMARY KEY (kind, pipedrive_id)
 );
@@ -877,6 +877,116 @@ CREATE TABLE IF NOT EXISTS ticket_products (
 CREATE INDEX IF NOT EXISTS ticket_products_ticket ON ticket_products(ticket_id);
 `);
 addColumn('ticket_files', 'email_id', 'INTEGER REFERENCES ticket_emails(id) ON DELETE CASCADE');
+// What Pipedrive held at the last pull, for the fields KIT and Pipedrive share (JSON). A field whose KIT value differs is
+// a KIT change waiting to be sent; one whose Pipedrive value differs was changed in Pipedrive since.
+addColumn('tickets', 'pipedrive_snapshot', 'TEXT');
+addColumn('ticket_tasks', 'pipedrive_snapshot', 'TEXT');
+addColumn('pipedrive_deletes', 'deal_id', 'INTEGER'); // the deal it was on, so a send to some deals only takes theirs
+
+// ---- Activities are a ticket's priorities, in order: the top open one is the ticket's next step. A priority card on the
+// Weekly Priorities board is one activity placed in someone's week (its title, due date, checklist and completion are
+// kept in step with the activity), and an activity's checklist is its subtasks. Next steps and card notes were folded in.
+db.exec(`
+CREATE TABLE IF NOT EXISTS activity_subtasks (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES ticket_tasks(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  done_at TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS activity_subtasks_task ON activity_subtasks(task_id);
+CREATE INDEX IF NOT EXISTS ticket_tasks_order ON ticket_tasks(ticket_id, done, position);
+`);
+addColumn('priority_cards', 'activity_id', 'INTEGER REFERENCES ticket_tasks(id) ON DELETE SET NULL');
+addColumn('priority_cards', 'locked_rank', 'INTEGER'); // the activity's place on its ticket when the week's planning closed
+migrateToActivities();
+
+function migrateToActivities() {
+  const hasTable = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+  const steps = db.prepare('SELECT * FROM ticket_steps ORDER BY ticket_id, is_next DESC, position, id DESC').all();
+  const cards = db.prepare('SELECT * FROM priority_cards WHERE activity_id IS NULL ORDER BY week_start, id').all();
+  const notes = db.prepare('SELECT * FROM card_notes ORDER BY created_at, id').all();
+  if (!steps.length && !cards.length && !notes.length) return;
+  // Rows made from sample (or reset-archived) rows go with them.
+  const sample = hasTable('sample_rows');
+  const archived = hasTable('archived_rows');
+  const follow = (fromTbl, fromId, toTbl, toId) => {
+    if (sample) db.prepare('INSERT INTO sample_rows (tbl, row_id) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM sample_rows WHERE tbl = ? AND row_id = ?)').run(toTbl, toId, fromTbl, fromId);
+    if (archived) db.prepare('INSERT INTO archived_rows (set_id, tbl, row_id) SELECT set_id, ?, ? FROM archived_rows WHERE tbl = ? AND row_id = ?').run(toTbl, toId, fromTbl, fromId);
+  };
+  const forget = (tbl, id) => {
+    if (sample) db.prepare('DELETE FROM sample_rows WHERE tbl = ? AND row_id = ?').run(tbl, id);
+    if (archived) db.prepare('DELETE FROM archived_rows WHERE tbl = ? AND row_id = ?').run(tbl, id);
+  };
+  const addTask = db.prepare(`INSERT INTO ticket_tasks (ticket_id, text, activity_type, due_date, done, done_at, assignee_id, created_by, created_at, position)
+    VALUES (@ticket_id, @text, 'Task', @due_date, @done, @done_at, @assignee_id, @created_by, @created_at, 0)`);
+
+  db.transaction(() => {
+    // Next steps become the first activities on their ticket, the flagged one on top.
+    const touched = new Set();
+    const fromSteps = new Map(); // ticket id → its former steps' activity ids, in order
+    steps.forEach((s) => {
+      const id = addTask.run({ ticket_id: s.ticket_id, text: s.text, due_date: null, done: s.done, done_at: s.done_at, assignee_id: null, created_by: s.author_id, created_at: s.created_at }).lastInsertRowid;
+      follow('ticket_steps', s.id, 'ticket_tasks', id);
+      forget('ticket_steps', s.id);
+      touched.add(s.ticket_id);
+      fromSteps.set(s.ticket_id, [...(fromSteps.get(s.ticket_id) || []), id]);
+    });
+    db.prepare('DELETE FROM ticket_steps').run();
+
+    // Each priority card becomes an activity on its ticket, its checklist the activity's subtasks.
+    const firstAssignee = db.prepare('SELECT user_id FROM card_assignees WHERE card_id = ? ORDER BY position LIMIT 1');
+    const ticketTitle = db.prepare('SELECT opportunity_title FROM tickets WHERE id = ?');
+    const addSub = db.prepare('INSERT INTO activity_subtasks (task_id, text, done, done_at, position, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    cards.forEach((c) => {
+      const id = addTask.run({
+        ticket_id: c.ticket_id, text: c.title || ticketTitle.get(c.ticket_id)?.opportunity_title || 'Priority', due_date: c.due_date,
+        done: c.completed, done_at: c.completed ? c.updated_at : null, assignee_id: firstAssignee.get(c.id)?.user_id ?? null, created_by: c.created_by, created_at: c.created_at,
+      }).lastInsertRowid;
+      follow('priority_cards', c.id, 'ticket_tasks', id);
+      let list = [];
+      try { list = JSON.parse(c.checklist || '[]') || []; } catch { /* no checklist */ }
+      list.forEach((i, n) => {
+        const sub = addSub.run(id, String(i.text || ''), i.done ? 1 : 0, i.done ? c.updated_at : null, n, c.created_by, c.created_at).lastInsertRowid;
+        follow('priority_cards', c.id, 'activity_subtasks', sub);
+      });
+      db.prepare('UPDATE priority_cards SET activity_id = ? WHERE id = ?').run(id, c.id);
+      touched.add(c.ticket_id);
+    });
+    // Comments left on a priority card are now about its activity.
+    db.prepare(`UPDATE ticket_comments SET target_type = 'activity', target_id = (SELECT activity_id FROM priority_cards WHERE id = ticket_comments.target_id)
+      WHERE target_type = 'card' AND target_id IN (SELECT id FROM priority_cards WHERE activity_id IS NOT NULL)`).run();
+
+    // Card notes (status updates) become comments on the card's activity; comments under a note become its replies.
+    notes.forEach((n) => {
+      const c = db.prepare('SELECT ticket_id, activity_id FROM priority_cards WHERE id = ?').get(n.card_id);
+      if (!c) return;
+      const id = db.prepare(`INSERT INTO ticket_comments (ticket_id, card_id, kind, body, author_id, created_at, updated_at, target_type, target_id)
+        VALUES (?, ?, 'comment', ?, ?, ?, ?, 'activity', ?)`).run(c.ticket_id, n.card_id, n.body, n.author_id, n.created_at, n.updated_at, c.activity_id).lastInsertRowid;
+      follow('card_notes', n.id, 'ticket_comments', id);
+      forget('card_notes', n.id);
+      db.prepare("UPDATE ticket_comments SET parent_id = ?, kind = 'reply', target_type = NULL, target_id = NULL WHERE target_type = 'note' AND target_id = ? AND parent_id IS NULL").run(id, n.id);
+      db.prepare('UPDATE alerts SET comment_id = ?, note_id = NULL WHERE note_id = ?').run(id, n.id);
+      db.prepare("UPDATE work_log SET kind = 'comment', ref_id = ? WHERE kind = 'note' AND ref_id = ?").run(id, n.id);
+    });
+    db.prepare('DELETE FROM card_notes').run();
+
+    // Order each ticket touched: its former next steps as they were, then the other open activities soonest first, then
+    // the done ones, latest first.
+    const others = db.prepare(`SELECT id FROM ticket_tasks WHERE ticket_id = ? AND id NOT IN (SELECT value FROM json_each(?))
+      ORDER BY done, due_date IS NULL, due_date, CASE WHEN done THEN done_at END DESC, id`);
+    const isDone = db.prepare('SELECT done FROM ticket_tasks WHERE id = ?');
+    const setPos = db.prepare('UPDATE ticket_tasks SET position = ? WHERE id = ?');
+    touched.forEach((t) => {
+      const first = (fromSteps.get(t) || []).filter((id) => !isDone.get(id).done);
+      const rest = others.all(t, JSON.stringify(first)).map((k) => k.id);
+      [...first, ...rest].forEach((id, i) => setPos.run(i, id));
+    });
+  })();
+}
 
 const insertTeam = db.prepare('INSERT OR IGNORE INTO teams (name) VALUES (?)');
 TEAMS.forEach((t) => insertTeam.run(t));

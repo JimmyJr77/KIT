@@ -1,4 +1,4 @@
-import { CheckSquare } from 'lucide-react';
+import { CheckSquare, ArrowUp, ArrowDown } from 'lucide-react';
 import { fullName, initials, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 
@@ -11,10 +11,19 @@ export default function PriorityCard({ card, rank, usersById, overlay }) {
   const planned = !!card.is_planned;
   const done = card.checklist.filter((c) => c.done).length;
   const chip = 'h-5 rounded px-1.5 leading-5 whitespace-nowrap';
+  // Moved up or down its ticket's activity list since the week's planning closed.
+  const moved = card.locked_rank != null && card.rank != null && card.rank !== card.locked_rank;
+  const up = moved && card.rank < card.locked_rank;
   return (
-    <div className={`h-full cursor-pointer rounded-lg border border-l-4 p-3 text-sm shadow-sm transition hover:shadow-md ${
+    <div className={`relative h-full cursor-pointer rounded-lg border border-l-4 p-3 text-sm shadow-sm transition hover:shadow-md ${
       planned ? 'border-slate-200 border-l-brand-600 bg-white' : 'border-amber-200 border-l-amber-500 bg-amber-50'
-    } ${card.completed ? 'opacity-60' : ''} ${overlay ? 'w-64 rotate-2 shadow-xl' : ''}`}>
+    } ${moved ? 'ring-2 ring-orange-400 ring-offset-1' : ''} ${card.completed ? 'opacity-60' : ''} ${overlay ? 'w-64 rotate-2 shadow-xl' : ''}`}>
+      {moved && (
+        <span className="absolute -top-2.5 right-2 z-10 flex items-center gap-0.5 rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-sm"
+          title={`Moved on its ticket after planning closed: it was #${card.locked_rank} of the ticket’s activities and is now #${card.rank}${card.rank === 1 ? ', the next step' : ''}.`}>
+          {up ? <ArrowUp size={10} strokeWidth={3} /> : <ArrowDown size={10} strokeWidth={3} />} Ticket #{card.locked_rank} → #{card.rank}
+        </span>
+      )}
       <div className="flex h-5 items-center justify-between gap-2">
         <div className={`truncate leading-5 font-semibold ${card.completed ? 'line-through' : ''}`} title={card.opportunity_title}>{card.opportunity_title}</div>
         {rank && <span className={`shrink-0 rounded px-1.5 text-xs font-bold ${planned ? 'bg-brand-50 text-brand-700' : 'bg-amber-100 text-amber-800'}`}>#{rank}</span>}

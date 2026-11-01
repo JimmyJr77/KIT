@@ -8,6 +8,7 @@ import { LANES, daysToArchive } from '../lib/lanes.js';
 import { activityTimer, daysSince } from '../lib/activityTimer.js';
 import Avatar from '../components/Avatar.jsx';
 import { LabelList } from '../components/Labels.jsx';
+import NextStepBadge from '../components/NextStepBadge.jsx';
 
 const money = (n) => usd(n).replace('.00', '');
 const HINT = {
@@ -21,7 +22,7 @@ const HINT = {
  * Tickets as swim lanes: To-do, In work, Stale / waiting, Done. Drag a card to move it. Work tickets only move
  * when dragged; bid tickets move on their own unless locked (dragging one locks it where it lands).
  */
-export default function TicketLanes({ tickets, onOpen, onChanged }) {
+export default function TicketLanes({ tickets, onOpen, onOpenStep, onChanged }) {
   const [board, setBoard] = useState(tickets);
   const [dragId, setDragId] = useState(null);
   const [error, setError] = useState('');
@@ -64,7 +65,7 @@ export default function TicketLanes({ tickets, onOpen, onChanged }) {
         <div className="grid min-h-96 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           {LANES.map((l) => (
             <Lane key={l.key} lane={l} tickets={live.filter((t) => t.lane === l.key)} dragId={dragId} now={now}
-              onOpen={onOpen} onLock={toggleLock} onArchive={archive} />
+              onOpen={onOpen} onOpenStep={onOpenStep} onLock={toggleLock} onArchive={archive} />
           ))}
         </div>
         <DragOverlay>{dragging && <LaneCard ticket={dragging} now={now} overlay />}</DragOverlay>
@@ -73,7 +74,7 @@ export default function TicketLanes({ tickets, onOpen, onChanged }) {
   );
 }
 
-function Lane({ lane, tickets, dragId, now, onOpen, onLock, onArchive }) {
+function Lane({ lane, tickets, dragId, now, onOpen, onOpenStep, onLock, onArchive }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane.key });
   return (
     <section ref={setNodeRef} aria-label={`${lane.label} lane`}
@@ -87,7 +88,7 @@ function Lane({ lane, tickets, dragId, now, onOpen, onLock, onArchive }) {
       </header>
       <div className="flex flex-1 flex-col gap-2 p-2">
         {tickets.map((t) => (
-          <DraggableCard key={t.id} ticket={t} hidden={dragId === t.id} now={now} onOpen={onOpen} onLock={onLock} onArchive={onArchive} />
+          <DraggableCard key={t.id} ticket={t} hidden={dragId === t.id} now={now} onOpen={onOpen} onOpenStep={onOpenStep} onLock={onLock} onArchive={onArchive} />
         ))}
         {!tickets.length && (
           <p className={`rounded-lg border-2 border-dashed px-3 py-6 text-center text-xs ${isOver ? 'border-brand-500 text-brand-600' : 'border-slate-200 text-slate-400'}`}>
@@ -108,7 +109,7 @@ function DraggableCard({ ticket, hidden, ...rest }) {
   );
 }
 
-function LaneCard({ ticket: t, now, overlay, onLock, onArchive }) {
+function LaneCard({ ticket: t, now, overlay, onOpenStep, onLock, onArchive }) {
   const owner = t.owner_first_name ? { id: t.created_by, first_name: t.owner_first_name, last_name: t.owner_last_name } : null;
   const isBid = t.ticket_type !== 'work';
   // In work and Stale share one running clock: the same activity bar as on BD Pipeline.
@@ -118,8 +119,9 @@ function LaneCard({ ticket: t, now, overlay, onLock, onArchive }) {
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
 
   return (
-    <div className={`relative cursor-grab overflow-hidden rounded-lg border bg-white p-3 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${
+    <div className={`relative cursor-grab overflow-hidden rounded-lg border bg-white p-3 pr-11 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${
       t.lane_locked ? 'border-brand-300' : 'border-slate-200'} ${overlay ? 'w-72 rotate-2 shadow-xl' : ''}`}>
+      <NextStepBadge step={t.next_step} onOpen={() => onOpenStep?.(t)} className="absolute top-1/2 right-2.5 -translate-y-1/2" />
       <div className="flex items-start justify-between gap-2">
         <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
         <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${isBid ? 'bg-brand-50 text-brand-700' : 'bg-slate-200 text-slate-700'}`}>{isBid ? 'Bid' : 'Work'}</span>

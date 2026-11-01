@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, BriefcaseBusiness, Ticket, Trash2, UserPlus, AlertTriangle, Landmark, ReceiptText, Plus, MapPin } from 'lucide-react';
+import { Search, BriefcaseBusiness, Ticket, Trash2, UserPlus, AlertTriangle, Landmark, ReceiptText, Plus, MapPin, LayoutGrid, Table2, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullName, shortDate, parseUtc, todayIso } from '../lib/format.js';
@@ -21,6 +21,9 @@ export default function Delivery() {
   const [q, setQ] = useState('');
   const [programs, setPrograms] = useState(null);
   const [openId, setOpenId] = useState(null);
+  // Tickets (cards) or a table; the choice is remembered on this browser.
+  const [view, setViewState] = useState(() => { try { return localStorage.getItem('kit.delivery.view') || 'cards'; } catch { return 'cards'; } });
+  const setView = (v) => { setViewState(v); try { localStorage.setItem('kit.delivery.view', v); } catch { /* not saved */ } };
 
   const load = () => api.get(`/delivery?status=${status}`).then((d) => setPrograms(d.programs));
   useEffect(() => { load(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -53,9 +56,19 @@ export default function Delivery() {
         </div>
       </PageHeader>
 
-      <div className="relative max-w-md">
-        <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
-        <input className="input pl-9" placeholder="Search by contract, customer, or person…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative w-full max-w-md">
+          <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
+          <input className="input pl-9" placeholder="Search by contract, customer, or person…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <div className="flex h-[38px] rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="radiogroup" aria-label="View">
+          {[['cards', 'Tickets', LayoutGrid], ['table', 'Table', Table2]].map(([k, l, Icon]) => (
+            <button key={k} type="button" role="radio" aria-checked={view === k} onClick={() => setView(k)} title={l}
+              className={`flex items-center gap-1.5 rounded px-2.5 ${view === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>
+              <Icon size={15} /> {l}
+            </button>
+          ))}
+        </div>
       </div>
 
       {programs && !shown.length && (
@@ -65,7 +78,9 @@ export default function Delivery() {
         </div>
       )}
 
-      <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(20rem,1fr))]">
+      {view === 'table' && shown.length > 0 && <ProgramTable programs={shown} openId={openId} onOpen={setOpenId} />}
+
+      {view === 'cards' && <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(20rem,1fr))]">
         {shown.map((p) => (
           <button key={p.id} type="button" onClick={() => setOpenId(p.id)}
             className={`flex flex-col rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-brand-500 hover:shadow-md ${openId === p.id ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
@@ -94,7 +109,7 @@ export default function Delivery() {
             </div>
           </button>
         ))}
-      </div>
+      </div>}
 
       {open && (
         <ProgramPanel key={open.id} program={open} users={users.data?.users || []} teams={teams.data?.teams || []}
@@ -223,6 +238,64 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
 }
 
 /** How much of a contract's value is funded. */
+const SORTS = {
+  name: (p) => p.name.toLowerCase(), customer: (p) => (p.organization || '~').toLowerCase(), value: (p) => p.value ?? -1,
+  funded: (p) => (p.value ? p.funded / p.value : -1), billed: (p) => p.billed, won: (p) => p.awarded_at || '',
+  pm: (p) => (p.program_manager ? `${p.program_manager.last_name} ${p.program_manager.first_name}` : '~').toLowerCase(), team: (p) => p.team.length,
+  status: (p) => p.status,
+};
+
+/** The contracts as a sortable table. Selecting a row opens it in the side pane, as a card does. */
+function ProgramTable({ programs, openId, onOpen }) {
+  const [sort, setSort] = useState({ key: 'won', dir: 'desc' });
+  const get = SORTS[sort.key];
+  const sign = sort.dir === 'asc' ? 1 : -1;
+  const rows = [...programs].sort((a, b) => { const x = get(a), y = get(b); return x < y ? -sign : x > y ? sign : 0; });
+  const sortBy = (key) => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 'asc' ? 'desc' : 'asc') : ['name', 'customer', 'pm', 'status'].includes(key) ? 'asc' : 'desc' }));
+  const header = (key, label, className = '') => (
+    <th className={`px-4 py-3 ${className}`} aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+      <button type="button" className="inline-flex items-center gap-1 uppercase hover:text-slate-800" onClick={() => sortBy(key)}>
+        {label}
+        {sort.key === key ? (sort.dir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />) : <ChevronsUpDown size={12} className="text-slate-300" />}
+      </button>
+    </th>
+  );
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+      <table className="w-full min-w-[60rem] text-sm">
+        <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
+          <tr>
+            {header('name', 'Contract')}{header('customer', 'Customer')}{header('value', 'Value', 'text-right')}{header('funded', 'Funded', 'text-right')}
+            {header('billed', 'Billed', 'text-right')}{header('won', 'Won')}{header('pm', 'Program Manager')}{header('team', 'Team', 'text-right')}{header('status', 'Status')}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((p) => (
+            <tr key={p.id} onClick={() => onOpen(p.id)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onOpen(p.id)}
+              className={`cursor-pointer border-t border-slate-100 hover:bg-brand-50/40 focus:bg-brand-50/60 focus:outline-none ${openId === p.id ? 'bg-brand-50/60' : ''}`}>
+              <td className="px-4 py-3 font-medium text-slate-800">{p.name}</td>
+              <td className="px-4 py-3 text-slate-600">{[p.organization, p.account_type].filter(Boolean).join(' · ') || '—'}</td>
+              <td className="px-4 py-3 text-right tabular-nums">{p.value != null ? money(Math.round(p.value)) : '—'}</td>
+              <td className="px-4 py-3 text-right text-slate-600 tabular-nums" title={p.value ? `${money(p.funded)} funded` : undefined}>
+                {p.value ? `${Math.min(100, Math.round((p.funded / p.value) * 100))}%` : '—'}
+              </td>
+              <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{money(Math.round(p.billed))}</td>
+              <td className="px-4 py-3 whitespace-nowrap text-slate-500">{wonOn(p.awarded_at)}</td>
+              <td className="px-4 py-3">
+                {p.program_manager
+                  ? <span className="flex items-center gap-1.5 text-slate-700"><Avatar user={p.program_manager} size="xs" /> {fullName(p.program_manager)}</span>
+                  : <span className="flex items-center gap-1 text-xs font-medium text-amber-700"><AlertTriangle size={12} /> Needs a PM</span>}
+              </td>
+              <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{p.team.length}</td>
+              <td className="px-4 py-3"><span className={`rounded px-1.5 py-0.5 text-xs font-medium ${p.status === 'Complete' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-50 text-emerald-700'}`}>{p.status}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function FundedBar({ program: p }) {
   const pct = Math.min(100, Math.round((p.funded / p.value) * 100));
   return (

@@ -1,7 +1,10 @@
-// Pipedrive ↔ KIT. Pipedrive is the source of truth for what it holds, so each sync updates the records it brought in
-// before (matched by pipedrive_id) and adds new ones. KIT's own work on a ticket (priorities, strategy, assessments)
-// is never touched. The other way, notes and documents added in KIT to a ticket that came from Pipedrive are sent to
-// that deal as they're saved (and any that didn't make it are retried at each sync).
+// Pipedrive ↔ KIT. Pipedrive → KIT (a pull) runs every night and whenever someone asks: admins pull everything, team
+// leads their teams' deals, members their own. Each pull updates the records it brought in before (matched by
+// pipedrive_id) and adds new ones. KIT's own work on a ticket (priorities, strategy, assessments) is never touched, and a
+// shared field changed in KIT keeps KIT's value until it's sent, unless Pipedrive changed it too (then Pipedrive wins).
+//
+// KIT → Pipedrive happens only when an admin sends it, choosing what goes (pipedriveSend.js). Nothing in KIT sends on
+// its own: edits made in KIT are only marked as waiting to be sent.
 //
 // What comes over: pipelines and their stages (KIT makes a pipeline to match each one), deals as bid tickets (closed
 // ones already archived, dated when they closed), people as CRM contacts, and each deal's activities, notes and files.
@@ -10,22 +13,23 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, json, getSetting, setSetting, TERRITORY_RENAMES } from '../db.js';
+import { mirrorCards } from '../activities.js';
 import { hashPassword } from '../auth.js';
 import '../sample/registry.js'; // archived_rows, used to skip records archived by a full reset
 
 const API = process.env.PIPEDRIVE_API_URL || 'https://api.pipedrive.com/v1';
 const apiKey = () => process.env.PIPEDRIVE_API_KEY;
 export const pipedriveConfigured = () => !!apiKey();
-// Sending to Pipedrive writes to the company's real deals, so it's on in production only, unless PIPEDRIVE_PUSH=1
-// (so testing KIT locally never posts into Pipedrive).
-export const pushEnabled = () => pipedriveConfigured() && (process.env.NODE_ENV === 'production' || process.env.PIPEDRIVE_PUSH === '1');
+// Sending writes to the company's real deals, so a server may send only in production, or with PIPEDRIVE_PUSH=1 (so
+// testing KIT locally never posts into Pipedrive). Even then, only an admin's send does.
+export const sendingAllowed = () => pipedriveConfigured() && (process.env.NODE_ENV === 'production' || process.env.PIPEDRIVE_PUSH === '1');
 // Pipedrive keeps activity times in UTC; KIT shows them in the team's time zone.
 const TIME_ZONE = process.env.PIPEDRIVE_TIME_ZONE || 'America/New_York';
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
 
 // The "Account" deal field holds the territory: each of its options is a KIT territory of the same name, except N/A (none).
 const NO_ACCOUNT = 'N/A';
-const ACTIVITY_TYPES = { call: 'Call', meeting: 'Meeting', task: 'Task', deadline: 'Deadline', email: 'Email', lunch: 'Lunch' };
+export const ACTIVITY_TYPES = { call: 'Call', meeting: 'Meeting', task: 'Task', deadline: 'Deadline', email: 'Email', lunch: 'Lunch' };
 const OWNER_FIELD = 'Pipedrive owner';
 const MIME = { '.pdf': 'application/pdf', '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xls': 'application/vnd.ms-excel', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.ppt': 'application/vnd.ms-powerpoint',
@@ -36,7 +40,7 @@ const MIME = { '.pdf': 'application/pdf', '.doc': 'application/msword', '.docx':
 
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
-async function call(p, query = {}, { raw = false, method = 'GET', body, v2 = false } = {}) {
+export async function call(p, query = {}, { raw = false, method = 'GET', body, v2 = false } = {}) {
   const u = new URL(`${v2 ? API.replace(/\/v1$/, '/api/v2') : API}/${p}`);
   Object.entries({ ...query, api_token: apiKey() }).forEach(([k, v]) => u.searchParams.set(k, v));
   const init = { method };
@@ -53,7 +57,7 @@ async function call(p, query = {}, { raw = false, method = 'GET', body, v2 = fal
   }
 }
 
-async function all(p, query = {}) {
+export async function all(p, query = {}) {
   let out = [];
   for (let start = 0; ;) {
     const j = await call(p, { ...query, start, limit: 500 });
@@ -77,7 +81,7 @@ export function htmlToText(html) {
 }
 
 /** A UTC date and time from Pipedrive as { date, time } in TIME_ZONE. */
-function localDateTime(date, time) {
+export function localDateTime(date, time) {
   if (!date) return { date: null, time: null };
   if (!time) return { date, time: null };
   const d = new Date(`${date}T${time}:00Z`);
@@ -88,7 +92,7 @@ function localDateTime(date, time) {
 }
 
 const primary = (list) => (Array.isArray(list) ? (list.find((x) => x.primary) || list[0])?.value : list) || null;
-const idOf = (v) => (v && typeof v === 'object' ? v.value ?? v.id : v) ?? null;
+export const idOf = (v) => (v && typeof v === 'object' ? v.value ?? v.id : v) ?? null;
 const later = (a, b) => (!a ? b : !b ? a : a > b ? a : b);
 const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -112,149 +116,135 @@ function fieldText(field, value) {
   return String(value);
 }
 
-// ---- KIT → Pipedrive: notes and documents
+// A note written in KIT says who wrote it, since Pipedrive shows everything sent with the API key as its owner's. A pull
+// takes the line off again.
+export const FROM_KIT = /^From KIT, by [^\n]*\n+/;
 
-// What goes to the deal as a note: comments on the ticket itself (not replies, and not ones attached to a priority,
-// document or email, which Pipedrive has nowhere to put), and Pipedrive notes edited or pinned in KIT.
-const NOTE_SQL = `SELECT m.*, t.pipedrive_id AS deal_id, u.first_name, u.last_name FROM ticket_comments m
-  JOIN tickets t ON t.id = m.ticket_id LEFT JOIN users u ON u.id = m.author_id
-  WHERE t.pipedrive_id IS NOT NULL AND m.parent_id IS NULL AND m.card_id IS NULL AND m.target_type IS NULL AND m.kind IN ('comment', 'note')`;
-const FILE_SQL = `SELECT f.*, t.pipedrive_id AS deal_id, u.first_name, u.last_name FROM ticket_files f
-  JOIN tickets t ON t.id = f.ticket_id LEFT JOIN users u ON u.id = f.uploaded_by
-  WHERE t.pipedrive_id IS NOT NULL AND f.email_id IS NULL`;
-// A note written in KIT says who wrote it, since Pipedrive shows everything sent with the API key as its owner's.
-const FROM_KIT = /^From KIT, by [^\n]*\n+/;
-const escapeHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const paragraphs = (t) => String(t).split(/\n{2,}/).map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
-const byLine = (r) => `<p><i>From KIT, by ${escapeHtml(`${r.first_name || ''} ${r.last_name || ''}`.trim() || 'someone')}</i></p>`;
+// ---- Changes on both sides
 
-/** Send a note (new, edited or pinned) to its deal. Quietly does nothing if it doesn't belong in Pipedrive. */
-export async function pushNote(commentId) {
-  if (!pushEnabled()) return;
-  const m = db.prepare(`${NOTE_SQL} AND m.id = ?`).get(commentId);
-  if (!m || (m.pipedrive_id && !m.pipedrive_pending)) return;
-  // Notes that came from Pipedrive keep their own wording; KIT's say who wrote them.
-  const content = `${m.kind === 'comment' ? byLine(m) : ''}${paragraphs(m.body)}`;
-  const fields = { content, pinned_to_deal_flag: m.pinned ? 1 : 0 };
-  try {
-    if (m.pipedrive_id) await call(`notes/${m.pipedrive_id}`, {}, { method: 'PUT', body: fields });
-    else {
-      const { data } = await call('notes', {}, { method: 'POST', body: { ...fields, deal_id: m.deal_id } });
-      db.prepare('UPDATE ticket_comments SET pipedrive_id = ? WHERE id = ?').run(data.id, m.id);
-    }
-    db.prepare('UPDATE ticket_comments SET pipedrive_pending = 0 WHERE id = ?').run(m.id);
-  } catch (e) {
-    // Left as it is, it's sent again at the next sync.
-    console.error(`Pipedrive: couldn't send note ${m.id}: ${e.message}`);
-  }
+// The fields a ticket shares with its deal, and an activity with Pipedrive's, as KIT names them. Each record from
+// Pipedrive keeps a snapshot of these as Pipedrive had them at the last pull.
+export const DEAL_TRACKED = ['opportunity_title', 'value', 'pipeline_status', 'lost_reason', 'probability', 'projected_win_date', 'bd_director_id', 'territory_id'];
+export const TASK_TRACKED = ['text', 'activity_type', 'due_date', 'due_time', 'duration', 'assignee_id', 'location', 'note', 'done'];
+export const same = (a, b) => String(a ?? '') === String(b ?? '');
+export const snapshotOf = (view, keys) => json.str(Object.fromEntries(keys.map((k) => [k, view[k] ?? null])));
+/** The shared fields changed in KIT since the last pull (none if it has no snapshot yet). */
+export function kitChanges(row, keys) {
+  const snap = json.parse(row.pipedrive_snapshot, null);
+  return snap ? keys.filter((k) => !same(row[k], snap[k])) : [];
+}
+/** Pipedrive's values, except a field KIT changed and Pipedrive didn't: that keeps KIT's until it's sent. */
+function merged(row, view, keys) {
+  const snap = json.parse(row?.pipedrive_snapshot, null);
+  if (!snap) return view;
+  return Object.fromEntries(Object.entries(view).map(([k, v]) => [k, keys.includes(k) && !same(row[k], snap[k]) && same(v, snap[k]) ? row[k] : v]));
 }
 
-/** Send a document to its deal: an upload as a file, a link as a note with the link. */
-export async function pushFile(fileId) {
-  if (!pushEnabled()) return;
-  const f = db.prepare(`${FILE_SQL} AND f.id = ?`).get(fileId);
-  if (!f || f.pipedrive_id || f.pipedrive_note_id) return;
-  try {
-    if (f.url) {
-      const content = `${byLine(f)}<p>Linked document: <a href="${escapeHtml(f.url)}">${escapeHtml(f.original_name)}</a></p>`;
-      const { data } = await call('notes', {}, { method: 'POST', body: { content, deal_id: f.deal_id } });
-      db.prepare('UPDATE ticket_files SET pipedrive_note_id = ? WHERE id = ?').run(data.id, f.id);
-    } else {
-      const form = new FormData();
-      form.append('file', new Blob([fs.readFileSync(path.join(uploadDir, f.stored_name))], { type: f.mime_type || 'application/octet-stream' }), f.original_name);
-      form.append('deal_id', String(f.deal_id));
-      const { data } = await call('files', {}, { method: 'POST', body: form });
-      db.prepare('UPDATE ticket_files SET pipedrive_id = ? WHERE id = ?').run(data.id, f.id);
-    }
-  } catch (e) {
-    console.error(`Pipedrive: couldn't send document ${f.id}: ${e.message}`);
-  }
+/** A Pipedrive deal's shared fields in KIT's terms. `lk` finds a stage's name, a user's KIT account and the territory. */
+export function dealView(d, lk) {
+  return {
+    opportunity_title: d.title || `Pipedrive deal ${d.id}`, value: d.value ?? null,
+    pipeline_status: d.status === 'won' ? 'Awarded' : d.status === 'lost' ? 'Lost' : lk.stageName(d.stage_id) || null,
+    lost_reason: d.status === 'lost' ? d.lost_reason || null : null, probability: d.probability ?? null,
+    projected_win_date: d.expected_close_date || null, bd_director_id: lk.owner(d.user_id), territory_id: lk.territory(d),
+  };
 }
 
-/** Delete a note or file in Pipedrive that was deleted in KIT. If Pipedrive can't be reached, it's retried at the next sync. */
-export async function deleteInPipedrive(kind, pipedriveId) {
-  if (!pushEnabled() || !pipedriveId) return;
-  db.prepare('INSERT OR IGNORE INTO pipedrive_deletes (kind, pipedrive_id) VALUES (?, ?)').run(kind, pipedriveId);
-  try {
-    await call(`${kind === 'file' ? 'files' : 'notes'}/${pipedriveId}`, {}, { method: 'DELETE' });
-    db.prepare('DELETE FROM pipedrive_deletes WHERE kind = ? AND pipedrive_id = ?').run(kind, pipedriveId);
-  } catch (e) {
-    console.error(`Pipedrive: couldn't delete ${kind} ${pipedriveId}: ${e.message}`);
-  }
+/** A Pipedrive activity's shared fields in KIT's terms. */
+export function activityView(a, owner) {
+  const when = localDateTime(a.due_date, a.due_time);
+  return {
+    text: a.subject || a.type_name || 'Activity', activity_type: ACTIVITY_TYPES[a.type] || a.type_name || null,
+    due_date: when.date, due_time: when.time, duration: a.duration || null, assignee_id: owner(a.assigned_to_user_id || a.user_id),
+    location: a.location || null, note: htmlToText(a.note) || null, done: a.done ? 1 : 0,
+  };
 }
 
-/**
- * Send a ticket's tags to its deal. Only Pipedrive's own labels go; tags made in KIT stay in KIT (adding one to
- * Pipedrive would change the label list for the whole company).
- */
-export async function pushLabels(ticketId) {
-  if (!pushEnabled()) return;
-  const t = db.prepare('SELECT id, pipedrive_id, labels, labels_pending FROM tickets WHERE id = ?').get(ticketId);
-  if (!t?.pipedrive_id || !t.labels_pending) return;
-  const ids = db.prepare(`SELECT pipedrive_id FROM labels WHERE pipedrive_id IS NOT NULL AND name IN (SELECT value FROM json_each(?))`)
-    .all(t.labels || '[]').map((l) => l.pipedrive_id);
-  try {
-    await call(`deals/${t.pipedrive_id}`, {}, { method: 'PATCH', body: { label_ids: ids }, v2: true });
-    db.prepare('UPDATE tickets SET labels_pending = 0 WHERE id = ?').run(t.id);
-  } catch (e) {
-    console.error(`Pipedrive: couldn't send tags for ticket ${t.id}: ${e.message}`);
-  }
+/** Mark a Pipedrive record deleted in KIT: it isn't imported again, and an admin's send deletes it in Pipedrive. */
+export function queueDelete(kind, pipedriveId, dealId = null) {
+  if (pipedriveId) db.prepare('INSERT OR IGNORE INTO pipedrive_deletes (kind, pipedrive_id, deal_id) VALUES (?, ?, ?)').run(kind, pipedriveId, dealId);
 }
 
-/** Run a send without holding up the request that caused it. */
-export const inBackground = (fn) => { if (pushEnabled()) fn().catch((e) => console.error('Pipedrive:', e.message)); };
-
-/** Send everything that hasn't reached Pipedrive yet: new or edited notes, documents, and deletions. */
-async function pushPending() {
-  const sent = { notesSent: 0, documentsSent: 0 };
-  if (!pushEnabled()) return sent;
-  for (const d of db.prepare('SELECT * FROM pipedrive_deletes').all()) await deleteInPipedrive(d.kind, d.pipedrive_id);
-  for (const m of db.prepare(`${NOTE_SQL} AND (m.pipedrive_id IS NULL OR m.pipedrive_pending = 1)`).all()) {
-    await pushNote(m.id);
-    if (db.prepare('SELECT pipedrive_id IS NOT NULL AND pipedrive_pending = 0 AS ok FROM ticket_comments WHERE id = ?').get(m.id)?.ok) sent.notesSent += 1;
-  }
-  for (const t of db.prepare('SELECT id FROM tickets WHERE labels_pending = 1 AND pipedrive_id IS NOT NULL').all()) await pushLabels(t.id);
-  for (const f of db.prepare(`${FILE_SQL} AND f.pipedrive_id IS NULL AND f.pipedrive_note_id IS NULL`).all()) {
-    await pushFile(f.id);
-    if (db.prepare('SELECT COALESCE(pipedrive_id, pipedrive_note_id) IS NOT NULL AS ok FROM ticket_files WHERE id = ?').get(f.id)?.ok) sent.documentsSent += 1;
-  }
-  return sent;
-}
-
-// ---- The sync
+// ---- One job at a time: a pull or a send
 
 let status = { running: false };
-export const syncStatus = () => ({ ...status, configured: pipedriveConfigured(), sending: pushEnabled(), last: json.parse(getSetting('pipedrive_last_sync'), null) });
+export const syncStatus = () => ({ ...status, configured: pipedriveConfigured(), sending: sendingAllowed() });
 
-/** Start a sync in the background (one at a time). `by` is the KIT user who asked, or null for the nightly run. */
-export function startSync(by = null) {
-  if (!pipedriveConfigured()) throw new Error('Add PIPEDRIVE_API_KEY to the server settings to sync with Pipedrive.');
-  if (status.running) throw new Error('A Pipedrive sync is already running.');
-  status = { running: true, phase: 'Reading Pipedrive', started_at: new Date().toISOString() };
-  syncNow(by)
-    .then((result) => {
-      const last = { at: new Date().toISOString(), by: by?.name || null, ok: true, result };
-      setSetting('pipedrive_last_sync', json.str(last));
-      status = { running: false };
-    })
-    .catch((e) => {
-      console.error('Pipedrive sync:', e);
-      setSetting('pipedrive_last_sync', json.str({ at: new Date().toISOString(), by: by?.name || null, ok: false, error: e.message }));
-      status = { running: false };
-    });
+/** Run `work(phase)` in the background; `done(result, error)` records how it went. Throws if one is already running. */
+export function runJob(label, work, done) {
+  if (!pipedriveConfigured()) throw new Error('Add PIPEDRIVE_API_KEY to the server settings to use Pipedrive.');
+  if (status.running) throw new Error(`Pipedrive is busy with a ${status.label}. Try again in a minute.`);
+  status = { running: true, label, phase: 'Starting', started_at: new Date().toISOString() };
+  const phase = (p) => { status.phase = p; };
+  Promise.resolve().then(() => work(phase))
+    .then((result) => done(result, null), (e) => { console.error(`Pipedrive ${label}:`, e); done(null, e); })
+    .finally(() => { status = { running: false }; });
 }
 
-/** Read everything from Pipedrive, then write it to KIT in one transaction. Returns what changed. */
-export async function syncNow(by = null) {
-  const phase = (p) => { status.phase = p; };
-  // KIT's unsent notes and documents go first, so reading Pipedrive back sees them rather than undoing them.
-  phase('Sending KIT notes and documents');
-  const sent = await pushPending();
+// ---- Pulls
+
+/**
+ * What a pull covers: { kind: 'all' }, or the deals owned by some KIT users: { kind: 'team' | 'mine', userIds }.
+ * `by` is who asked ({ id, name }), or null for the nightly pull.
+ */
+export function startPull(scope, by = null) {
+  const key = scope.kind === 'all' ? 'pipedrive_last_sync' : `pipedrive_last_pull_${by.id}`;
+  const label = scope.kind === 'all' ? 'full pull' : scope.kind === 'team' ? `team pull for ${by.name}` : `pull for ${by.name}`;
+  runJob(label, (phase) => pull(scope, phase), (result, e) => setSetting(key, json.str({
+    at: new Date().toISOString(), by: by?.name || null, scope: scope.kind, ok: !e, ...(e ? { error: e.message } : { result }),
+  })));
+}
+export const lastPull = (key) => json.parse(getSetting(key), null);
+
+/** The Pipedrive user ids of these KIT users, by the link a pull made or, failing that, by email. */
+function pipedriveUsers(userIds, users) {
+  const byEmail = new Map(users.map((u) => [String(u.email || '').toLowerCase(), u.id]));
+  return [...new Set(userIds.map((id) => {
+    const u = db.prepare('SELECT pipedrive_id, email FROM main.users WHERE id = ?').get(id);
+    return u?.pipedrive_id || byEmail.get(String(u?.email || '').toLowerCase()) || null;
+  }).filter(Boolean))];
+}
+
+// A few deals are cheaper read one by one; past this many, reading everything and keeping theirs takes fewer requests.
+const PER_DEAL_LIMIT = 100;
+
+async function everything() {
+  const [persons, activities, notes, files] = await Promise.all([all('persons'), all('activities', { user_id: 0 }), all('notes'), all('files')]);
+  return { persons, activities, notes, files };
+}
+
+/** The people, activities, notes and files of just these deals. */
+async function dealExtras(deals, phase) {
+  if (deals.length > PER_DEAL_LIMIT) return everything();
+  const persons = new Map();
+  const out = { activities: [], notes: [], files: [] };
+  for (const [i, d] of deals.entries()) {
+    phase(`Reading deal ${i + 1} of ${deals.length}`);
+    const [p, a, n, f] = await Promise.all([all(`deals/${d.id}/persons`), all(`deals/${d.id}/activities`), all('notes', { deal_id: d.id }), all(`deals/${d.id}/files`)]);
+    p.forEach((x) => persons.set(x.id, x));
+    out.activities.push(...a); out.notes.push(...n); out.files.push(...f);
+  }
+  return { ...out, persons: [...persons.values()] };
+}
+
+/** Read from Pipedrive, then write it to KIT in one transaction. Returns what changed. */
+async function pull(scope, phase) {
   phase('Reading Pipedrive');
-  const [users, pipelines, stages, dealFields, deals, persons, activities, notes, files] = await Promise.all([
-    all('users'), all('pipelines'), all('stages'), all('dealFields'), all('deals', { status: 'all_not_deleted' }),
-    all('persons'), all('activities', { user_id: 0 }), all('notes'), all('files'),
-  ]);
+  const [users, pipelines, stages, dealFields] = await Promise.all([all('users'), all('pipelines'), all('stages'), all('dealFields')]);
+  let deals;
+  let extras;
+  if (scope.kind === 'all') {
+    [deals, extras] = await Promise.all([all('deals', { status: 'all_not_deleted' }), everything()]);
+  } else {
+    const owners = pipedriveUsers(scope.userIds, users);
+    if (!owners.length) {
+      throw new Error(scope.kind === 'mine' ? 'Your KIT email doesn’t match a Pipedrive user, so there are no deals of yours to pull.'
+        : 'No one on your team has a Pipedrive user with the same email as in KIT.');
+    }
+    deals = (await Promise.all(owners.map((id) => all('deals', { user_id: id, status: 'all_not_deleted' })))).flat();
+    extras = await dealExtras(deals, phase);
+  }
+  const { persons, activities, notes, files } = extras;
 
   // Download deal files KIT doesn't have yet (images pasted into notes stay with the notes in Pipedrive).
   phase('Downloading files');
@@ -279,11 +269,10 @@ export async function syncNow(by = null) {
 
   phase('Saving to KIT');
   try {
-    const result = db.transaction(() => write({ users, pipelines, stages, dealFields, deals, persons, activities, notes, files: wanted, downloaded, by }))();
-    // Tickets just matched to a deal may hold notes and documents written in KIT; send them too.
-    phase('Sending KIT notes and documents');
-    const after = await pushPending();
-    return { ...result, notesSent: sent.notesSent + after.notesSent, documentsSent: sent.documentsSent + after.documentsSent };
+    return db.transaction(() => write({
+      users, pipelines, stages, dealFields, deals, persons,
+      activities: activities.filter((a) => dealIds.has(a.deal_id)), notes: notes.filter((n) => dealIds.has(n.deal_id)), files: wanted, downloaded,
+    }))();
   } catch (e) {
     // Nothing was saved, so the files just downloaded aren't needed.
     downloaded.forEach((d) => fs.rmSync(path.join(uploadDir, d.stored), { force: true }));
@@ -418,34 +407,40 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
   const lastHistory = db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM ticket_history WHERE ticket_id = ?');
   const dateHistory = db.prepare('UPDATE ticket_history SET changed_at = ? WHERE ticket_id = ? AND id > ?');
   const tickets = new Map();
+  const lookups = {
+    stageName: (id) => stageNames.get(id), owner: (u) => account(u),
+    territory: (d) => (accountField ? territories.get(String(d[accountField.key] ?? '')) ?? null : null),
+  };
 
   deals.forEach((d) => {
     const pipelineId = pipelineIds.get(d.pipeline_id) ?? null;
     const stage = stageNames.get(d.stage_id) || null;
-    const statusNow = d.status === 'won' ? 'Awarded' : d.status === 'lost' ? 'Lost' : stage;
-    const closedAt = d.status === 'won' ? d.won_time || d.close_time : d.status === 'lost' ? d.lost_time || d.close_time
-      : statusNow === 'Awarded' ? d.stage_change_time || d.update_time : null; // still open, but in an Awarded stage
-    const owner = account(d.user_id);
-    const territory = accountField ? territories.get(String(d[accountField.key] ?? '')) ?? null : null;
+    const view = dealView(d, lookups);
     const custom = customFields.map((f) => ({ name: f.name, value: fieldText(f, d[f.key]) })).filter((f) => f.value);
-    if (!owner && d.user_id) custom.push({ name: OWNER_FIELD, value: d.user_id.name || d.owner_name || 'Unknown' });
-    const fields = {
-      opportunity_title: d.title || `Pipedrive deal ${d.id}`, organization: d.org_name || null, value: d.value ?? null,
-      currency: d.currency && d.currency !== 'USD' ? d.currency : null, probability: d.probability ?? null, lost_reason: d.status === 'lost' ? d.lost_reason || null : null,
+    if (!view.bd_director_id && d.user_id) custom.push({ name: OWNER_FIELD, value: d.user_id.name || d.owner_name || 'Unknown' });
+    const other = {
+      organization: d.org_name || null, currency: d.currency && d.currency !== 'USD' ? d.currency : null,
       labels: json.str(labelField && d.label ? fieldText(labelField, d.label).split(', ').filter(Boolean) : []),
-      source: (channelField && fieldText(channelField, d.channel)) || null, projected_win_date: d.expected_close_date || null,
-      pipeline_id: pipelineId,
+      source: (channelField && fieldText(channelField, d.channel)) || null, pipeline_id: pipelineId, snapshot: snapshotOf(view, DEAL_TRACKED),
     };
 
-    let t = ticketByPd.get(d.id) || ticketByTitle.get(fields.opportunity_title);
+    let t = ticketByPd.get(d.id) || ticketByTitle.get(view.opportunity_title);
+    // A shared field changed in KIT and not in Pipedrive keeps KIT's value (an admin sends it).
+    const fields = { ...merged(t, view, DEAL_TRACKED), ...other };
+    const statusNow = fields.pipeline_status;
+    const owner = fields.bd_director_id;
+    const territory = fields.territory_id;
+    const closedAt = statusNow !== view.pipeline_status ? null
+      : d.status === 'won' ? d.won_time || d.close_time : d.status === 'lost' ? d.lost_time || d.close_time
+        : statusNow === 'Awarded' ? d.stage_change_time || d.update_time : null; // still open, but in an Awarded stage
     if (!t) {
       // New: start it at its stage on the day it was added, then close it if it's closed, so its history reads right.
       // A deal lost while sitting in an "Awarded" stage starts as Lost, so it never looks won (or gets a contract).
       const start = ['Awarded', 'Lost'].includes(stage) && stage !== statusNow ? statusNow : stage;
       const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, value, created_by, created_at, updated_at, ticket_type,
-          bd_director_id, territory_id, currency, probability, lost_reason, labels, source, projected_win_date, pipeline_id, custom_fields, pipedrive_id)
+          bd_director_id, territory_id, currency, probability, lost_reason, labels, source, projected_win_date, pipeline_id, custom_fields, pipedrive_id, pipedrive_snapshot)
         VALUES (@opportunity_title, @organization, @stage, @value, @owner, @added, @updated, 'bid', @owner, @territory, @currency, @probability, @lost_reason,
-          @labels, @source, @projected_win_date, @pipeline_id, @custom, @pd)`)
+          @labels, @source, @projected_win_date, @pipeline_id, @custom, @pd, @snapshot)`)
         .run({ ...fields, stage: start, owner, added: d.add_time, updated: d.update_time, territory, custom: json.str(custom), pd: d.id }).lastInsertRowid;
       dateHistory.run(d.add_time, id, 0);
       if (statusNow !== start) {
@@ -458,12 +453,13 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
     } else {
       const before = lastHistory.get(t.id).id;
       const kept = json.parse(t.custom_fields, []).filter((f) => !pdFieldNames.has(f.name));
-      // Pipedrive's labels, plus any tags made in KIT. A KIT change not yet sent to Pipedrive stays as it is.
+      // Pipedrive's labels, plus any tags made in KIT. A KIT change not sent to Pipedrive yet stays as it is.
       if (t.labels_pending) fields.labels = t.labels;
       else fields.labels = json.str([...new Set([...json.parse(fields.labels, []), ...json.parse(t.labels, []).filter((l) => kitOnly.has(String(l).toLowerCase()))])]);
       db.prepare(`UPDATE tickets SET opportunity_title = @opportunity_title, organization = @organization, pipeline_status = @status, value = @value,
           currency = @currency, probability = @probability, lost_reason = @lost_reason, labels = @labels, source = @source,
           projected_win_date = COALESCE(@projected_win_date, projected_win_date), pipeline_id = @pipeline_id, custom_fields = @custom, pipedrive_id = @pd,
+          pipedrive_snapshot = @snapshot,
           bd_director_id = COALESCE(@owner, bd_director_id), territory_id = COALESCE(@territory, territory_id),
           updated_at = CASE WHEN updated_at > @updated THEN updated_at ELSE @updated END
         WHERE id = @id`)
@@ -489,29 +485,30 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
 
   // ---- A deal's activities, notes and files
   const onLiveTicket = (tbl) => `SELECT x.id FROM main.${tbl} x JOIN main.tickets t ON t.id = x.ticket_id WHERE x.pipedrive_id = ? AND t.archive_set_id IS NULL`;
-  const taskByPd = db.prepare(onLiveTicket('ticket_tasks'));
+  const taskByPd = db.prepare(onLiveTicket('ticket_tasks').replace('SELECT x.id', 'SELECT x.*'));
+  const deletedActivities = new Set(db.prepare("SELECT pipedrive_id FROM pipedrive_deletes WHERE kind = 'activity'").all().map((x) => x.pipedrive_id));
   activities.forEach((a) => {
     const ticketId = tickets.get(a.deal_id);
-    if (!ticketId) { tally('activitiesSkipped'); return; }
-    const when = localDateTime(a.due_date, a.due_time);
-    const fields = {
-      ticket_id: ticketId, text: a.subject || a.type_name || 'Activity', activity_type: ACTIVITY_TYPES[a.type] || a.type_name || null,
-      due_date: when.date, due_time: when.time, duration: a.duration || null, assignee_id: account(a.assigned_to_user_id || a.user_id),
-      location: a.location || null, note: htmlToText(a.note) || null, description: htmlToText(a.public_description) || null,
-      video_call: a.conference_meeting_url || null, organization: a.org_name || null, done: a.done ? 1 : 0, done_at: a.done ? a.marked_as_done_time || null : null,
-    };
+    if (!ticketId || deletedActivities.has(a.id)) { tally('activitiesSkipped'); return; }
+    const view = activityView(a, account);
     const row = taskByPd.get(a.id);
+    const kept = merged(row, view, TASK_TRACKED);
+    const fields = {
+      ...kept, ticket_id: ticketId, description: htmlToText(a.public_description) || null, video_call: a.conference_meeting_url || null,
+      organization: a.org_name || null, done_at: kept.done ? (kept.done === view.done && a.marked_as_done_time) || row?.done_at || null : null,
+      snapshot: snapshotOf(view, TASK_TRACKED),
+    };
     let id = row?.id;
     if (id) {
       db.prepare(`UPDATE ticket_tasks SET ticket_id = @ticket_id, text = @text, activity_type = @activity_type, due_date = @due_date, due_time = @due_time,
         duration = @duration, assignee_id = @assignee_id, location = @location, note = @note, description = @description, video_call = @video_call,
-        organization = @organization, done = @done, done_at = @done_at WHERE id = @id`).run({ ...fields, id });
+        organization = @organization, done = @done, done_at = @done_at, pipedrive_snapshot = @snapshot WHERE id = @id`).run({ ...fields, id });
       tally('activitiesUpdated');
     } else {
       id = db.prepare(`INSERT INTO ticket_tasks (ticket_id, text, activity_type, due_date, due_time, duration, assignee_id, location, note, description,
-          video_call, organization, done, done_at, created_by, created_at, position, pipedrive_id)
+          video_call, organization, done, done_at, created_by, created_at, position, pipedrive_id, pipedrive_snapshot)
         VALUES (@ticket_id, @text, @activity_type, @due_date, @due_time, @duration, @assignee_id, @location, @note, @description, @video_call,
-          @organization, @done, @done_at, @by, @at, (SELECT COALESCE(MAX(position) + 1, 0) FROM main.ticket_tasks WHERE ticket_id = @ticket_id), @pd)`)
+          @organization, @done, @done_at, @by, @at, (SELECT COALESCE(MAX(position) + 1, 0) FROM main.ticket_tasks WHERE ticket_id = @ticket_id), @pd, @snapshot)`)
         .run({ ...fields, by: account(a.created_by_user_id), at: a.add_time, pd: a.id }).lastInsertRowid;
       tally('activitiesAdded');
     }
@@ -523,6 +520,9 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
       linkContact.run(ticketId, c);
     });
   });
+
+  // Priority cards made from synced activities keep their subject, date and done state.
+  db.prepare('SELECT DISTINCT activity_id FROM main.priority_cards WHERE activity_id IS NOT NULL').all().forEach((c) => mirrorCards(c.activity_id));
 
   const noteByPd = db.prepare(`SELECT x.id, x.pipedrive_pending FROM main.ticket_comments x JOIN main.tickets t ON t.id = x.ticket_id
     WHERE x.pipedrive_id = ? AND t.archive_set_id IS NULL`);
@@ -563,14 +563,14 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
   return { ...count, accountsMatched: [...new Set(matched)].sort(), accountsCreated: created.sort() };
 }
 
-/** Sync every night at 2 a.m. (server time) while a key is set. */
+/** Pull everything every night at 2 a.m. (server time) while a key is set. */
 export function schedulePipedriveSync() {
   if (!pipedriveConfigured()) return;
   const next = new Date();
   next.setHours(2, 0, 0, 0);
   if (next <= new Date()) next.setDate(next.getDate() + 1);
   setTimeout(() => {
-    try { startSync(null); } catch (e) { console.error('Pipedrive nightly sync:', e.message); }
+    try { startPull({ kind: 'all' }); } catch (e) { console.error('Pipedrive nightly pull:', e.message); }
     schedulePipedriveSync();
   }, next - new Date()).unref();
 }

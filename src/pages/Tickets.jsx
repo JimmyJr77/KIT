@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Package, CheckSquare, MessageSquare, Paperclip, ListOrdered, UserRound, Plus, ArrowDownAZ, Columns3, Archive, RotateCcw, Ticket as TicketIcon, DollarSign, Zap, MapPin } from 'lucide-react';
+import { Search, Package, CheckSquare, CheckCircle2, MessageSquare, Paperclip, ListOrdered, UserRound, Plus, ArrowDownAZ, Columns3, Archive, RotateCcw, Ticket as TicketIcon, DollarSign, Zap, MapPin } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ago, fullStamp, ticketKind } from '../lib/format.js';
@@ -10,8 +10,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel from './NewTicketPanel.jsx';
 import TicketLanes from './TicketLanes.jsx';
-import DirectorSelect from '../components/DirectorSelect.jsx';
-import { byDirector } from '../lib/directors.js';
+import NextStepBadge from '../components/NextStepBadge.jsx';
 import { LabelList } from '../components/Labels.jsx';
 
 /** Every master ticket the user created or has priorities on. */
@@ -34,7 +33,8 @@ export default function Tickets() {
   const [groupBy, setGroupByState] = useState(() => { try { return localStorage.getItem('kit.tickets.group') || 'none'; } catch { return 'none'; } });
   const setGroupBy = (v) => { setGroupByState(v); try { localStorage.setItem('kit.tickets.group', v); } catch { /* ignore */ } };
   const [territory, setTerritory] = useState('');
-  const [director, setDirector] = useState('');
+  const [person, setPerson] = useState(''); // someone on the chosen team (or anyone, with all teams)
+  const users = useApi('/users');
   const territories = useApi('/territories');
   const toggleType = (k) => setTypesState((ts) => {
     const next = ts.includes(k) ? ts.filter((x) => x !== k) : [...ts, k];
@@ -54,10 +54,13 @@ export default function Tickets() {
   }, [scope, q, teamId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = (id) => setParams(id ? { open: String(id) } : {});
+  // The next-step circle opens the ticket on that activity (or on the Activity pane, when there's no next step).
+  const openStep = (t) => setParams({ open: String(t.id), activity: String(t.next_step?.id ?? 0) });
+  const activityParam = params.get('activity');
   // Archived tickets leave both views; they live in the archive.
   const ofType = (tickets || []).filter((t) => types.includes(t.ticket_type === 'work' ? 'work' : 'bid'))
     .filter((t) => !territory || (territory === 'none' ? !t.territory_id : t.territory_id === Number(territory)))
-    .filter(byDirector(director));
+    .filter((t) => !person || t.bd_director_id === Number(person) || t.created_by === Number(person));
   const live = ofType.filter((t) => !t.archived)
     .sort((a, b) => a.opportunity_title.localeCompare(b.opportunity_title, undefined, { sensitivity: 'base' }));
   const archived = ofType.filter((t) => t.archived);
@@ -77,6 +80,17 @@ export default function Tickets() {
               className={`rounded px-3 ${scope === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
           ))}
         </div>
+        <button type="button" className="btn relative h-9 w-9 p-0" onClick={() => navigate(`/archive?tab=${types.length === 1 ? types[0] : 'bid'}`)}
+          title={`Archive: done tickets, archived after 14 days or by hand${archived.length ? ` (${archived.length})` : ''}`} aria-label="Archive">
+          <Archive size={16} />
+          {archived.length > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-slate-500 px-1 text-[10px] font-semibold text-white">{archived.length}</span>
+          )}
+        </button>
+        <button type="button" className="btn h-9 text-sm" onClick={() => navigate('/tickets/done')}
+          title="Every ticket that reached Done, including those archived from this page after 14 days">
+          <CheckCircle2 size={15} /> Done archive
+        </button>
       </PageHeader>
 
       <div className="flex flex-wrap items-end gap-3">
@@ -105,19 +119,13 @@ export default function Tickets() {
             );
           })}
         </div>
-        <button type="button" className="btn relative h-[38px] w-[38px] p-0" onClick={() => navigate(`/archive?tab=${types.length === 1 ? types[0] : 'bid'}`)}
-          title={`Archive: done tickets, archived after 14 days or by hand${archived.length ? ` (${archived.length})` : ''}`} aria-label="Archive">
-          <Archive size={16} />
-          {archived.length > 0 && (
-            <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-slate-500 px-1 text-[10px] font-semibold text-white">{archived.length}</span>
-          )}
-        </button>
         <select className="input h-[38px] w-48 py-0 text-sm" value={territory} onChange={(e) => setTerritory(e.target.value)} aria-label="Territory">
           <option value="">All territories</option>
           {(territories.data?.territories || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           <option value="none">No territory</option>
         </select>
-        <DirectorSelect tickets={tickets} value={director} onChange={setDirector} className="h-[38px] w-48" />
+        <PersonSelect users={users.data?.users} team={scope === 'mine' ? null : teams.data?.teams.find((t) => t.id === Number(teamId))}
+          value={person} onChange={setPerson} className="h-[38px] w-48" />
         {view === 'az' && (
           <select className="input h-[38px] w-44 py-0 text-sm" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} aria-label="Group cards by">
             <option value="none">A–Z, no grouping</option>
@@ -136,7 +144,7 @@ export default function Tickets() {
         </div>
       )}
 
-      {view === 'lanes' && tickets && live.length > 0 && <TicketLanes tickets={live} onOpen={open} onChanged={load} />}
+      {view === 'lanes' && tickets && live.length > 0 && <TicketLanes tickets={live} onOpen={open} onOpenStep={openStep} onChanged={load} />}
 
       {view === 'az' && groupsOf(live, groupBy).map((g) => (
         <section key={g.key} className="space-y-2">
@@ -148,8 +156,9 @@ export default function Tickets() {
           )}
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
         {g.tickets.map((t) => (
-          <button key={t.id} type="button" onClick={() => open(t.id)}
-            className={`flex flex-col rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-brand-500 hover:shadow-md ${openId === t.id ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
+          <div key={t.id} className="relative">
+          <button type="button" onClick={() => open(t.id)}
+            className={`flex h-full w-full flex-col rounded-xl border bg-white p-4 pr-12 text-left shadow-sm transition hover:border-brand-500 hover:shadow-md ${openId === t.id ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
             <div className="mb-1 flex items-start justify-between gap-2">
               <div className="flex min-w-0 items-start gap-2">
                 <div className="min-w-0">
@@ -183,6 +192,8 @@ export default function Tickets() {
               {t.file_count > 0 && <Stat icon={Paperclip} n={t.file_count} label="document" plural={['', 's']} />}
             </div>
           </button>
+          <NextStepBadge step={t.next_step} onOpen={() => openStep(t)} className="absolute top-1/2 right-3 -translate-y-1/2" />
+          </div>
         ))}
       </div>
         </section>
@@ -194,7 +205,10 @@ export default function Tickets() {
           onCreated={(t) => { setCreating(false); load(); open(t.id); }} />
       )}
 
-      {openId && <TicketTimeline key={openId} ticketId={openId} focus={params.get('focus')} onClose={() => open(null)} onChanged={load} />}
+      {openId && (
+        <TicketTimeline key={`${openId}-${activityParam}`} ticketId={openId} focus={params.get('focus')} onClose={() => open(null)} onChanged={load}
+          activityId={activityParam == null ? undefined : Number(activityParam) || null} />
+      )}
     </div>
   );
 }
@@ -237,4 +251,21 @@ function groupsOf(tickets, by) {
     groups.get(key).tickets.push(t);
   });
   return [...groups.values()].sort((a, b) => (typeof a.order === 'number' ? a.order - b.order : String(a.order).localeCompare(String(b.order))));
+}
+
+/**
+ * Narrow the tickets to one person: everyone on the chosen team ("All BD", say), or everyone at all with no team
+ * chosen. A ticket is theirs when they're its BD director or its owner.
+ */
+function PersonSelect({ users, team, value, onChange, className = '' }) {
+  const people = (users || []).filter((u) => u.active !== 0 && (!team || (u.teams || []).some((x) => x.id === team.id)))
+    .sort((a, b) => `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, undefined, { sensitivity: 'base' }));
+  // Someone chosen who isn't on the newly chosen team is let go.
+  useEffect(() => { if (value && users && !people.some((u) => u.id === Number(value))) onChange(''); }, [team?.id, users]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <select className={`input py-0 text-sm ${className}`} value={value} onChange={(e) => onChange(e.target.value)} aria-label={team ? `Person on ${team.name}` : 'Person'}>
+      <option value="">{team ? `All ${team.name}` : 'All people'}</option>
+      {people.map((u) => <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>)}
+    </select>
+  );
 }

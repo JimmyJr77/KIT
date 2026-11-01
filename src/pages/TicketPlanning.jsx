@@ -1,8 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Footprints, GripVertical, Flag, Pencil, ArrowUp, ArrowDown, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck } from 'lucide-react';
-import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
-import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, MessageSquare } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { api } from '../lib/api.js';
@@ -10,14 +7,13 @@ import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import { PROCESS_TYPES, REVIEW_AREAS } from '../lib/process.js';
-import { ActivitiesDrawer } from './TicketActivities.jsx';
+import { ActivitiesDrawer, ActivityForm, SubtaskList, CommentComposer, when } from './TicketActivities.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
 /** The menu items along the ticket pane's left edge. Strategy and the win assessment are for bid tickets only. */
 export const PLAN_TOOLS = [
   { key: 'strategy', label: 'Strategy', icon: ChessPawn, bidOnly: true },
-  { key: 'steps', label: 'Next steps', icon: Footprints, bidOnly: true },
-  { key: 'activities', label: 'Activity', icon: CalendarCheck, bidOnly: true },
+  { key: 'activities', label: 'Activity', icon: CalendarCheck },
   { key: 'tasks', label: 'Tasks', icon: SquareCheck },
   { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
   { key: 'people', label: 'People', icon: ContactRound },
@@ -35,11 +31,10 @@ export function PlanRail({ ticket, active, onSelect }) {
 }
 
 /** The extra pane for whichever menu item is open. `onChanged` refreshes the timeline after a save. */
-export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty }) {
-  if (tool === 'activities') return <ActivitiesDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
-  if (tool === 'tasks') return <TasksDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
+export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty, activityId }) {
+  if (tool === 'activities') return <ActivitiesDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} initialId={activityId} />;
+  if (tool === 'tasks') return <TasksDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'people') return <PeopleDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
-  if (tool === 'steps') return <StepsDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'strategy') return <StrategyDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'process') return <ProcessDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'details') return <DetailsDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
@@ -65,101 +60,72 @@ export function DrawerShell({ title, subtitle, onClose, footer, children }) {
 
 // ---- Tasks
 
-/** Every to-do on the ticket: its own general tasks (which anyone can add) and each priority's checklist. */
-function TasksDrawer({ ticket, onClose, onChanged }) {
+/**
+ * Every activity on the ticket as a checkbox, in priority order, with its subtasks indented under it. Checking an
+ * activity marks it done in the Activity pane too. A new task is a new activity: its form opens here, then returns.
+ */
+function TasksDrawer({ ticket, onClose, onChanged, onDirty }) {
   const [data, setData] = useState(null);
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const load = () => api.get(`/tickets/${ticket.id}/tasks`).then(setData);
+  const [view, setView] = useState('list'); // list | new | <activity id>
+  const [commenting, setCommenting] = useState(null);
+  const load = () => api.get(`/activities?ticket=${ticket.id}`).then(setData);
   useEffect(() => { load(); }, [ticket.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const changed = () => { load(); onChanged(); };
+  const back = () => { onDirty?.(false); setView('list'); load(); };
 
-  const add = async () => {
-    if (!text.trim() || busy) return;
-    setBusy(true);
-    try {
-      await api.post(`/tickets/${ticket.id}/tasks`, { text });
-      setText('');
-      await load();
-      onChanged();
-    } finally {
-      setBusy(false);
-    }
-  };
-  const toggleGeneral = async (k) => {
-    setData((d) => ({ ...d, general: d.general.map((x) => (x.id === k.id ? { ...x, done: !x.done } : x)) }));
-    await api.put(`/tickets/tasks/${k.id}`, { done: !k.done });
-    load();
-    onChanged();
-  };
-  const removeGeneral = async (k) => {
-    if (!confirm(`Delete the task “${k.text}”?`)) return;
-    await api.del(`/tickets/tasks/${k.id}`);
-    load();
-    onChanged();
-  };
-  const toggleCard = async (card, index, done) => {
-    await api.put(`/priorities/cards/${card.id}/checklist/${index}`, { done });
-    load();
-    onChanged();
-  };
+  if (view !== 'list' && data) {
+    return (
+      <ActivityForm key={view} ticket={ticket} activityId={view === 'new' ? null : view} types={data.types} priorities={data.priorities} onClose={onClose}
+        onBack={back} onSaved={() => { back(); onChanged(); }} onChanged={changed} onDirty={onDirty} backLabel="Back to tasks" />
+    );
+  }
 
-  const all = data ? [...data.general, ...data.cards.flatMap((c) => c.checklist)] : [];
-  const open = all.filter((t) => !t.done).length;
+  const toggle = async (a) => {
+    setData((d) => ({ ...d, activities: d.activities.map((x) => (x.id === a.id ? { ...x, done: !x.done } : x)) }));
+    await api.put(`/activities/${a.id}`, { done: !a.done });
+    changed();
+  };
+  const all = data?.activities || [];
+  const items = all.length + all.reduce((n, a) => n + a.subtasks.length, 0);
+  const done = all.filter((a) => a.done).length + all.reduce((n, a) => n + a.subtasks.filter((x) => x.done).length, 0);
 
   return (
-    <DrawerShell title="Tasks" subtitle={data ? `${open} to do · ${all.length - open} done across this ticket` : 'Loading…'} onClose={onClose}>
-      <div className="space-y-5">
-        <section>
-          <h4 className="mb-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase">General tasks</h4>
-          <p className="mb-2 text-[11px] text-slate-400">For this ticket as a whole, not tied to a priority or comment.</p>
-          <div className="flex gap-2">
-            <input className="input" placeholder="Add a task…" value={text} onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} disabled={busy} />
-            <button type="button" className="btn-primary px-2.5" onClick={add} disabled={!text.trim() || busy} aria-label="Add task"><Plus size={16} /></button>
-          </div>
-          {data && (
-            <TaskGroup items={data.general.map((k) => ({ key: `g${k.id}`, text: k.text, sub: activityLine(k), note: k.note, done: k.done, onToggle: () => toggleGeneral(k), onDelete: () => removeGeneral(k) }))}
-              empty="No general tasks yet." />
-          )}
-        </section>
-
-        {data?.cards.map((c) => (
-          <section key={c.id}>
-            <h4 className="text-xs font-semibold text-slate-700">{c.title || 'Untitled priority'}</h4>
-            <p className="mb-1 text-[11px] text-slate-400">{c.is_planned ? 'Priority' : 'Work'} · week of {shortDate(c.week_start)}{c.completed ? ' · complete' : ''}</p>
-            <TaskGroup items={c.checklist.map((t, i) => ({ key: `c${c.id}-${i}`, text: t.text, done: t.done, onToggle: () => toggleCard(c, i, !t.done) }))} />
-          </section>
-        ))}
-        {data && !data.cards.length && <p className="text-xs text-slate-400">No priorities on this ticket have checklist items.</p>}
+    <DrawerShell title="Tasks" subtitle={data ? `${items - done} to do · ${done} done across this ticket` : 'Loading…'} onClose={onClose}>
+      <div className="space-y-4">
+        <button type="button" className="btn-primary w-full justify-center" onClick={() => setView('new')}><Plus size={15} /> New task</button>
+        {data && !all.length && <p className="text-center text-sm text-slate-400">No tasks yet. A new task is a new activity on this ticket.</p>}
+        <ul className="space-y-2">
+          {all.map((a) => (
+            <li key={a.id} className={`rounded-lg border bg-white p-2.5 ${a.rank === 1 ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
+              <div className="group flex items-start gap-2">
+                <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600" checked={a.done} onChange={() => toggle(a)}
+                  aria-label={`Mark “${a.subject}” ${a.done ? 'not done' : 'done'}`} />
+                <button type="button" onClick={() => setView(a.id)} className="min-w-0 flex-1 text-left">
+                  {a.rank === 1 && <span className="mb-0.5 inline-block rounded bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">Next step</span>}
+                  <span className={`block text-sm font-medium ${a.done ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{a.subject}</span>
+                  <span className="block text-[11px] text-slate-500">{[a.activity_type, when(a) || 'No date', a.assignee_name].filter(Boolean).join(' · ')}</span>
+                </button>
+                <button type="button" onClick={() => setCommenting(commenting === a.id ? null : a.id)} title="Comment on this task" aria-label={`Comment on “${a.subject}”`}
+                  className={`flex items-center gap-0.5 text-[11px] ${a.comment_count ? 'text-violet-600' : 'text-slate-300 opacity-0 group-hover:opacity-100'} hover:text-violet-700`}>
+                  <MessageSquare size={14} />{a.comment_count > 0 && a.comment_count}
+                </button>
+              </div>
+              {commenting === a.id && (
+                <div className="mt-1.5 ml-6">
+                  <CommentComposer ticketId={ticket.id} target={{ type: 'activity', id: a.id }} autoFocus placeholder={`Comment on “${a.subject}”…`}
+                    onPosted={() => { setCommenting(null); changed(); }} onCancel={() => setCommenting(null)} />
+                </div>
+              )}
+              {(!a.done || a.subtasks.length > 0) && (
+                <div className="mt-1.5 ml-6 border-l-2 border-slate-100 pl-2">
+                  <SubtaskList activity={a} ticketId={ticket.id} onChanged={changed} compact />
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
       </div>
     </DrawerShell>
-  );
-}
-
-/** A task's activity details (from a Pipedrive activity): type, when, how long, where and who. */
-const activityLine = (k) => [k.activity_type, k.due_date && `due ${shortDate(k.due_date)}${k.due_time ? ` ${k.due_time}` : ''}`,
-  k.duration && `${k.duration} long`, k.location, k.assignee_name].filter(Boolean).join(' · ');
-
-/** A list split into to-do and done; finished items sit at the bottom. */
-function TaskGroup({ items, empty }) {
-  if (!items.length) return empty ? <p className="mt-2 text-xs text-slate-400">{empty}</p> : null;
-  const sorted = [...items.filter((i) => !i.done), ...items.filter((i) => i.done)];
-  return (
-    <ul className="mt-2 space-y-0.5">
-      {sorted.map((i) => (
-        <li key={i.key} className="group flex items-start gap-2 rounded px-1 py-0.5 hover:bg-white">
-          <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600" checked={!!i.done} onChange={i.onToggle} />
-          <span className="min-w-0 flex-1">
-            <span className={`block text-sm ${i.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{i.text}</span>
-            {i.sub && <span className="block text-[11px] text-slate-500">{i.sub}</span>}
-            {i.note && <span className="block text-[11px] whitespace-pre-wrap text-slate-400">{i.note}</span>}
-          </span>
-          {i.onDelete && (
-            <button type="button" onClick={i.onDelete} aria-label="Delete task" className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600"><Trash2 size={14} /></button>
-          )}
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -268,155 +234,6 @@ function LinkFromCrm({ ticket, linked, onLinked }) {
         {results && !shown.length && <li className="px-3 py-3 text-sm text-slate-400">{q ? 'No one matches.' : 'Everyone in the CRM is already on this ticket.'}</li>}
       </ul>
     </div>
-  );
-}
-
-// ---- Next steps
-
-/**
- * The broad-stroke next major steps in pursuing the account. New steps go on top; steps can be checked off,
- * dragged into a new order, and one can be flagged as the next step (it becomes the win assessment's next milestone).
- */
-function StepsDrawer({ ticket, onClose, onChanged, onDirty }) {
-  const [steps, setSteps] = useState(null);
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  useEffect(() => { api.get(`/tickets/${ticket.id}/steps`).then((d) => setSteps(d.steps)); }, [ticket.id]);
-  useEffect(() => { onDirty?.(!!text.trim()); }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const apply = (p) => p.then((d) => { setSteps(d.steps); onChanged(); }).catch((e) => setError(e.message));
-  const add = async () => {
-    if (!text.trim() || busy) return;
-    setBusy(true);
-    setError('');
-    await apply(api.post(`/tickets/${ticket.id}/steps`, { text }));
-    setText('');
-    setBusy(false);
-  };
-  const update = (s, body) => apply(api.put(`/tickets/steps/${s.id}`, body));
-  const remove = (s) => confirm('Delete this step?') && apply(api.del(`/tickets/steps/${s.id}`));
-  const reorder = (ids) => {
-    setSteps((xs) => ids.map((id) => xs.find((x) => x.id === id)));
-    apply(api.put(`/tickets/${ticket.id}/steps/order`, { ids }));
-  };
-  const move = (from, to) => steps && to >= 0 && to < steps.length && reorder(arrayMove(steps.map((s) => s.id), from, to));
-
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
-  const onDragEnd = ({ active, over }) => {
-    if (!over || active.id === over.id) return;
-    const ids = steps.map((s) => s.id);
-    reorder(arrayMove(ids, ids.indexOf(active.id), ids.indexOf(over.id)));
-  };
-
-  const next = steps?.find((s) => s.is_next);
-
-  return (
-    <DrawerShell title="Next steps" subtitle="The big moves in pursuing this account" onClose={onClose}>
-      <div className="space-y-4">
-        <section className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-          <label className="text-xs font-semibold tracking-wide text-slate-600 uppercase" htmlFor="new-step">New step</label>
-          <textarea id="new-step" rows={2} className="input resize-none text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={busy}
-            placeholder="e.g. Brief the PEO on our transition approach before the draft RFP"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); add(); }
-              if (e.key === 'Escape' && text) { e.stopPropagation(); setText(''); }
-            }} />
-          <div className="flex items-center justify-between gap-2">
-            <span className={`text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>{error || 'New steps go on top · ⌘↵ to add'}</span>
-            <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={add} disabled={!text.trim() || busy}>{busy ? 'Adding…' : 'Add step'}</button>
-          </div>
-        </section>
-
-        {next && (
-          <p className="flex items-start gap-1.5 rounded-md bg-brand-50 px-3 py-2 text-[11px] text-brand-800">
-            <Flag size={12} className="mt-0.5 shrink-0" />
-            <span>“{next.text}” is the next step. It’s filled in as the Next milestone under Bid and win assessment › Pursuit momentum.</span>
-          </p>
-        )}
-
-        {steps && !steps.length && <p className="text-sm text-slate-400">No steps yet. Add the first major step above.</p>}
-        {steps && steps.length > 0 && (
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <SortableContext items={steps.map((s) => s.id)} strategy={verticalListSortingStrategy}>
-              <ol className="space-y-2">
-                {steps.map((s, i) => (
-                  <StepItem key={s.id} step={s} first={i === 0} last={i === steps.length - 1}
-                    onMoveUp={() => move(i, i - 1)} onMoveDown={() => move(i, i + 1)}
-                    onToggle={() => update(s, { done: !s.done })} onNext={() => update(s, { next: !s.is_next })}
-                    onSave={(t) => update(s, { text: t })} onDelete={() => remove(s)} />
-                ))}
-              </ol>
-            </SortableContext>
-          </DndContext>
-        )}
-      </div>
-    </DrawerShell>
-  );
-}
-
-function StepItem({ step: s, first, last, onMoveUp, onMoveDown, onToggle, onNext, onSave, onDelete }) {
-  const { user } = useAuth();
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: s.id });
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(s.text);
-  const mine = s.author?.id === user.id;
-  const canDelete = mine || user.role === 'admin';
-  const save = async () => { if (draft.trim() && draft.trim() !== s.text) await onSave(draft.trim()); setEditing(false); };
-
-  return (
-    <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`group relative flex gap-2 rounded-lg border bg-white p-2.5 transition ${isDragging ? 'z-10 shadow-lg' : ''} ${
-        s.is_next ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
-      <div className="flex shrink-0 flex-col items-center gap-0.5 pt-0.5">
-        <button type="button" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label="Drag to reorder" title="Drag to reorder"
-          className="cursor-grab rounded p-0.5 text-slate-300 hover:text-slate-600 active:cursor-grabbing"><GripVertical size={14} /></button>
-        <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={s.done} onChange={onToggle} aria-label={s.done ? 'Mark not done' : 'Mark done'} title={s.done ? 'Mark not done' : 'Mark done'} />
-      </div>
-      <div className="min-w-0 flex-1">
-        {s.is_next && <span className="mb-1 inline-flex items-center gap-1 rounded bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase"><Flag size={10} /> Next step</span>}
-        {editing ? (
-          <div>
-            <textarea autoFocus rows={2} className="input resize-none text-sm" value={draft} onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
-                if (e.key === 'Escape') { e.stopPropagation(); setDraft(s.text); setEditing(false); }
-              }} />
-            <div className="mt-1 flex justify-end gap-1.5">
-              <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => { setDraft(s.text); setEditing(false); }}>Cancel</button>
-              <button type="button" className="btn-primary px-2.5 py-1 text-xs" onClick={save} disabled={!draft.trim()}>Save</button>
-            </div>
-          </div>
-        ) : (
-          <p className={`text-sm break-words whitespace-pre-wrap ${s.done ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{s.text}</p>
-        )}
-        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pr-1 text-[11px] text-slate-400">
-          <Avatar user={s.author} size="xs" />
-          <span className="whitespace-nowrap">{fullName(s.author) || 'Someone'}</span>
-          <span className="whitespace-nowrap" title={fullStamp(s.created_at)}>· {stamp(s.created_at)}</span>
-          {s.updated_at && <span title={fullStamp(s.updated_at)}>· edited</span>}
-          {s.done && s.done_at && <span className="whitespace-nowrap" title={fullStamp(s.done_at)}>· done {stamp(s.done_at)}</span>}
-        </div>
-      </div>
-      {!editing && (
-        <div className="absolute top-1.5 right-1.5 flex gap-0.5 rounded-md bg-white opacity-0 shadow-sm ring-1 ring-slate-200 transition group-hover:opacity-100 focus-within:opacity-100">
-          <IconButton label={s.is_next ? 'Unmark as next step' : 'Make this the next step'} onClick={onNext} active={s.is_next}><Flag size={13} /></IconButton>
-          {!first && <IconButton label="Move up" onClick={onMoveUp}><ArrowUp size={13} /></IconButton>}
-          {!last && <IconButton label="Move down" onClick={onMoveDown}><ArrowDown size={13} /></IconButton>}
-          {mine && <IconButton label="Edit" onClick={() => setEditing(true)}><Pencil size={13} /></IconButton>}
-          {canDelete && <IconButton label="Delete" onClick={onDelete} danger><Trash2 size={13} /></IconButton>}
-        </div>
-      )}
-    </li>
-  );
-}
-
-function IconButton({ label, onClick, active, danger, children }) {
-  return (
-    <button type="button" onClick={onClick} title={label} aria-label={label}
-      className={`rounded p-1 ${active ? 'text-brand-700' : 'text-slate-500'} ${danger ? 'hover:bg-red-50 hover:text-red-600' : 'hover:bg-slate-100 hover:text-brand-700'}`}>
-      {children}
-    </button>
   );
 }
 
@@ -758,7 +575,7 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
   useEffect(() => {
     if (plan && draft === null) { setDraft(plan.assessment || {}); saved.current = JSON.stringify(plan.assessment || {}); }
   }, [plan]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { api.get(`/tickets/${ticket.id}/steps`).then((d) => setNextStep(d.steps.find((s) => s.is_next) || null)); }, [ticket.id]);
+  useEffect(() => { api.get(`/activities?ticket=${ticket.id}`).then((d) => setNextStep(d.activities.find((a) => a.rank === 1) || null)); }, [ticket.id]);
 
   const dirty = draft !== null && JSON.stringify(draft) !== saved.current;
   useEffect(() => { onDirty?.(dirty); }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -847,7 +664,7 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
                     <div key={p.key}>
                       <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`a-${c.key}-${p.key}`}>{p.label}</label>
                       {c.key === 'momentum' && p.key === 'milestone' && nextStep && (
-                        <p className="mb-1 flex items-center gap-1 text-[10px] text-brand-700"><Flag size={10} /> Filled in from the flagged step in Next steps</p>
+                        <p className="mb-1 flex items-center gap-1 text-[10px] text-brand-700"><Flag size={10} /> Filled in from the ticket’s next step, its top activity</p>
                       )}
                       {p.options ? (
                         <select id={`a-${c.key}-${p.key}`} className="input py-1.5 text-sm" value={entry.answers?.[p.key] || ''} onChange={(e) => setAnswer(c.key, p.key, e.target.value)}>

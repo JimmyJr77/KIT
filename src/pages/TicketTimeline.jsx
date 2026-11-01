@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Check, Square, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, Archive, RotateCcw, Mail, Pin, ExternalLink } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -10,35 +10,35 @@ import SidePanel from '../components/SidePanel.jsx';
 import { TicketLabels } from '../components/Labels.jsx';
 import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx';
 import { ReplyBox } from './CommentPanel.jsx';
-import PriorityPanel from './PriorityPanel.jsx';
 import { PlanRail, PlanDrawer } from './TicketPlanning.jsx';
 import { AssignmentBar } from './TicketAssignment.jsx';
 
 const FILTERS = [
   ['all', 'Everything', () => true],
-  ['card', 'Priorities', (e) => e.type === 'card'],
-  ['talk', 'Comments & notes', (e) => e.type === 'comment' || e.type === 'note'],
+  ['activity', 'Activities', (e) => e.type === 'activity' || !!e.comment?.about],
+  ['talk', 'Comments & notes', (e) => e.type === 'comment'],
   ['file', 'Documents', (e) => e.type === 'file'],
   ['email', 'Emails', (e) => e.type === 'email'],
 ];
 const SAVE_KEY = /Mac|iP(hone|ad)/.test(navigator.platform) ? '⌘↵' : 'Ctrl+↵';
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
-const eventKey = (e) => `${e.type}-${e.card?.id ?? e.note?.id ?? e.comment?.id ?? e.file?.id ?? e.email?.id ?? 0}`;
+const eventKey = (e) => `${e.type}-${e.activity?.id ?? e.comment?.id ?? e.file?.id ?? e.email?.id ?? 0}`;
 
 /**
  * Right-hand pane with everything that has happened on a master ticket, newest first.
- * `focus` ("c-12" for a comment, "n-4" for a note) scrolls to and highlights one item.
+ * `focus` ("c-12" for a comment) scrolls to and highlights one item; `activityId` opens that activity in the Activity pane.
  */
-export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) {
+export default function TicketTimeline({ ticketId, focus, activityId, onClose, onChanged }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('all');
-  const [cardId, setCardId] = useState(null); // a priority opened from the timeline
-  const [tool, setTool] = useState(null); // tasks | strategy | assessment, shown in a pane off the left edge
+  const [tool, setTool] = useState(activityId !== undefined ? 'activities' : null); // a pane off the left edge
+  const [openActivity, setOpenActivity] = useState(activityId ?? null); // the activity the Activity pane opens on
   const toolDirty = useRef(false);
   const setToolDirty = (v) => { toolDirty.current = v; };
   const leaveTool = () => !toolDirty.current || confirm('You have unsaved changes. Discard them?');
-  const switchTool = (next) => { if (leaveTool()) { toolDirty.current = false; setTool(next); } };
+  const switchTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setTool(next); } };
+  const showActivity = (id) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(id); setTool('activities'); } };
   const close = () => { if (leaveTool()) onClose(); };
   const load = () => api.get(`/tickets/${ticketId}/timeline`).then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [ticketId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -56,8 +56,6 @@ export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) 
     setTimeout(() => el.classList.remove('ring-2', 'ring-brand-500', 'ring-offset-2'), 2500);
   }, [data, focus]);
 
-  if (cardId) return <TicketPriority cardId={cardId} onBack={() => { setCardId(null); load(); }} onClose={close} />;
-
   const t = data?.ticket;
   const test = FILTERS.find(([k]) => k === filter)[2];
   const events = (data?.events || []).filter(test);
@@ -66,7 +64,7 @@ export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) 
     <SidePanel wide onClose={close} title={t ? t.opportunity_title : 'Loading…'}
       onEscape={tool ? () => switchTool(null) : close}
       rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} />}
-      drawer={t && tool && <PlanDrawer key={tool} tool={tool} ticket={t} onClose={() => switchTool(null)} onChanged={refresh} onDirty={setToolDirty} />}
+      drawer={t && tool && <PlanDrawer key={`${tool}-${openActivity}`} tool={tool} ticket={t} activityId={openActivity} onClose={() => switchTool(null)} onChanged={refresh} onDirty={setToolDirty} />}
       subtitle={t && (
         <span className="flex flex-wrap items-center gap-1.5">
           <span className={`rounded px-1.5 font-semibold ${t.ticket_type === 'work' ? 'bg-slate-200 text-slate-700' : 'bg-brand-50 text-brand-700'}`}>{ticketKind(t)} #{t.id}</span>
@@ -104,28 +102,11 @@ export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) 
           </div>
 
           <ol className="relative space-y-4 before:absolute before:top-2 before:bottom-2 before:left-[15px] before:w-px before:bg-slate-200">
-            {events.map((e) => <Event key={eventKey(e)} event={e} ticket={t} onChanged={refresh} onOpenCard={setCardId} />)}
+            {events.map((e) => <Event key={eventKey(e)} event={e} ticket={t} onChanged={refresh} onOpenActivity={showActivity} />)}
           </ol>
         </div>
       )}
     </SidePanel>
-  );
-}
-
-/** A priority opened from the timeline, with a way back. */
-function TicketPriority({ cardId, onBack, onClose }) {
-  const [state, setState] = useState(null);
-  const [users, setUsers] = useState([]);
-  const [statuses, setStatuses] = useState([]);
-  useEffect(() => {
-    api.get(`/priorities/cards/${cardId}`).then(setState);
-    api.get('/users').then((d) => setUsers(d.users));
-    api.get('/priorities/meta').then((d) => setStatuses(d.pipelineStatuses));
-  }, [cardId]);
-  if (!state) return <SidePanel title="Loading…" onClose={onClose} />;
-  return (
-    <PriorityPanel card={state.card} users={users} statuses={statuses} teamId={state.card.team_id} weekStart={state.card.week_start}
-      readOnly={!state.editable} onBack={onBack} onClose={onClose} onSaved={onBack} onNotesChanged={() => {}} />
   );
 }
 
@@ -145,8 +126,8 @@ function PostMarker({ author, ticket }) {
 /** The icon on the timeline rail that says where an event came from. */
 function Marker({ event, ticket }) {
   const box = 'relative z-10 grid h-8 w-8 shrink-0 self-start place-items-center rounded-full ring-4 ring-white';
-  if (event.type === 'comment' || event.type === 'note') return <PostMarker author={event.author} ticket={ticket} />;
-  if (event.type === 'card') return <span className={`${box} bg-brand-600 font-mono text-[9px] font-bold tracking-tighter text-white`} title="Priority ticket">123</span>;
+  if (event.type === 'comment') return <PostMarker author={event.author} ticket={ticket} />;
+  if (event.type === 'activity') return <span className={`${box} bg-violet-100 text-violet-700`} title="Activity"><CalendarCheck size={15} /></span>;
   if (event.type === 'email') return <span className={`${box} bg-sky-100 text-sky-700`} title="Email"><Mail size={15} /></span>;
   if (event.type === 'file') return <span className={`${box} bg-emerald-100 text-emerald-700`} title="Document"><FileText size={15} /></span>;
   return <span className={`${box} bg-slate-200 text-slate-600`} title={ticketKind(ticket)}><Ticket size={15} /></span>;
@@ -213,21 +194,23 @@ function EditBox({ initial, onSave, onCancel }) {
   );
 }
 
-function Event({ event: e, ticket, onChanged, onOpenCard }) {
+function Event({ event: e, ticket, onChanged, onOpenActivity }) {
   const { user } = useAuth();
   const [replying, setReplying] = useState(false);
   const [editing, setEditing] = useState(false);
 
-  const post = e.type === 'comment' ? e.comment : e.type === 'note' ? e.note : null;
+  const post = e.type === 'comment' ? e.comment : null;
+  const about = post?.about; // a comment on an activity or one of its subtasks
   const mine = post && e.author?.id === user.id;
   const save = async (body) => {
-    if (e.type === 'comment') await api.put(`/tickets/comments/${e.comment.id}`, { body });
-    else await api.put(`/priorities/notes/${e.note.id}`, { body });
+    await api.put(`/tickets/comments/${e.comment.id}`, { body });
     setEditing(false);
     onChanged();
   };
-  // Comments under a standalone comment are replies to it; under anything else they're attached to the item.
-  const replyTo = e.type === 'comment' ? { parentId: e.comment.id } : { target: { type: e.type, id: e.card?.id ?? e.note?.id ?? e.file?.id ?? e.email?.id ?? ticket.id } };
+  // Comments under a standalone comment are replies to it; under an activity they're comments on it; under anything
+  // else they're attached to the item.
+  const replyTo = e.type === 'comment' ? { parentId: e.comment.id }
+    : { target: { type: e.type, id: e.activity?.id ?? e.file?.id ?? e.email?.id ?? ticket.id } };
   const isNote = e.type === 'comment' && e.comment.kind === 'note';
   const pin = async () => { await api.put(`/tickets/comments/${e.comment.id}/pin`, { pinned: !e.comment.pinned }); onChanged(); };
   const isOwner = e.author?.id === ticket.owner_id;
@@ -241,32 +224,19 @@ function Event({ event: e, ticket, onChanged, onOpenCard }) {
 
           {e.type === 'ticket' && <Meta event={e}>created this {ticketKind(ticket).toLowerCase()}</Meta>}
 
-          {e.type === 'card' && (
+          {e.type === 'activity' && (
             <>
-              <Meta event={e}>{e.card.is_planned ? 'added a priority' : 'added work'}{e.card.team_name && <> for {e.card.team_name}</>}</Meta>
-              <button type="button" onClick={() => onOpenCard(e.card.id)} title="Open this priority"
-                className={`mt-1.5 block w-full rounded-lg border border-l-4 bg-white p-3 text-left text-sm transition hover:shadow-md ${e.card.is_planned ? 'border-slate-200 border-l-brand-600 hover:border-brand-500' : 'border-amber-200 border-l-amber-500'}`}>
+              <Meta event={e}>added an activity{e.activity.priorities && <> · a weekly priority ({e.activity.priorities})</>}</Meta>
+              <button type="button" onClick={() => onOpenActivity(e.activity.id)} title="Open this activity"
+                className="mt-1.5 block w-full rounded-lg border border-l-4 border-slate-200 border-l-violet-500 bg-white p-3 text-left text-sm transition hover:border-violet-400 hover:shadow-md">
                 <div className="flex items-start justify-between gap-2">
-                  <div className={`font-medium ${e.card.completed ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{e.card.title || 'Untitled priority'}</div>
+                  <div className={`font-medium ${e.activity.done ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{e.activity.subject}</div>
                   <ChevronRight size={15} className="mt-0.5 shrink-0 text-slate-300" />
                 </div>
                 <div className="mt-0.5 text-[11px] text-slate-500">
-                  Week of {shortDate(e.card.week_start)}
-                  {e.card.due_date && ` · due ${shortDate(e.card.due_date)}`}
-                  {!e.card.is_planned && ' · work (added after planning closed)'}
-                  {e.card.completed && ' · complete'}
-                  {e.card.assignees.length > 0 && ` · ${e.card.assignees.map(fullName).join(', ')}`}
+                  {[e.activity.activity_type, e.activity.due_date && `due ${shortDate(e.activity.due_date)}${e.activity.due_time ? ` ${e.activity.due_time}` : ''}`,
+                    e.activity.assignee, e.activity.done && 'done'].filter(Boolean).join(' · ')}
                 </div>
-                {e.card.checklist.length > 0 && (
-                  <ul className="mt-2 space-y-0.5 border-t border-slate-100 pt-2">
-                    {[...e.card.checklist.filter((i) => !i.done), ...e.card.checklist.filter((i) => i.done)].map((i, n) => (
-                      <li key={n} className={`flex items-start gap-1.5 text-xs ${i.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
-                        {i.done ? <Check size={13} className="mt-px shrink-0 text-emerald-600" /> : <Square size={13} className="mt-px shrink-0 text-slate-400" />}
-                        {i.text}
-                      </li>
-                    ))}
-                  </ul>
-                )}
               </button>
             </>
           )}
@@ -274,10 +244,12 @@ function Event({ event: e, ticket, onChanged, onOpenCard }) {
           {post && (
             <>
               <Meta event={e}>
-                {e.type === 'note'
-                  ? <>added a note on <span className="font-medium text-slate-700">{e.note.card_title || 'a priority'}</span></>
+                {about
+                  ? <>commented on {about.subtask ? <>subtask <span className="font-medium text-slate-700">“{about.subtask}”</span> of </> : 'activity '}
+                    <button type="button" onClick={() => about.activity_id && onOpenActivity(about.activity_id)} className="font-medium text-violet-700 hover:underline">{about.subject || 'an activity'}</button></>
                   : isOwner || isNote ? 'added a note' : 'commented'}
-                {e.type === 'comment' && e.comment.card_title && <> on <span className="font-medium text-slate-700">{e.comment.card_title}</span></>}
+                {!about && e.comment.card_title && <> on <span className="font-medium text-slate-700">{e.comment.card_title}</span></>}
+                {about && <span className="ml-1 rounded bg-violet-100 px-1.5 text-[10px] font-semibold tracking-wide text-violet-800 uppercase">Activity comment</span>}
                 {isNote && (
                   <button type="button" onClick={pin} title={e.comment.pinned ? 'Unpin this note' : 'Pin this note to the top'}
                     className={`ml-1 inline-flex items-center gap-0.5 rounded px-1 text-[11px] ${e.comment.pinned ? 'bg-amber-100 font-medium text-amber-800' : 'text-slate-400 hover:text-slate-700'}`}>
@@ -288,7 +260,7 @@ function Event({ event: e, ticket, onChanged, onOpenCard }) {
               {editing
                 ? <EditBox initial={post.body} onSave={save} onCancel={() => setEditing(false)} />
                 : (
-                  <p className={`mt-1.5 rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap text-slate-800 ${isOwner || isNote || e.type === 'note' ? 'bg-amber-50 ring-1 ring-amber-300' : 'bg-white ring-1 ring-slate-200'}`}>
+                  <p className={`mt-1.5 rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap text-slate-800 ${about ? 'border-l-4 border-violet-500 bg-violet-50 ring-1 ring-violet-200' : isOwner || isNote ? 'bg-amber-50 ring-1 ring-amber-300' : 'bg-white ring-1 ring-slate-200'}`}>
                     <MentionText text={post.body} />
                   </p>
                 )}

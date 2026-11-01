@@ -12,8 +12,9 @@ import { recordWork } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
 import { ticketFields } from './priorities.js';
 import { statusesFor, listPipelines } from '../pipelines.js';
-import { pushNote, pushFile, pushLabels, deleteInPipedrive, inBackground, pushEnabled } from '../services/pipedrive.js';
+import { queueDelete } from '../services/pipedrive.js';
 import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
+import { NEXT_STEP_SQL } from '../activities.js';
 
 const r = Router();
 
@@ -32,14 +33,14 @@ const author = (row, prefix = '') => (row[`${prefix}first_name`]
   ? { id: row[`${prefix}author_id`] ?? row.author_id, first_name: row[`${prefix}first_name`], last_name: row[`${prefix}last_name`] }
   : null);
 
-const COMMENT_SQL = `SELECT m.*, u.first_name, u.last_name, c.title AS card_title, tk.opportunity_title AS ticket_title,
+export const COMMENT_SQL = `SELECT m.*, u.first_name, u.last_name, c.title AS card_title, tk.opportunity_title AS ticket_title,
     (SELECT COUNT(*) FROM ticket_comments x WHERE x.parent_id = m.id) AS reply_count,
     (SELECT MAX(x.created_at) FROM ticket_comments x WHERE x.parent_id = m.id) AS last_reply_at,
     (SELECT GROUP_CONCAT(a.user_id) FROM card_assignees a WHERE a.card_id = m.card_id) AS card_assignee_ids
   FROM ticket_comments m LEFT JOIN users u ON u.id = m.author_id LEFT JOIN priority_cards c ON c.id = m.card_id
   JOIN tickets tk ON tk.id = m.ticket_id`;
 
-const commentOut = (m) => ({
+export const commentOut = (m) => ({
   id: m.id, ticket_id: m.ticket_id, ticket_title: m.ticket_title, card_id: m.card_id, card_title: m.card_title, parent_id: m.parent_id,
   kind: m.kind, body: m.body, pinned: !!m.pinned, created_at: m.created_at, updated_at: m.updated_at ?? null, author: author(m),
   target_type: m.target_type ?? null, target_id: m.target_id ?? null,
@@ -129,10 +130,10 @@ r.get('/', (req, res) => {
       (SELECT COUNT(*) FROM ticket_comments m WHERE m.ticket_id = t.id AND m.parent_id IS NULL AND m.kind = 'question') AS question_count,
       (SELECT COUNT(*) FROM ticket_comments m WHERE m.ticket_id = t.id AND m.parent_id IS NULL AND m.kind IN ('comment', 'note')) AS comment_count,
       (SELECT COUNT(*) FROM ticket_files f WHERE f.ticket_id = t.id) AS file_count,
+      ${NEXT_STEP_SQL} AS next_step,
       MAX(t.updated_at,
         COALESCE((SELECT MAX(c.updated_at) FROM priority_cards c WHERE c.ticket_id = t.id), ''),
         COALESCE((SELECT MAX(MAX(m.created_at, COALESCE(m.updated_at, ''))) FROM ticket_comments m WHERE m.ticket_id = t.id), ''),
-        COALESCE((SELECT MAX(MAX(n.created_at, COALESCE(n.updated_at, ''))) FROM card_notes n JOIN priority_cards c ON c.id = n.card_id WHERE c.ticket_id = t.id), ''),
         COALESCE((SELECT MAX(f.created_at) FROM ticket_files f WHERE f.ticket_id = t.id), '')) AS last_activity
     FROM tickets t LEFT JOIN users o ON o.id = t.created_by LEFT JOIN users d ON d.id = t.bd_director_id
       LEFT JOIN territories tr ON tr.id = t.territory_id
@@ -145,21 +146,17 @@ r.get('/', (req, res) => {
       AND (@kind IS NULL OR t.ticket_type = @kind)
       AND (@territories = '[]' OR t.territory_id IN (SELECT value FROM json_each(@territories)))
     ORDER BY last_activity DESC`).all({ q, mine: scope === 'mine' ? 1 : 0, me: req.user.id, team, owners: JSON.stringify(owners), types: JSON.stringify(types), kind, territories: JSON.stringify(territories) });
-  // Task counts come from each card's checklist JSON.
-  const lists = db.prepare('SELECT ticket_id, checklist FROM priority_cards').all();
+  // Task counts: each ticket's activities and their subtasks.
   const tasks = {};
-  lists.forEach((c) => json.parse(c.checklist, []).forEach((i) => {
-    const t = (tasks[c.ticket_id] ||= { open: 0, done: 0 });
-    t[i.done ? 'done' : 'open'] += 1;
-  }));
-  db.prepare('SELECT ticket_id, done FROM ticket_tasks').all().forEach((k) => {
+  db.prepare(`SELECT ticket_id, done FROM ticket_tasks UNION ALL
+    SELECT k.ticket_id, s.done FROM activity_subtasks s JOIN ticket_tasks k ON k.id = s.task_id`).all().forEach((k) => {
     const t = (tasks[k.ticket_id] ||= { open: 0, done: 0 });
     t[k.done ? 'done' : 'open'] += 1;
   });
   const model = pwinModel();
   res.json({ tickets: rows.map((t) => {
     const lane = laneFor(t);
-    return { ...t, labels: json.parse(t.labels, []), tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
+    return { ...t, labels: json.parse(t.labels, []), next_step: json.parse(t.next_step, null), tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
   }) });
 });
 
@@ -238,159 +235,13 @@ r.put('/:id/assignment', (req, res) => {
   res.json({ ticket: ticketRow(t.id) });
 });
 
-// ---- Ticket-wide tasks, strategy and win assessment
+// ---- Strategy and win assessment
 
-const TASK_COLS = `id, text, done, created_at, done_at, activity_type, due_date, due_time, duration, assignee_id, location, note,
-  (SELECT first_name || ' ' || last_name FROM users WHERE id = assignee_id) AS assignee_name`;
-// Activity details a task can carry (from a Pipedrive activity, or set by hand): blank clears one.
-const TASK_DETAILS = ['activity_type', 'due_date', 'due_time', 'duration', 'assignee_id', 'location', 'note'];
 const touch = (id) => db.prepare("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").run(id);
 const nameOf = (id) => {
   const u = id && db.prepare('SELECT first_name, last_name FROM users WHERE id = ?').get(id);
   return u ? `${u.first_name} ${u.last_name}` : null;
 };
-
-/** Every task on the ticket: its own general tasks, and each priority card's checklist. */
-r.get('/:id/tasks', (req, res) => {
-  const t = ticketRow(req.params.id);
-  if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  const general = db.prepare(`SELECT ${TASK_COLS} FROM ticket_tasks WHERE ticket_id = ? ORDER BY position, id`).all(t.id)
-    .map((x) => ({ ...x, done: !!x.done }));
-  const cards = db.prepare('SELECT id, title, week_start, is_planned, completed, checklist FROM priority_cards WHERE ticket_id = ? ORDER BY week_start DESC, id')
-    .all(t.id).map((c) => ({ ...c, is_planned: !!c.is_planned, completed: !!c.completed, checklist: json.parse(c.checklist, []) }))
-    .filter((c) => c.checklist.length);
-  res.json({ general, cards });
-});
-
-r.post('/:id/tasks', (req, res) => {
-  const t = ticketRow(req.params.id);
-  if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  const text = String(req.body?.text || '').trim();
-  if (!text) return res.status(400).json({ error: 'Write the task first' });
-  const pos = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM ticket_tasks WHERE ticket_id = ?').get(t.id).p;
-  const id = db.prepare('INSERT INTO ticket_tasks (ticket_id, text, position, created_by) VALUES (?, ?, ?, ?)').run(t.id, text, pos, req.user.id).lastInsertRowid;
-  touch(t.id);
-  res.json({ task: { ...db.prepare(`SELECT ${TASK_COLS} FROM ticket_tasks WHERE id = ?`).get(id), done: false } });
-});
-
-/** Check off or rename a general task. Finished tasks move to the end of the list. */
-r.put('/tasks/:taskId', (req, res) => {
-  const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(req.params.taskId);
-  if (!k) return res.status(404).json({ error: 'Task not found' });
-  const b = req.body || {};
-  if (typeof b.text === 'string') {
-    if (!b.text.trim()) return res.status(400).json({ error: 'A task can’t be empty' });
-    db.prepare('UPDATE ticket_tasks SET text = ? WHERE id = ?').run(b.text.trim(), k.id);
-  }
-  TASK_DETAILS.filter((f) => f in b).forEach((f) => {
-    const v = f === 'assignee_id' ? Number(b[f]) || null : String(b[f] ?? '').trim() || null;
-    db.prepare(`UPDATE ticket_tasks SET ${f} = ? WHERE id = ?`).run(v, k.id);
-  });
-  if (typeof b.done === 'boolean' && b.done !== !!k.done) {
-    const pos = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM ticket_tasks WHERE ticket_id = ?').get(k.ticket_id).p;
-    db.prepare("UPDATE ticket_tasks SET done = ?, done_at = CASE WHEN ? THEN datetime('now') ELSE NULL END, position = ? WHERE id = ?")
-      .run(b.done ? 1 : 0, b.done ? 1 : 0, pos, k.id);
-    if (b.done) recordWork(req.user, { kind: 'task', ticket_id: k.ticket_id, summary: k.text });
-  }
-  touch(k.ticket_id);
-  const x = db.prepare(`SELECT ${TASK_COLS} FROM ticket_tasks WHERE id = ?`).get(k.id);
-  res.json({ task: { ...x, done: !!x.done } });
-});
-
-r.delete('/tasks/:taskId', (req, res) => {
-  const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(req.params.taskId);
-  if (!k) return res.status(404).json({ error: 'Task not found' });
-  db.prepare('DELETE FROM ticket_tasks WHERE id = ?').run(k.id);
-  touch(k.ticket_id);
-  res.json({ ok: true });
-});
-
-// ---- Next major steps
-
-const STEP_SQL = `SELECT s.*, u.first_name, u.last_name FROM ticket_steps s LEFT JOIN users u ON u.id = s.author_id`;
-const stepOut = (s) => ({
-  id: s.id, text: s.text, done: !!s.done, done_at: s.done_at, is_next: !!s.is_next, created_at: s.created_at, updated_at: s.updated_at,
-  author: s.first_name ? { id: s.author_id, first_name: s.first_name, last_name: s.last_name } : null,
-});
-const stepRow = (id) => db.prepare('SELECT * FROM ticket_steps WHERE id = ?').get(id);
-const listSteps = (ticketId) => db.prepare(`${STEP_SQL} WHERE s.ticket_id = ? ORDER BY s.position, s.id DESC`).all(ticketId).map(stepOut);
-
-/** Copy the flagged next step into the win assessment's "Next milestone". */
-function syncMilestone(ticketId) {
-  const next = db.prepare('SELECT text FROM ticket_steps WHERE ticket_id = ? AND is_next = 1').get(ticketId);
-  if (!next) return;
-  const a = json.parse(ticketRow(ticketId).assessment, {});
-  a.momentum = { score: a.momentum?.score ?? null, answers: { ...(a.momentum?.answers || {}), milestone: next.text } };
-  db.prepare("UPDATE tickets SET assessment = ?, assessment_updated_at = datetime('now') WHERE id = ?").run(json.str(a), ticketId);
-}
-
-r.get('/:id/steps', (req, res) => {
-  if (!ticketRow(req.params.id)) return res.status(404).json({ error: 'Ticket not found' });
-  res.json({ steps: listSteps(req.params.id) });
-});
-
-/** New steps go on top. */
-r.post('/:id/steps', (req, res) => {
-  const t = ticketRow(req.params.id);
-  if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  const text = String(req.body?.text || '').trim();
-  if (!text) return res.status(400).json({ error: 'Describe the step first' });
-  const top = db.prepare('SELECT COALESCE(MIN(position) - 1, 0) AS p FROM ticket_steps WHERE ticket_id = ?').get(t.id).p;
-  const id = db.prepare('INSERT INTO ticket_steps (ticket_id, text, position, author_id) VALUES (?, ?, ?, ?)').run(t.id, text, top, req.user.id).lastInsertRowid;
-  recordWork(req.user, { kind: 'step', ticket_id: t.id, ref_id: id, summary: text });
-  touch(t.id);
-  res.json({ steps: listSteps(t.id) });
-});
-
-/** Body: { ids: [stepId, ...] } in the new top-to-bottom order. */
-r.put('/:id/steps/order', (req, res) => {
-  const t = ticketRow(req.params.id);
-  if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  const ids = (req.body?.ids || []).map(Number);
-  const set = db.prepare('UPDATE ticket_steps SET position = ? WHERE id = ? AND ticket_id = ?');
-  db.transaction(() => ids.forEach((id, i) => set.run(i, id, t.id)))();
-  touch(t.id);
-  res.json({ steps: listSteps(t.id) });
-});
-
-/**
- * Update one step. Body may hold: text (author only), done, next (true flags it as the next step and
- * clears any other; finishing the next step unflags it).
- */
-r.put('/steps/:sid', (req, res) => {
-  const s = stepRow(req.params.sid);
-  if (!s) return res.status(404).json({ error: 'Step not found' });
-  const b = req.body || {};
-  if (typeof b.text === 'string') {
-    if (s.author_id !== req.user.id) return res.status(403).json({ error: 'Only the author can edit this step' });
-    if (!b.text.trim()) return res.status(400).json({ error: 'A step can’t be empty' });
-    db.prepare("UPDATE ticket_steps SET text = ?, updated_at = datetime('now') WHERE id = ?").run(b.text.trim(), s.id);
-  }
-  if (typeof b.done === 'boolean') {
-    db.prepare("UPDATE ticket_steps SET done = ?, done_at = CASE WHEN ? THEN datetime('now') ELSE NULL END, is_next = CASE WHEN ? THEN 0 ELSE is_next END WHERE id = ?")
-      .run(b.done ? 1 : 0, b.done ? 1 : 0, b.done ? 1 : 0, s.id);
-  }
-  if (typeof b.next === 'boolean') {
-    db.transaction(() => {
-      if (b.next) db.prepare('UPDATE ticket_steps SET is_next = 0 WHERE ticket_id = ?').run(s.ticket_id);
-      db.prepare('UPDATE ticket_steps SET is_next = ?, done = CASE WHEN ? THEN 0 ELSE done END, done_at = CASE WHEN ? THEN NULL ELSE done_at END WHERE id = ?')
-        .run(b.next ? 1 : 0, b.next ? 1 : 0, b.next ? 1 : 0, s.id);
-    })();
-  }
-  syncMilestone(s.ticket_id);
-  touch(s.ticket_id);
-  res.json({ steps: listSteps(s.ticket_id) });
-});
-
-r.delete('/steps/:sid', (req, res) => {
-  const s = stepRow(req.params.sid);
-  if (!s) return res.status(404).json({ error: 'Step not found' });
-  if (s.author_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the author can delete this step' });
-  db.prepare('DELETE FROM ticket_steps WHERE id = ?').run(s.id);
-  db.prepare("DELETE FROM work_log WHERE kind = 'step' AND ref_id = ?").run(s.id);
-  touch(s.ticket_id);
-  res.json({ steps: listSteps(s.ticket_id) });
-});
 
 /** The ticket's win strategy and win assessment, with who last saved each. */
 r.get('/:id/plan', (req, res) => {
@@ -490,27 +341,31 @@ r.get('/:id/timeline', (req, res) => {
     labels: json.parse(t.labels, []), source: t.source ?? null };
   const events = [{ type: 'ticket', at: t.created_at, author: t.first_name ? { id: t.created_by, first_name: t.first_name, last_name: t.last_name } : null }];
 
-  const cards = db.prepare(`SELECT c.*, tm.name AS team_name, u.first_name, u.last_name FROM priority_cards c
-    LEFT JOIN teams tm ON tm.id = c.team_id LEFT JOIN users u ON u.id = c.created_by WHERE c.ticket_id = ?`).all(t.id);
-  const assignees = db.prepare(`SELECT a.card_id, u.id, u.first_name, u.last_name FROM card_assignees a
-    JOIN users u ON u.id = a.user_id JOIN priority_cards c ON c.id = a.card_id WHERE c.ticket_id = ?`).all(t.id);
-  cards.forEach((c) => events.push({
-    type: 'card', at: c.created_at, author: c.first_name ? { id: c.created_by, first_name: c.first_name, last_name: c.last_name } : null,
-    card: {
-      id: c.id, title: c.title, week_start: c.week_start, team_name: c.team_name, due_date: c.due_date,
-      is_planned: !!c.is_planned, completed: !!c.completed, checklist: json.parse(c.checklist, []),
-      assignees: assignees.filter((a) => a.card_id === c.id).map(({ id, first_name, last_name }) => ({ id, first_name, last_name })),
+  // Each new activity (a priority made on the Weekly Priorities board is one too); subtasks aren't events.
+  const activities = db.prepare(`SELECT k.id, k.text, k.activity_type, k.due_date, k.due_time, k.done, k.created_at, k.created_by, u.first_name, u.last_name,
+      a.first_name AS assignee_first_name, a.last_name AS assignee_last_name,
+      (SELECT GROUP_CONCAT(tm.name || ' · week of ' || c.week_start, '; ') FROM priority_cards c JOIN teams tm ON tm.id = c.team_id WHERE c.activity_id = k.id) AS priorities
+    FROM ticket_tasks k LEFT JOIN users u ON u.id = k.created_by LEFT JOIN users a ON a.id = k.assignee_id WHERE k.ticket_id = ?`).all(t.id);
+  activities.forEach((k) => events.push({
+    type: 'activity', at: k.created_at, author: k.first_name ? { id: k.created_by, first_name: k.first_name, last_name: k.last_name } : null,
+    activity: {
+      id: k.id, subject: k.text, activity_type: k.activity_type || 'Task', due_date: k.due_date, due_time: k.due_time, done: !!k.done,
+      assignee: k.assignee_first_name ? `${k.assignee_first_name} ${k.assignee_last_name}` : null, priorities: k.priorities,
     },
   }));
-
-  db.prepare(`SELECT n.*, c.title AS card_title, u.first_name, u.last_name FROM card_notes n
-    JOIN priority_cards c ON c.id = n.card_id LEFT JOIN users u ON u.id = n.author_id WHERE c.ticket_id = ?`).all(t.id)
-    .forEach((n) => events.push({ type: 'note', at: n.created_at, author: author(n), note: { id: n.id, body: n.body, updated_at: n.updated_at, card_id: n.card_id, card_title: n.card_title } }));
+  const subjectOf = new Map(activities.map((k) => [k.id, k.text]));
+  const subtasks = new Map(db.prepare('SELECT s.id, s.text, s.task_id FROM activity_subtasks s JOIN ticket_tasks k ON k.id = s.task_id WHERE k.ticket_id = ?').all(t.id).map((x) => [x.id, x]));
 
   const comments = db.prepare(`${COMMENT_SQL} WHERE m.ticket_id = ? ORDER BY m.created_at, m.id`).all(t.id).map(commentOut);
-  // Comments posted on their own are events; comments left under an item are that item's replies.
-  comments.filter((m) => !m.parent_id && !m.target_type).forEach((m) => events.push({
-    type: 'comment', at: m.created_at, author: m.author, comment: m, replies: comments.filter((x) => x.parent_id === m.id),
+  // Comments posted on their own are events, and so are comments on an activity or subtask (marked with what they're
+  // about); comments left under any other item are that item's replies.
+  const aboutOf = (m) => {
+    if (m.target_type === 'activity') return { activity_id: m.target_id, subject: subjectOf.get(m.target_id) ?? null };
+    const sub = subtasks.get(m.target_id);
+    return { activity_id: sub?.task_id ?? null, subject: subjectOf.get(sub?.task_id) ?? null, subtask: sub?.text ?? null };
+  };
+  comments.filter((m) => !m.parent_id && (!m.target_type || m.target_type === 'activity' || m.target_type === 'subtask')).forEach((m) => events.push({
+    type: 'comment', at: m.created_at, author: m.author, comment: m.target_type ? { ...m, about: aboutOf(m) } : m, replies: comments.filter((x) => x.parent_id === m.id),
   }));
 
   db.prepare(`SELECT f.*, u.first_name, u.last_name, p.step_type FROM ticket_files f LEFT JOIN users u ON u.id = f.uploaded_by
@@ -525,8 +380,8 @@ r.get('/:id/timeline', (req, res) => {
     email: { id: m.id, subject: m.subject, from: m.from_address, to: m.to_addresses, cc: m.cc_addresses, body: m.body },
   }));
 
-  const targetId = (e) => ({ ticket: t.id, card: e.card?.id, note: e.note?.id, file: e.file?.id, email: e.email?.id })[e.type];
-  events.filter((e) => e.type !== 'comment').forEach((e) => {
+  const targetId = (e) => ({ ticket: t.id, file: e.file?.id, email: e.email?.id })[e.type];
+  events.filter((e) => e.type !== 'comment' && e.type !== 'activity').forEach((e) => {
     const top = comments.filter((m) => m.target_type === e.type && m.target_id === targetId(e));
     e.replies = top.flatMap((m) => [m, ...comments.filter((x) => x.parent_id === m.id)]);
   });
@@ -553,14 +408,15 @@ r.post('/:id/comments', (req, res) => {
     const id = Number(b.target_id);
     const ok = {
       ticket: () => id === t.id,
-      card: () => db.prepare('SELECT 1 FROM priority_cards WHERE id = ? AND ticket_id = ?').get(id, t.id),
-      note: () => db.prepare('SELECT n.card_id FROM card_notes n JOIN priority_cards c ON c.id = n.card_id WHERE n.id = ? AND c.ticket_id = ?').get(id, t.id),
+      activity: () => db.prepare('SELECT id AS activity_id FROM ticket_tasks WHERE id = ? AND ticket_id = ?').get(id, t.id),
+      subtask: () => db.prepare('SELECT s.task_id AS activity_id FROM activity_subtasks s JOIN ticket_tasks k ON k.id = s.task_id WHERE s.id = ? AND k.ticket_id = ?').get(id, t.id),
       file: () => db.prepare('SELECT 1 FROM ticket_files WHERE id = ? AND ticket_id = ?').get(id, t.id),
       email: () => db.prepare('SELECT 1 FROM ticket_emails WHERE id = ? AND ticket_id = ?').get(id, t.id),
     }[b.target_type]?.();
     if (!ok) return res.status(400).json({ error: 'That item is no longer on this ticket' });
     target = { type: b.target_type, id };
-    cardId = b.target_type === 'card' ? id : b.target_type === 'note' ? ok.card_id : null;
+    // A comment on an activity also joins the conversation on its latest priority card.
+    cardId = ok.activity_id ? db.prepare('SELECT id FROM priority_cards WHERE activity_id = ? ORDER BY week_start DESC LIMIT 1').get(ok.activity_id)?.id ?? null : null;
     kind = 'comment';
   }
   if (b.parent_id) {
@@ -576,7 +432,6 @@ r.post('/:id/comments', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(t.id, cardId, parentId, kind, body, req.user.id, target?.type ?? null, target?.id ?? null).lastInsertRowid;
   recordWork(req.user, { kind, ticket_id: t.id, card_id: cardId, ref_id: id, summary: body });
   notifyMentions(req.user, body, { ticket_id: t.id, card_id: cardId, comment_id: id });
-  inBackground(() => pushNote(id)); // goes to the Pipedrive deal as a note, when it's a ticket from Pipedrive
   res.json({ comment: commentOut(db.prepare(`${COMMENT_SQL} WHERE m.id = ?`).get(id)) });
 });
 
@@ -602,9 +457,9 @@ r.put('/comments/:id', (req, res) => {
   const body = String(req.body?.body || '').trim();
   if (!body) return res.status(400).json({ error: 'A comment can’t be empty' });
   if (body !== m.body) {
-    db.prepare("UPDATE ticket_comments SET body = ?, updated_at = datetime('now'), pipedrive_pending = (pipedrive_id IS NOT NULL AND ?) WHERE id = ?").run(body, pushEnabled() ? 1 : 0, m.id);
+    // A Pipedrive note edited here waits for an admin to send it.
+    db.prepare("UPDATE ticket_comments SET body = ?, updated_at = datetime('now'), pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?").run(body, m.id);
     notifyMentions(req.user, body, { ticket_id: m.ticket_id, card_id: m.card_id, comment_id: m.id }, m.body);
-    inBackground(() => pushNote(m.id));
   }
   res.json({ comment: commentOut(db.prepare(`${COMMENT_SQL} WHERE m.id = ?`).get(m.id)) });
 });
@@ -614,8 +469,7 @@ r.put('/comments/:id/pin', (req, res) => {
   const m = db.prepare('SELECT * FROM ticket_comments WHERE id = ?').get(req.params.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
   if (m.kind !== 'note') return res.status(400).json({ error: 'Only notes can be pinned' });
-  db.prepare('UPDATE ticket_comments SET pinned = ?, pipedrive_pending = (pipedrive_id IS NOT NULL AND ?) WHERE id = ?').run(req.body?.pinned === false ? 0 : 1, pushEnabled() ? 1 : 0, m.id);
-  inBackground(() => pushNote(m.id));
+  db.prepare('UPDATE ticket_comments SET pinned = ?, pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?').run(req.body?.pinned === false ? 0 : 1, m.id);
   res.json({ comment: commentOut(db.prepare(`${COMMENT_SQL} WHERE m.id = ?`).get(m.id)) });
 });
 
@@ -624,7 +478,7 @@ r.delete('/comments/:id', (req, res) => {
   if (!m) return res.status(404).json({ error: 'Not found' });
   if (m.author_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the author can delete this' });
   db.prepare('DELETE FROM ticket_comments WHERE id = ?').run(m.id);
-  inBackground(() => deleteInPipedrive('note', m.pipedrive_id));
+  queueDelete('note', m.pipedrive_id, db.prepare('SELECT pipedrive_id FROM tickets WHERE id = ?').get(m.ticket_id)?.pipedrive_id);
   // Its additional-work entries go with it (replies are removed along with their thread).
   db.prepare("DELETE FROM work_log WHERE kind IN ('question', 'comment', 'reply') AND ref_id NOT IN (SELECT id FROM ticket_comments)").run();
   res.json({ ok: true });
@@ -709,7 +563,6 @@ r.post('/process/:pid/files', upload.single('file'), (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?)`).run(p.ticket_id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id, p.id).lastInsertRowid;
   recordWork(req.user, { kind: 'file', ticket_id: p.ticket_id, ref_id: id, summary: req.file.originalname });
   touch(p.ticket_id);
-  inBackground(() => pushFile(id));
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
@@ -725,7 +578,6 @@ r.post('/:id/files', upload.single('file'), (req, res) => {
   const id = db.prepare(`INSERT INTO ticket_files (ticket_id, original_name, stored_name, mime_type, size, uploaded_by)
     VALUES (?, ?, ?, ?, ?, ?)`).run(t.id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id).lastInsertRowid;
   recordWork(req.user, { kind: 'file', ticket_id: t.id, ref_id: id, summary: req.file.originalname });
-  inBackground(() => pushFile(id)); // goes to the Pipedrive deal too, when it's a ticket from Pipedrive
   res.json({ file: { id, name: req.file.originalname, size: req.file.size, mime_type: req.file.mimetype } });
 });
 
@@ -773,7 +625,7 @@ r.put('/:id/details', (req, res) => {
     if (p != null && !(p >= 0 && p <= 100)) return res.status(400).json({ error: 'Probability is a percent from 0 to 100' });
     set.probability = p;
   }
-  if ('labels' in b) { set.labels = cleanLabels(b.labels); set.labels_pending = t.pipedrive_id && pushEnabled() ? 1 : 0; }
+  if ('labels' in b) { set.labels = cleanLabels(b.labels); set.labels_pending = t.pipedrive_id ? 1 : 0; }
   if ('custom_fields' in b) {
     set.custom_fields = json.str((b.custom_fields || []).map((f) => ({ name: String(f.name ?? '').trim(), value: String(f.value ?? '').trim() })).filter((f) => f.name));
   }
@@ -792,7 +644,6 @@ r.put('/:id/details', (req, res) => {
     }
   })();
   touch(t.id);
-  if ('labels' in b) inBackground(() => pushLabels(t.id));
   res.json(detailsOf(ticketRow(t.id)));
 });
 
@@ -805,14 +656,12 @@ function cleanLabels(names) {
   return json.str(out);
 }
 
-/** Body: { labels: [names] }. Sets a ticket's tags; a ticket from Pipedrive sends Pipedrive's labels to its deal. */
+/** Body: { labels: [names] }. Sets a ticket's tags. On a ticket from Pipedrive the change waits for an admin to send it. */
 r.put('/:id/labels', (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  // Marked to send only where sending is on; otherwise the next sync puts Pipedrive's labels back (tags made in KIT stay).
-  db.prepare('UPDATE tickets SET labels = ?, labels_pending = ? WHERE id = ?').run(cleanLabels(req.body?.labels), t.pipedrive_id && pushEnabled() ? 1 : 0, t.id);
+  db.prepare('UPDATE tickets SET labels = ?, labels_pending = ? WHERE id = ?').run(cleanLabels(req.body?.labels), t.pipedrive_id ? 1 : 0, t.id);
   touch(t.id);
-  inBackground(() => pushLabels(t.id));
   res.json({ labels: json.parse(ticketRow(t.id).labels, []) });
 });
 

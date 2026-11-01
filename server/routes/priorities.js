@@ -4,6 +4,7 @@ import { loadThreads, bidAssignment, NO_ASSIGNMENT } from './tickets.js';
 import { recordWork, loadWorkLog } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
 import { KIT_STAGES, listPipelines, allStatuses } from '../pipelines.js';
+import { nextPosition, openOrder, rankOf, reorderWithin, mirrorCards, setSubtasksFromChecklist, syncMilestone } from '../activities.js';
 
 const r = Router();
 
@@ -30,14 +31,19 @@ function loadCards(teamId, weekStart) {
     WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL ORDER BY c.id`).all(teamId, weekStart);
   const assignees = db.prepare(`SELECT a.* FROM card_assignees a JOIN priority_cards c ON c.id = a.card_id
     WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL`).all(teamId, weekStart);
-  const notes = db.prepare(`SELECT n.*, u.first_name, u.last_name FROM card_notes n
-    JOIN priority_cards c ON c.id = n.card_id LEFT JOIN users u ON u.id = n.author_id
-    WHERE c.team_id = ? AND c.week_start = ? ORDER BY n.created_at DESC, n.id DESC`).all(teamId, weekStart);
+  // A card's notes (status updates) are the comments on its activity.
+  const notes = db.prepare(`SELECT m.*, u.first_name, u.last_name FROM ticket_comments m LEFT JOIN users u ON u.id = m.author_id
+    WHERE m.parent_id IS NULL AND m.target_type = 'activity' AND m.target_id IN (SELECT value FROM json_each(?))
+    ORDER BY m.created_at DESC, m.id DESC`).all(JSON.stringify(cards.map((c) => c.activity_id).filter(Boolean)));
+  const ranks = new Map();
+  [...new Set(cards.map((c) => c.ticket_id))].forEach((t) => openOrder(t).forEach((id, i) => ranks.set(id, i + 1)));
   return cards.map((c) => ({
     ...c,
     checklist: json.parse(c.checklist, []),
-    notes: notes.filter((n) => n.card_id === c.id).map(noteOut),
+    notes: notes.filter((n) => c.activity_id && n.target_id === c.activity_id).map(noteOut),
     assignees: assignees.filter((a) => a.card_id === c.id).map((a) => ({ user_id: a.user_id, position: a.position })),
+    // Its place among the ticket's open activities now, and when the week's planning closed.
+    rank: c.activity_id ? ranks.get(c.activity_id) ?? null : null,
   }));
 }
 
@@ -47,7 +53,7 @@ const noteOut = (n) => ({
 });
 
 function loadNote(id) {
-  const n = db.prepare('SELECT n.*, u.first_name, u.last_name FROM card_notes n LEFT JOIN users u ON u.id = n.author_id WHERE n.id = ?').get(id);
+  const n = db.prepare('SELECT m.*, u.first_name, u.last_name FROM ticket_comments m LEFT JOIN users u ON u.id = m.author_id WHERE m.id = ?').get(id);
   return n && noteOut(n);
 }
 
@@ -120,7 +126,13 @@ r.put('/planning', (req, res) => {
   }
   const close = db.prepare('INSERT OR IGNORE INTO week_planning (team_id, week_start, closed_by) VALUES (?, ?, ?)');
   const open = db.prepare('DELETE FROM week_planning WHERE team_id = ? AND week_start = ?');
-  db.transaction(() => weeks.forEach(([id, w]) => (closed ? close.run(id, w, req.user.id) : open.run(id, w))))();
+  // Closing planning notes where each priority stands on its ticket, so later moves can be shown on the board.
+  const lock = db.prepare('UPDATE priority_cards SET locked_rank = ? WHERE id = ?');
+  const unlock = db.prepare('UPDATE priority_cards SET locked_rank = NULL WHERE team_id = ? AND week_start = ?');
+  db.transaction(() => weeks.forEach(([id, w]) => {
+    if (!closed) { open.run(id, w); unlock.run(id, w); return; }
+    if (close.run(id, w, req.user.id).changes) loadCards(id, w).forEach((c) => lock.run(c.rank, c.id));
+  }))();
   res.json({ planning: planningFor(weeks) });
 });
 
@@ -178,13 +190,17 @@ export function ticketFields(t = {}) {
   };
 }
 
-function cardFields(b = {}) {
-  return {
-    title: b.title?.trim() || null,
-    due_date: b.due_date || null,
-    checklist: json.str(Array.isArray(b.checklist) ? b.checklist.map((i) => ({ text: String(i.text || ''), done: !!i.done })) : []),
-    completed: b.completed ? 1 : 0,
-  };
+/** A card's own fields go to its activity: title → subject, due date, completed → done, checklist → subtasks. */
+function saveToActivity(activityId, b, user) {
+  const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(activityId);
+  const title = b.title?.trim() || k.text;
+  const done = !!b.completed;
+  db.prepare(`UPDATE ticket_tasks SET text = ?, due_date = ?, done = ?, done_at = CASE WHEN ? THEN COALESCE(done_at, datetime('now')) END,
+    position = CASE WHEN ? = done THEN position WHEN ? THEN position ELSE ? END WHERE id = ?`)
+    .run(title, /^\d{4}-\d{2}-\d{2}$/.test(b.due_date || '') ? b.due_date : null, done ? 1 : 0, done ? 1 : 0, done ? 1 : 0, done ? 1 : 0, nextPosition(k.ticket_id), k.id);
+  if (Array.isArray(b.checklist)) setSubtasksFromChecklist(k.id, b.checklist, user.id);
+  mirrorCards(k.id);
+  syncMilestone(k.ticket_id);
 }
 
 function setAssignees(cardId, userIds, teamId, weekStart) {
@@ -228,17 +244,30 @@ r.post('/cards', (req, res) => {
           @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined)`)
         .run({ ...fields, ...assign, ticket_type: ticketType, created_by: req.user.id }).lastInsertRowid;
     }
+    // A priority is an activity on the ticket: an existing one placed in this week, or a new one at the bottom of its list.
+    let activityId = Number(b.activity_id) || null;
+    if (activityId && !db.prepare('SELECT 1 FROM ticket_tasks WHERE id = ? AND ticket_id = ?').get(activityId, ticketId)) throw new Error('That activity isn’t on this ticket');
+    const isNew = !activityId;
+    if (isNew) {
+      const title = b.title?.trim() || db.prepare('SELECT opportunity_title FROM tickets WHERE id = ?').get(ticketId).opportunity_title;
+      activityId = db.prepare(`INSERT INTO ticket_tasks (ticket_id, text, activity_type, assignee_id, position, created_by) VALUES (?, ?, 'Task', ?, ?, ?)`)
+        .run(ticketId, title, Number(assignees[0]) || req.user.id, nextPosition(ticketId), req.user.id).lastInsertRowid;
+    }
     // Cards added while the week's planning is open are priorities; once planning
     // is closed, new cards are work tickets (accomplishments and new tasks).
     const isPlanned = planningClosed(t.id, weekStart) ? 0 : 1;
-    const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, title, due_date, checklist, completed, is_planned, created_by)
-      VALUES (@ticket_id, @team_id, @week_start, @title, @due_date, @checklist, @completed, @is_planned, @created_by)`)
-      .run({ ...cardFields(b), ticket_id: ticketId, team_id: t.id, week_start: weekStart, is_planned: isPlanned, created_by: req.user.id }).lastInsertRowid;
+    const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, is_planned, created_by)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(ticketId, t.id, weekStart, activityId, isPlanned, req.user.id).lastInsertRowid;
+    if (isNew) saveToActivity(activityId, b, req.user);
+    else mirrorCards(activityId);
+    // Added after planning closed, it's measured from where it starts.
+    if (!isPlanned) db.prepare('UPDATE priority_cards SET locked_rank = ? WHERE id = ?').run(rankOf(activityId), cardId);
     setAssignees(cardId, assignees, t.id, weekStart);
     // Notes written before the card existed, oldest first so the newest stays on top.
-    const addNote = db.prepare('INSERT INTO card_notes (card_id, body, author_id) VALUES (?, ?, ?)');
+    const addNote = db.prepare(`INSERT INTO ticket_comments (ticket_id, card_id, kind, body, author_id, target_type, target_id)
+      VALUES (?, ?, 'comment', ?, ?, 'activity', ?)`);
     (Array.isArray(b.new_notes) ? b.new_notes : []).map((n) => String(n || '').trim()).filter(Boolean).reverse()
-      .forEach((body) => addNote.run(cardId, body, req.user.id));
+      .forEach((body) => addNote.run(ticketId, cardId, body, req.user.id, activityId));
     return cardId;
   });
 
@@ -264,8 +293,7 @@ r.put('/cards/:id', (req, res) => {
   const tf = ticketFields(b.ticket);
   if (b.ticket && !tf.opportunity_title) return res.status(400).json({ error: 'Opportunity Title is required' });
   db.transaction(() => {
-    db.prepare(`UPDATE priority_cards SET title=@title, due_date=@due_date, checklist=@checklist,
-      completed=@completed, updated_at=datetime('now') WHERE id=@id`).run({ ...cardFields(b), id: card.id });
+    saveToActivity(activityFor(card, req.user), b, req.user);
     if (b.ticket) {
       db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
         pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type,
@@ -274,25 +302,37 @@ r.put('/cards/:id', (req, res) => {
     if (Array.isArray(b.assignees) && b.assignees.length) setAssignees(card.id, b.assignees, card.team_id, card.week_start);
   })();
   const wasDone = new Set(json.parse(card.checklist, []).filter((i) => i.done).map((i) => i.text));
-  json.parse(cardFields(b).checklist, []).filter((i) => i.done && !wasDone.has(i.text))
+  (Array.isArray(b.checklist) ? b.checklist : []).filter((i) => i.done && !wasDone.has(String(i.text || '').trim()))
     .forEach((i) => recordWork(req.user, { kind: 'task', ticket_id: card.ticket_id, card_id: card.id, summary: i.text }));
   if (b.completed && !card.completed) recordWork(req.user, { kind: 'completed', ticket_id: card.ticket_id, card_id: card.id, summary: card.title });
   res.json({ card: loadCard(card.id) });
 });
 
-/** Check or uncheck one task. It moves to the end of the list, so newly finished tasks sink to the bottom. */
+/** Check or uncheck one checklist item: the subtask at that place under the card's activity. */
 r.put('/cards/:id/checklist/:index', (req, res) => {
   const card = db.prepare('SELECT * FROM priority_cards WHERE id = ?').get(req.params.id);
   if (!card) return res.status(404).json({ error: 'Not found' });
-  const list = json.parse(card.checklist, []);
-  const i = Number(req.params.index);
-  if (!list[i]) return res.status(400).json({ error: 'Task not found' });
-  const [item] = list.splice(i, 1);
-  list.push({ ...item, done: !!req.body?.done });
-  db.prepare("UPDATE priority_cards SET checklist = ?, updated_at = datetime('now') WHERE id = ?").run(json.str(list), card.id);
-  if (req.body?.done && !item.done) recordWork(req.user, { kind: 'task', ticket_id: card.ticket_id, card_id: card.id, summary: item.text });
+  const activityId = activityFor(card, req.user);
+  const sub = db.prepare('SELECT * FROM activity_subtasks WHERE task_id = ? ORDER BY position, id LIMIT 1 OFFSET ?').get(activityId, Number(req.params.index) || 0);
+  if (!sub) return res.status(400).json({ error: 'Task not found' });
+  const done = !!req.body?.done;
+  db.transaction(() => {
+    db.prepare("UPDATE activity_subtasks SET done = ?, done_at = CASE WHEN ? THEN datetime('now') END WHERE id = ?").run(done ? 1 : 0, done ? 1 : 0, sub.id);
+    mirrorCards(activityId);
+  })();
+  if (done && !sub.done) recordWork(req.user, { kind: 'task', ticket_id: card.ticket_id, card_id: card.id, summary: sub.text });
   res.json({ card: loadCard(card.id) });
 });
+
+/** The card's activity, made from the card if it lost it (say the activity was deleted in Pipedrive). */
+function activityFor(card, user) {
+  if (card.activity_id && db.prepare('SELECT 1 FROM ticket_tasks WHERE id = ?').get(card.activity_id)) return card.activity_id;
+  const id = db.prepare(`INSERT INTO ticket_tasks (ticket_id, text, activity_type, due_date, done, position, created_by) VALUES (?, ?, 'Task', ?, ?, ?, ?)`)
+    .run(card.ticket_id, card.title || 'Priority', card.due_date, card.completed, nextPosition(card.ticket_id), user.id).lastInsertRowid;
+  setSubtasksFromChecklist(id, json.parse(card.checklist, []), user.id);
+  db.prepare('UPDATE priority_cards SET activity_id = ? WHERE id = ?').run(id, card.id);
+  return id;
+}
 
 /** Body: { archived: boolean }. Archiving takes a card off the board; restoring puts it back. */
 r.put('/cards/:id/archive', (req, res) => {
@@ -302,26 +342,40 @@ r.put('/cards/:id/archive', (req, res) => {
   res.json({ ok: true });
 });
 
+/** Deleting a priority deletes its activity too, unless the activity is on another week's board or came from Pipedrive. */
 r.delete('/cards/:id', (req, res) => {
-  db.prepare('DELETE FROM priority_cards WHERE id = ?').run(req.params.id);
+  const card = db.prepare('SELECT * FROM priority_cards WHERE id = ?').get(req.params.id);
+  if (!card) return res.json({ ok: true });
+  db.transaction(() => {
+    db.prepare('DELETE FROM priority_cards WHERE id = ?').run(card.id);
+    const k = card.activity_id && db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(card.activity_id);
+    if (k && !k.pipedrive_id && !db.prepare('SELECT 1 FROM priority_cards WHERE activity_id = ?').get(k.id)) {
+      db.prepare("UPDATE ticket_comments SET target_type = NULL, target_id = NULL WHERE (target_type = 'activity' AND target_id = ?) OR (target_type = 'subtask' AND target_id IN (SELECT id FROM activity_subtasks WHERE task_id = ?))").run(k.id, k.id);
+      db.prepare('DELETE FROM ticket_tasks WHERE id = ?').run(k.id);
+      syncMilestone(k.ticket_id);
+    }
+  })();
   res.json({ ok: true });
 });
 
-// ---- Notes (each one a separate entry; only its author or an admin may change it)
+// ---- Notes: a card's status updates are comments on its activity, so they show in the ticket's history too. Only a
+// note's author or an admin may change it.
 
 r.post('/cards/:id/notes', (req, res) => {
   const body = String(req.body?.body || '').trim();
   if (!body) return res.status(400).json({ error: 'Note is empty' });
   const card = db.prepare('SELECT * FROM priority_cards WHERE id = ?').get(req.params.id);
   if (!card) return res.status(404).json({ error: 'Not found' });
-  const id = db.prepare('INSERT INTO card_notes (card_id, body, author_id) VALUES (?, ?, ?)').run(card.id, body, req.user.id).lastInsertRowid;
-  recordWork(req.user, { kind: 'note', ticket_id: card.ticket_id, card_id: card.id, ref_id: id, summary: body });
-  notifyMentions(req.user, body, { ticket_id: card.ticket_id, card_id: card.id, note_id: id });
+  const activityId = activityFor(card, req.user);
+  const id = db.prepare(`INSERT INTO ticket_comments (ticket_id, card_id, kind, body, author_id, target_type, target_id)
+    VALUES (?, ?, 'comment', ?, ?, 'activity', ?)`).run(card.ticket_id, card.id, body, req.user.id, activityId).lastInsertRowid;
+  recordWork(req.user, { kind: 'comment', ticket_id: card.ticket_id, card_id: card.id, ref_id: id, summary: body });
+  notifyMentions(req.user, body, { ticket_id: card.ticket_id, card_id: card.id, comment_id: id });
   res.json({ note: loadNote(id) });
 });
 
 function ownNote(req, res) {
-  const n = db.prepare('SELECT * FROM card_notes WHERE id = ?').get(req.params.id);
+  const n = db.prepare("SELECT * FROM ticket_comments WHERE id = ? AND target_type = 'activity'").get(req.params.id);
   if (!n) return res.status(404).json({ error: 'Note not found' }), null;
   if (n.author_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the note\'s author can change it' }), null;
   return n;
@@ -333,9 +387,8 @@ r.put('/notes/:id', (req, res) => {
   const body = String(req.body?.body || '').trim();
   if (!body) return res.status(400).json({ error: 'Note is empty' });
   if (body !== n.body) {
-    db.prepare("UPDATE card_notes SET body = ?, updated_at = datetime('now') WHERE id = ?").run(body, n.id);
-    const c = db.prepare('SELECT ticket_id FROM priority_cards WHERE id = ?').get(n.card_id);
-    notifyMentions(req.user, body, { ticket_id: c?.ticket_id, card_id: n.card_id, note_id: n.id }, n.body);
+    db.prepare("UPDATE ticket_comments SET body = ?, updated_at = datetime('now') WHERE id = ?").run(body, n.id);
+    notifyMentions(req.user, body, { ticket_id: n.ticket_id, card_id: n.card_id, comment_id: n.id }, n.body);
   }
   res.json({ note: loadNote(n.id) });
 });
@@ -343,8 +396,8 @@ r.put('/notes/:id', (req, res) => {
 r.delete('/notes/:id', (req, res) => {
   const n = ownNote(req, res);
   if (!n) return;
-  db.prepare('DELETE FROM card_notes WHERE id = ?').run(n.id);
-  db.prepare("DELETE FROM work_log WHERE kind = 'note' AND ref_id = ?").run(n.id);
+  db.prepare('DELETE FROM ticket_comments WHERE id = ? OR parent_id = ?').run(n.id, n.id);
+  db.prepare("DELETE FROM work_log WHERE kind IN ('note', 'comment') AND ref_id = ?").run(n.id);
   res.json({ ok: true });
 });
 
@@ -374,6 +427,14 @@ r.put('/lanes', (req, res) => {
     const orphans = db.prepare(`DELETE FROM priority_cards WHERE team_id = ? AND week_start = ? AND archived_at IS NULL
       AND id NOT IN (SELECT card_id FROM card_assignees)`);
     weeks.forEach(([id, w]) => orphans.run(id, w));
+    // Two priorities on the same ticket swapping places in a lane swap places in the ticket's activity list too.
+    const cardRow = db.prepare('SELECT ticket_id, activity_id FROM priority_cards WHERE id = ?');
+    Object.values(lanes).forEach((ids) => {
+      const byTicket = new Map();
+      ids.map(Number).filter((id) => weekCards.has(id)).map((id) => cardRow.get(id)).filter((c) => c?.activity_id)
+        .forEach((c) => byTicket.set(c.ticket_id, [...(byTicket.get(c.ticket_id) || []), c.activity_id]));
+      byTicket.forEach((acts, ticketId) => reorderWithin(ticketId, acts));
+    });
   })();
   res.json({ cards: weeks.flatMap(([id, w]) => loadCards(id, w)) });
 });

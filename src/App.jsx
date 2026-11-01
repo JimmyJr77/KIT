@@ -17,8 +17,10 @@ import Marketing from './pages/Marketing.jsx';
 import Settings from './pages/Settings.jsx';
 import AdminAccess from './pages/AdminAccess.jsx';
 import MyTeam from './pages/MyTeam.jsx';
+import MemberAccess from './pages/MemberAccess.jsx';
 import Reports from './pages/Reports.jsx';
 import Archive from './pages/Archive.jsx';
+import DoneTickets from './pages/DoneTickets.jsx';
 import LostTickets from './pages/LostTickets.jsx';
 
 export default function App() {
@@ -43,6 +45,7 @@ export default function App() {
         <Route path="/travel" element={<Travel />} />
         <Route path="/priorities" element={<WeeklyPriorities />} />
         <Route path="/tickets" element={<Tickets />} />
+        <Route path="/tickets/done" element={<DoneTickets />} />
         <Route path="/pipeline" element={<Pipeline />} />
         <Route path="/pipeline/lost" element={<LostTickets />} />
         <Route path="/delivery" element={<Delivery />} />
@@ -52,6 +55,7 @@ export default function App() {
         <Route path="/settings" element={<Settings />} />
         <Route path="/admin" element={<AdminAccess />} />
         <Route path="/my-team" element={<MyTeam />} />
+        <Route path="/member" element={<MemberAccess />} />
         <Route path="/alerts" element={<Alerts />} />
         <Route path="*" element={<Navigate to="/priorities" replace />} />
       </Route>

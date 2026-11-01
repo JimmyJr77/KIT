@@ -86,7 +86,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
     onSaved();
   };
   const remove = async () => {
-    if (!confirm('Delete this priority card? The ticket is kept.')) return;
+    if (!confirm('Delete this priority? Its activity is deleted from the ticket too (unless it came from Pipedrive or is on another week). The ticket is kept.')) return;
     await api.del(`/priorities/cards/${card.id}`);
     onSaved();
   };
@@ -220,7 +220,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
           <Field label="Due date">
             <input type="date" className="input" value={form.due_date} onChange={(e) => set('due_date', e.target.value)} disabled={ro} />
           </Field>
-          <Field label={`Checklist${form.checklist.length ? ` (${form.checklist.filter((c) => c.done).length}/${form.checklist.length})` : ''}`}>
+          <Field label={`Subtasks${form.checklist.length ? ` (${form.checklist.filter((c) => c.done).length}/${form.checklist.length})` : ''}`}>
             <ul className="space-y-1.5">
               {form.checklist.map((item, i) => (
                 <li key={i} className="group flex items-center gap-2">
@@ -234,13 +234,13 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
             </ul>
             {!ro && (
               <div className="mt-2 flex gap-2">
-                <input className="input" placeholder="Add a checklist item…" value={newItem} onChange={(e) => setNewItem(e.target.value)}
+                <input className="input" placeholder="Add a subtask…" value={newItem} onChange={(e) => setNewItem(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addItem())} />
                 <button type="button" className="btn" onClick={addItem}><Plus size={15} /></button>
               </div>
             )}
           </Field>
-          <Field label="Notes">
+          <Field label="Comments · also in the ticket’s history">
             <CardNotes cardId={card?.id ?? null} initial={card?.notes || []} user={user} readOnly={ro}
               onDirtyChange={setNotesDirty} onPendingChange={setPendingNotes} onChanged={onNotesChanged} />
           </Field>

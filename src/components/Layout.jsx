@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UsersRound, FileChartColumn, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
@@ -105,6 +105,7 @@ export default function Layout() {
         </nav>
         <div className={`space-y-1 pb-2 ${collapsed ? 'px-2' : 'px-3'}`}>
           <NavItem to="/settings" label="Settings" icon={Settings} collapsed={collapsed} />
+          {!isAdmin && !ledTeams(user).length && <NavItem to="/member" label="Member Access" icon={UserRound} collapsed={collapsed} />}
           {ledTeams(user).length > 0 && <NavItem to="/my-team" label={ledTeams(user).length === 1 ? 'My team' : 'My teams'} icon={UsersRound} collapsed={collapsed} />}
           {isAdmin && <NavItem to="/admin" label="Admin Access" icon={ShieldCheck} count={pendingRequests} collapsed={collapsed} />}
           <button onClick={toggle} title={collapsed ? 'Expand sidebar' : 'Minimize sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Minimize sidebar'}

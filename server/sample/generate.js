@@ -168,13 +168,17 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
     return { id, title, owner };
   });
 
-  // Contacts on bids for the same organization; next steps, tasks and process flow on open bids; a few conversations.
+  // Contacts on bids for the same organization; activities (next steps first) and process flow on open bids; a few conversations.
   bids.forEach((t) => contacts.filter((c) => c.organization === t.org).forEach((c) => insert('ticket_contacts', { ticket_id: t.id, contact_id: c.id, added_by: t.owner.id })));
   bids.forEach((t) => {
-    some(['Schedule customer call', 'Draft white paper outline', 'Confirm teaming partner', 'Pricing review with finance', 'Submit questions by deadline'], int(2, 4))
-      .forEach((text, position) => insert('ticket_steps', { ticket_id: t.id, text, position, is_next: position === 1 ? 1 : 0, author_id: t.owner.id }));
-    some(['Pull past performance references', 'Draft compliance matrix', 'Get resumes for key personnel', 'Review Section M'], int(1, 3))
-      .forEach((text, position) => insert('ticket_tasks', { ticket_id: t.id, text, position, done: rand() < 0.3 ? 1 : 0, created_by: t.owner.id }));
+    const steps = some(['Schedule customer call', 'Draft white paper outline', 'Confirm teaming partner', 'Pricing review with finance', 'Submit questions by deadline'], int(2, 4))
+      .map((text, i) => ({ text, activity_type: i ? 'Task' : 'Call', due_date: rand() < 0.7 ? addDays(today, int(-3, 20)) : null }));
+    const tasks = some(['Pull past performance references', 'Draft compliance matrix', 'Get resumes for key personnel', 'Review Section M'], int(1, 3))
+      .map((text) => ({ text, activity_type: 'Task', due_date: null, done: rand() < 0.3 ? 1 : 0 }));
+    [...steps, ...tasks].forEach((k, position) => insert('ticket_tasks', {
+      ticket_id: t.id, position, done: 0, assignee_id: t.owner.id, created_by: t.owner.id, created_at: ago(int(1, 20), '09:00:00'), ...k,
+      done_at: k.done ? ago(int(0, 5)) : null,
+    }));
     if (['Capture', 'Proposal', 'Under Evaluation'].includes(t.status)) {
       ['RFI', 'Initial Gate Review', 'RFP'].slice(0, int(1, 3)).forEach((step_type, i) => insert('ticket_process_steps', {
         ticket_id: t.id, step_type, step_date: addDays(today, -60 + i * 20), author_id: t.owner.id,
@@ -222,14 +226,28 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
       members.forEach((m) => {
         const count = int(2, 4);
         for (let pos = 0; pos < count; pos++) {
+          // Each priority is an activity on its ticket, with its checklist as subtasks and its status updates as comments.
           const ticket = team.name === 'BD' ? pick(bids) : pick(tickets);
+          const title = pick(TITLES);
+          const due = addDays(week, int(1, 6));
+          const completed = (past ? rand() < 0.75 : rand() < 0.2) ? 1 : 0;
+          const checklist = some(ITEMS, int(0, 4)).map((text) => ({ text, done: past ? rand() < 0.85 : rand() < 0.35 }));
+          const created = stamp(week, '09:30:00');
+          const activity = insert('ticket_tasks', {
+            ticket_id: ticket.id, text: title, activity_type: 'Task', due_date: due, done: completed, done_at: completed ? stamp(due, '17:00:00') : null,
+            assignee_id: m.id, created_by: m.id, created_at: created,
+            position: db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM main.ticket_tasks WHERE ticket_id = ?').get(ticket.id).p,
+          });
+          checklist.forEach((i, n) => insert('activity_subtasks', { task_id: activity, text: i.text, done: i.done ? 1 : 0, position: n, created_by: m.id, created_at: created }));
           const card = insert('priority_cards', {
-            ticket_id: ticket.id, team_id: team.id, week_start: week, title: pick(TITLES), due_date: addDays(week, int(1, 6)),
-            checklist: json.str(some(ITEMS, int(0, 4)).map((text) => ({ text, done: past ? rand() < 0.85 : rand() < 0.35 }))),
-            completed: (past ? rand() < 0.75 : rand() < 0.2) ? 1 : 0, created_by: m.id, created_at: stamp(week, '09:30:00'),
+            ticket_id: ticket.id, team_id: team.id, week_start: week, activity_id: activity, title, due_date: due,
+            checklist: json.str(checklist), completed, created_by: m.id, created_at: created,
           });
           insert('card_assignees', { card_id: card, user_id: m.id, position: pos });
-          if (rand() < 0.3) insert('card_notes', { card_id: card, body: pick(['Waiting on partner input.', 'Customer pushed the meeting to Thursday.', 'Draft is in SharePoint.']), author_id: m.id, created_at: stamp(addDays(week, 2), '16:00:00') });
+          if (rand() < 0.3) {
+            insert('ticket_comments', { ticket_id: ticket.id, card_id: card, kind: 'comment', target_type: 'activity', target_id: activity, author_id: m.id,
+              created_at: stamp(addDays(week, 2), '16:00:00'), body: pick(['Waiting on partner input.', 'Customer pushed the meeting to Thursday.', 'Draft is in SharePoint.']) });
+          }
         }
       });
     });

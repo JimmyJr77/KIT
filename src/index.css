@@ -8,6 +8,8 @@
   --color-brand-600: #2f4ac0;
   --color-brand-700: #253b9c;
   --color-brand-900: #14204f;
+  --animate-blink: blink 1s steps(2, start) infinite;
+  @keyframes blink { to { opacity: 0.25; } }
 }
 
 @utility label { @apply block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1; }
