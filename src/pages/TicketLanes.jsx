@@ -7,6 +7,7 @@ import { usd } from '../lib/travelCalc.js';
 import { LANES, daysToArchive } from '../lib/lanes.js';
 import { activityTimer, daysSince } from '../lib/activityTimer.js';
 import Avatar from '../components/Avatar.jsx';
+import { LabelList } from '../components/Labels.jsx';
 
 const money = (n) => usd(n).replace('.00', '');
 const HINT = {
@@ -124,6 +125,7 @@ function LaneCard({ ticket: t, now, overlay, onLock, onArchive }) {
         <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${isBid ? 'bg-brand-50 text-brand-700' : 'bg-slate-200 text-slate-700'}`}>{isBid ? 'Bid' : 'Work'}</span>
       </div>
       <div className="mt-0.5 h-4 truncate text-xs text-slate-500">{[t.organization, t.pipeline_status].filter(Boolean).join(' · ')}</div>
+      <LabelList labels={t.labels} className="mt-1.5" />
       <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-400">
         <span className="flex min-w-0 items-center gap-1.5">
           {t.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700">{money(t.value)}</span>}

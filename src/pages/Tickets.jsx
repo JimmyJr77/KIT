@@ -13,6 +13,7 @@ import NewTicketPanel from './NewTicketPanel.jsx';
 import TicketLanes from './TicketLanes.jsx';
 import DirectorSelect from '../components/DirectorSelect.jsx';
 import { byDirector } from '../lib/directors.js';
+import { LabelList } from '../components/Labels.jsx';
 
 /** Every master ticket the user created or has priorities on. */
 export default function Tickets() {
@@ -175,6 +176,7 @@ export default function Tickets() {
                 <div className="min-w-0">
                   <div className="font-semibold leading-snug text-slate-900">{t.opportunity_title}</div>
                   <div className="truncate text-xs text-slate-500">{t.organization || `Ticket #${t.id}`}</div>
+                  <LabelList labels={t.labels} className="mt-1" />
                   {t.ticket_type !== 'work' ? (
                     <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-slate-400" title="BD director">
                       <UserRound size={11} /> {t.director_first_name ? `${t.director_first_name} ${t.director_last_name}` : 'No BD director'}

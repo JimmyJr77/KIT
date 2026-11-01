@@ -39,8 +39,8 @@ const MIME = { '.pdf': 'application/pdf', '.doc': 'application/msword', '.docx':
 
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
-async function call(p, query = {}, { raw = false, method = 'GET', body } = {}) {
-  const u = new URL(`${API}/${p}`);
+async function call(p, query = {}, { raw = false, method = 'GET', body, v2 = false } = {}) {
+  const u = new URL(`${v2 ? API.replace(/\/v1$/, '/api/v2') : API}/${p}`);
   Object.entries({ ...query, api_token: apiKey() }).forEach(([k, v]) => u.searchParams.set(k, v));
   const init = { method };
   if (body instanceof FormData) init.body = body;
@@ -186,6 +186,24 @@ export async function deleteInPipedrive(kind, pipedriveId) {
   }
 }
 
+/**
+ * Send a ticket's tags to its deal. Only Pipedrive's own labels go; tags made in KIT stay in KIT (adding one to
+ * Pipedrive would change the label list for the whole company).
+ */
+export async function pushLabels(ticketId) {
+  if (!pushEnabled()) return;
+  const t = db.prepare('SELECT id, pipedrive_id, labels, labels_pending FROM tickets WHERE id = ?').get(ticketId);
+  if (!t?.pipedrive_id || !t.labels_pending) return;
+  const ids = db.prepare(`SELECT pipedrive_id FROM labels WHERE pipedrive_id IS NOT NULL AND name IN (SELECT value FROM json_each(?))`)
+    .all(t.labels || '[]').map((l) => l.pipedrive_id);
+  try {
+    await call(`deals/${t.pipedrive_id}`, {}, { method: 'PATCH', body: { label_ids: ids }, v2: true });
+    db.prepare('UPDATE tickets SET labels_pending = 0 WHERE id = ?').run(t.id);
+  } catch (e) {
+    console.error(`Pipedrive: couldn't send tags for ticket ${t.id}: ${e.message}`);
+  }
+}
+
 /** Run a send without holding up the request that caused it. */
 export const inBackground = (fn) => { if (pushEnabled()) fn().catch((e) => console.error('Pipedrive:', e.message)); };
 
@@ -198,6 +216,7 @@ async function pushPending() {
     await pushNote(m.id);
     if (db.prepare('SELECT pipedrive_id IS NOT NULL AND pipedrive_pending = 0 AS ok FROM ticket_comments WHERE id = ?').get(m.id)?.ok) sent.notesSent += 1;
   }
+  for (const t of db.prepare('SELECT id FROM tickets WHERE labels_pending = 1 AND pipedrive_id IS NOT NULL').all()) await pushLabels(t.id);
   for (const f of db.prepare(`${FILE_SQL} AND f.pipedrive_id IS NULL AND f.pipedrive_note_id IS NULL`).all()) {
     await pushFile(f.id);
     if (db.prepare('SELECT COALESCE(pipedrive_id, pipedrive_note_id) IS NOT NULL AS ok FROM ticket_files WHERE id = ?').get(f.id)?.ok) sent.documentsSent += 1;
@@ -347,6 +366,13 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
   const labelField = fieldByKey.get('label');
   const channelField = fieldByKey.get('channel');
   const territories = new Map(db.prepare('SELECT id, name FROM territories').all().map((t) => [t.name, t.id]));
+  // Pipedrive's labels, with their colors. A KIT tag with the same name becomes that label.
+  (labelField?.options || []).forEach((o, i) => {
+    const row = db.prepare('SELECT id FROM labels WHERE pipedrive_id = ?').get(o.id) || db.prepare('SELECT id FROM labels WHERE name = ? COLLATE NOCASE').get(o.label);
+    if (row) db.prepare('UPDATE labels SET name = ?, color = ?, position = ?, pipedrive_id = ? WHERE id = ?').run(o.label, o.color || 'gray', i, o.id, row.id);
+    else db.prepare('INSERT INTO labels (name, color, position, pipedrive_id) VALUES (?, ?, ?, ?)').run(o.label, o.color || 'gray', i, o.id);
+  });
+  const kitOnly = new Set(db.prepare('SELECT name FROM labels WHERE pipedrive_id IS NULL').all().map((l) => l.name.toLowerCase()));
   const pdFieldNames = new Set([...customFields.map((f) => f.name), OWNER_FIELD]);
 
   // ---- People in the CRM: Pipedrive persons → contacts
@@ -423,6 +449,9 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
     } else {
       const before = lastHistory.get(t.id).id;
       const kept = json.parse(t.custom_fields, []).filter((f) => !pdFieldNames.has(f.name));
+      // Pipedrive's labels, plus any tags made in KIT. A KIT change not yet sent to Pipedrive stays as it is.
+      if (t.labels_pending) fields.labels = t.labels;
+      else fields.labels = json.str([...new Set([...json.parse(fields.labels, []), ...json.parse(t.labels, []).filter((l) => kitOnly.has(String(l).toLowerCase()))])]);
       db.prepare(`UPDATE tickets SET opportunity_title = @opportunity_title, organization = @organization, pipeline_status = @status, value = @value,
           currency = @currency, probability = @probability, lost_reason = @lost_reason, labels = @labels, source = @source,
           projected_win_date = COALESCE(@projected_win_date, projected_win_date), pipeline_id = @pipeline_id, custom_fields = @custom, pipedrive_id = @pd,

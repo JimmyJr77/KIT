@@ -12,7 +12,7 @@ import { recordWork } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
 import { ticketFields } from './priorities.js';
 import { statusesFor, listPipelines } from '../pipelines.js';
-import { pushNote, pushFile, deleteInPipedrive, inBackground } from '../services/pipedrive.js';
+import { pushNote, pushFile, pushLabels, deleteInPipedrive, inBackground, pushEnabled } from '../services/pipedrive.js';
 import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
 
 const r = Router();
@@ -166,7 +166,7 @@ r.get('/', (req, res) => {
   const model = pwinModel();
   res.json({ tickets: rows.map((t) => {
     const lane = laneFor(t);
-    return { ...t, tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
+    return { ...t, labels: json.parse(t.labels, []), tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
   }) });
 });
 
@@ -609,7 +609,7 @@ r.put('/comments/:id', (req, res) => {
   const body = String(req.body?.body || '').trim();
   if (!body) return res.status(400).json({ error: 'A comment can’t be empty' });
   if (body !== m.body) {
-    db.prepare("UPDATE ticket_comments SET body = ?, updated_at = datetime('now'), pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?").run(body, m.id);
+    db.prepare("UPDATE ticket_comments SET body = ?, updated_at = datetime('now'), pipedrive_pending = (pipedrive_id IS NOT NULL AND ?) WHERE id = ?").run(body, pushEnabled() ? 1 : 0, m.id);
     notifyMentions(req.user, body, { ticket_id: m.ticket_id, card_id: m.card_id, comment_id: m.id }, m.body);
     inBackground(() => pushNote(m.id));
   }
@@ -621,7 +621,7 @@ r.put('/comments/:id/pin', (req, res) => {
   const m = db.prepare('SELECT * FROM ticket_comments WHERE id = ?').get(req.params.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
   if (m.kind !== 'note') return res.status(400).json({ error: 'Only notes can be pinned' });
-  db.prepare('UPDATE ticket_comments SET pinned = ?, pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?').run(req.body?.pinned === false ? 0 : 1, m.id);
+  db.prepare('UPDATE ticket_comments SET pinned = ?, pipedrive_pending = (pipedrive_id IS NOT NULL AND ?) WHERE id = ?').run(req.body?.pinned === false ? 0 : 1, pushEnabled() ? 1 : 0, m.id);
   inBackground(() => pushNote(m.id));
   res.json({ comment: commentOut(db.prepare(`${COMMENT_SQL} WHERE m.id = ?`).get(m.id)) });
 });
@@ -780,7 +780,7 @@ r.put('/:id/details', (req, res) => {
     if (p != null && !(p >= 0 && p <= 100)) return res.status(400).json({ error: 'Probability is a percent from 0 to 100' });
     set.probability = p;
   }
-  if ('labels' in b) set.labels = json.str([...new Set((b.labels || []).map((x) => String(x).trim()).filter(Boolean))]);
+  if ('labels' in b) { set.labels = cleanLabels(b.labels); set.labels_pending = t.pipedrive_id && pushEnabled() ? 1 : 0; }
   if ('custom_fields' in b) {
     set.custom_fields = json.str((b.custom_fields || []).map((f) => ({ name: String(f.name ?? '').trim(), value: String(f.value ?? '').trim() })).filter((f) => f.name));
   }
@@ -799,7 +799,28 @@ r.put('/:id/details', (req, res) => {
     }
   })();
   touch(t.id);
+  if ('labels' in b) inBackground(() => pushLabels(t.id));
   res.json(detailsOf(ticketRow(t.id)));
+});
+
+/** Tag names, deduplicated, with any new ones added to the tag list (gray until someone picks a color). */
+function cleanLabels(names) {
+  const known = new Map(db.prepare('SELECT name FROM labels').all().map((l) => [l.name.toLowerCase(), l.name]));
+  const out = [...new Set((Array.isArray(names) ? names : []).map((x) => String(x).trim().slice(0, 40)).filter(Boolean)
+    .map((n) => known.get(n.toLowerCase()) || n))];
+  out.filter((n) => !known.has(n.toLowerCase())).forEach((n) => db.prepare('INSERT OR IGNORE INTO labels (name) VALUES (?)').run(n));
+  return json.str(out);
+}
+
+/** Body: { labels: [names] }. Sets a ticket's tags; a ticket from Pipedrive sends Pipedrive's labels to its deal. */
+r.put('/:id/labels', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  // Marked to send only where sending is on; otherwise the next sync puts Pipedrive's labels back (tags made in KIT stay).
+  db.prepare('UPDATE tickets SET labels = ?, labels_pending = ? WHERE id = ?').run(cleanLabels(req.body?.labels), t.pipedrive_id && pushEnabled() ? 1 : 0, t.id);
+  touch(t.id);
+  inBackground(() => pushLabels(t.id));
+  res.json({ labels: json.parse(ticketRow(t.id).labels, []) });
 });
 
 /** A product line from a request body: name, quantity, item_price, discount (percent), comments. */

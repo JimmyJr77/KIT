@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Check, Square, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, Archive, RotateCcw, Mail, Pin, ExternalLink, Tag } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Check, Square, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, Archive, RotateCcw, Mail, Pin, ExternalLink } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
+import { TicketLabels } from '../components/Labels.jsx';
 import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx';
 import { ReplyBox } from './CommentPanel.jsx';
 import PriorityPanel from './PriorityPanel.jsx';
@@ -79,7 +80,7 @@ export default function TicketTimeline({ ticketId, focus, onClose, onChanged }) 
           )}
           {t.lost_reason && <span className="rounded bg-red-50 px-1.5 text-red-700" title="Lost reason">{t.lost_reason}</span>}
           {t.probability != null && <span className="rounded bg-slate-100 px-1.5 text-slate-600" title="Deal probability, set by hand (Pipedrive)">{t.probability}% probability</span>}
-          {t.labels?.map((l) => <span key={l} className="flex items-center gap-0.5 rounded bg-violet-50 px-1.5 text-violet-700"><Tag size={10} /> {l}</span>)}
+          <TicketLabels ticket={t} onChanged={refresh} />
           {t.pwin && <span className="rounded bg-brand-50 px-1.5 font-semibold text-brand-700" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>PWIN {t.pwin.score}%</span>}
         </span>
       )}>

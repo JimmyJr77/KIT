@@ -13,6 +13,7 @@ import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel from './NewTicketPanel.jsx';
 import PwinSettings from './PwinSettings.jsx';
 import DirectorSelect from '../components/DirectorSelect.jsx';
+import { LabelList } from '../components/Labels.jsx';
 import { byDirector } from '../lib/directors.js';
 
 const NO_STAGE = '__none__';
@@ -211,6 +212,7 @@ function TicketCard({ ticket: t, now, overlay }) {
     <div className={`relative cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${overlay ? 'w-60 rotate-2 shadow-xl' : ''}`}>
       <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
       <div className="mt-0.5 h-4 truncate text-xs text-slate-500">{[t.organization, t.account_type].filter(Boolean).join(' · ')}</div>
+      <LabelList labels={t.labels} className="mt-1.5" />
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1">
           <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 tabular-nums">{t.value != null ? money(t.value) : '—'}</span>

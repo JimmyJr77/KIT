@@ -761,6 +761,23 @@ addColumn('users', 'pipedrive_id', 'INTEGER');
 addColumn('ticket_comments', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('ticket_files', 'pipedrive_note_id', 'INTEGER');
 db.exec(`
+-- Tags (Pipedrive's deal labels), each with its color. Tickets keep the names they carry in tickets.labels. Labels from
+-- Pipedrive have a pipedrive_id; ones made in KIT don't, and stay in KIT.
+CREATE TABLE IF NOT EXISTS labels (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  color TEXT NOT NULL DEFAULT 'gray', -- Pipedrive's colors: green, blue, red, yellow, purple, gray, orange, brown, pink, dark-gray
+  position INTEGER NOT NULL DEFAULT 0,
+  pipedrive_id INTEGER UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
+// A change to a Pipedrive deal's labels made in KIT that hasn't reached Pipedrive yet.
+addColumn('tickets', 'labels_pending', 'INTEGER NOT NULL DEFAULT 0');
+// Labels tickets already carry get a place in the list.
+db.exec(`INSERT OR IGNORE INTO labels (name) SELECT DISTINCT j.value FROM tickets t, json_each(t.labels) j
+  WHERE t.labels IS NOT NULL AND json_valid(t.labels) AND TRIM(j.value) != ''`);
+db.exec(`
 -- Pipedrive notes and files deleted in KIT that Pipedrive hasn't deleted yet: retried each sync, and never imported again.
 CREATE TABLE IF NOT EXISTS pipedrive_deletes (
   kind TEXT NOT NULL, -- note | file

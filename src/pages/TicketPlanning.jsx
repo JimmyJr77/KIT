@@ -895,11 +895,11 @@ const money = (n, currency) => {
 const lineTotal = (p) => p.quantity * p.item_price * (1 - p.discount / 100);
 const formOf = (d) => ({
   lost_reason: d.lost_reason ?? '', probability: d.probability ?? '', currency: d.currency ?? '', source: d.source ?? '',
-  labels: d.labels.join(', '), followers: d.followers.map((u) => u.id), custom_fields: d.custom_fields, pipeline_id: d.pipeline_id ?? '',
+  followers: d.followers.map((u) => u.id), custom_fields: d.custom_fields, pipeline_id: d.pipeline_id ?? '',
 });
 
 /**
- * The Pipedrive deal fields with no other place on the ticket: lost reason, probability, currency, source, labels,
+ * The Pipedrive deal fields with no other place on the ticket (tags sit under the ticket's title): lost reason, probability, currency, source,
  * followers, custom fields and products. Everything else in a deal already has a home (stage, value, dates, people,
  * notes, activities, files, emails), so a deal can be brought over whole.
  */
@@ -923,7 +923,7 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
     setBusy(true);
     setError('');
     try {
-      load(await api.put(`/tickets/${ticket.id}/details`, { ...form, labels: form.labels.split(','), pipeline_id: form.pipeline_id || null }));
+      load(await api.put(`/tickets/${ticket.id}/details`, { ...form, pipeline_id: form.pipeline_id || null }));
       onChanged();
     } catch (e) {
       setError(e.message);
@@ -971,10 +971,6 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
             <label className="sm:col-span-2">
               <span className="label">Source</span>
               <input className="input" value={form.source} onChange={set('source')} placeholder="Where the deal came from" />
-            </label>
-            <label className="sm:col-span-2">
-              <span className="label">Labels</span>
-              <input className="input" value={form.labels} onChange={set('labels')} placeholder="Separate with commas: Hot, Recompete…" />
             </label>
             <div className="sm:col-span-2">
               <span className="label">Followers</span>
