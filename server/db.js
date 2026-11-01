@@ -774,6 +774,20 @@ CREATE TABLE IF NOT EXISTS labels (
 `);
 // A change to a Pipedrive deal's labels made in KIT that hasn't reached Pipedrive yet.
 addColumn('tickets', 'labels_pending', 'INTEGER NOT NULL DEFAULT 0');
+db.exec(`
+-- What travel actually cost: one total per entry, per traveler, dated by when it was spent. No breakdown needed.
+CREATE TABLE IF NOT EXISTS travel_actuals (
+  id INTEGER PRIMARY KEY,
+  traveler_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  spent_on TEXT NOT NULL,   -- YYYY-MM-DD
+  amount REAL NOT NULL,
+  note TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS travel_actuals_date ON travel_actuals(spent_on);
+`);
 // Labels tickets already carry get a place in the list.
 db.exec(`INSERT OR IGNORE INTO labels (name) SELECT DISTINCT j.value FROM tickets t, json_each(t.labels) j
   WHERE t.labels IS NOT NULL AND json_valid(t.labels) AND TRIM(j.value) != ''`);
