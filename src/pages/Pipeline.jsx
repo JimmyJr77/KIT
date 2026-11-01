@@ -12,13 +12,12 @@ import MultiSelect from '../components/MultiSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel from './NewTicketPanel.jsx';
 import PwinSettings from './PwinSettings.jsx';
-import DirectorSelect from '../components/DirectorSelect.jsx';
-import { LabelList } from '../components/Labels.jsx';
-import { byDirector } from '../lib/directors.js';
+import { LabelList, TagFilter, byTags } from '../components/Labels.jsx';
+import { PipelineViewToggle } from './LostTickets.jsx';
 
 const NO_STAGE = '__none__';
 const money = (n) => usd(n).replace('.00', '');
-// Closed-out stages are set apart from the active pipeline.
+// Closed-out stages are set apart from the active pipeline. Lost bids aren't on the board: the Lost view lists them.
 const CLOSED = new Set(['Awarded', 'Lost']);
 
 /** Master tickets as a board, one column per pipeline stage. Drag a ticket to move it to another stage. */
@@ -28,7 +27,7 @@ export default function Pipeline() {
   const [scope, setScope] = useState('all');
   const [filters, setFilters] = useState([]); // "o:<user id>" for account owners, "t:<account type>" for account types
   const [q, setQ] = useState('');
-  const [director, setDirector] = useState('');
+  const [tags, setTags] = useState([]);
   const [tickets, setTickets] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [dragId, setDragId] = useState(null);
@@ -68,24 +67,26 @@ export default function Pipeline() {
   // One board per pipeline: KIT's own, plus one for each Pipedrive pipeline. KIT's own shows only when it has bids or
   // is the only one.
   const keyOf = (id) => (id == null ? 'kit' : String(id));
+  // What the board shows: everything but lost bids, narrowed to the chosen tags.
+  const shown = useMemo(() => (tickets || []).filter((t) => t.pipeline_status !== 'Lost').filter(byTags(tags)), [tickets, tags]);
   const pipelines = useMemo(() => {
     const list = meta.data?.pipelines || [];
     const counts = new Map();
-    (tickets || []).forEach((t) => counts.set(keyOf(t.pipeline_id), (counts.get(keyOf(t.pipeline_id)) || 0) + 1));
+    shown.forEach((t) => counts.set(keyOf(t.pipeline_id), (counts.get(keyOf(t.pipeline_id)) || 0) + 1));
     return list.filter((p) => p.id != null || counts.get('kit') || list.length === 1).map((p) => ({ ...p, key: keyOf(p.id), count: counts.get(keyOf(p.id)) || 0 }));
-  }, [meta.data, tickets]);
+  }, [meta.data, shown]);
   const pipeline = pipelines.find((p) => p.key === pipelineKey) || pipelines.find((p) => p.count) || pipelines[0];
   const choosePipeline = (k) => { setPipelineKey(k); try { localStorage.setItem('kit.pipeline', k); } catch { /* not saved */ } };
 
-  const stages = pipeline?.statuses || [];
+  const stages = (pipeline?.statuses || []).filter((s) => s !== 'Lost');
   const columns = useMemo(() => {
-    const onBoard = (tickets || []).filter((t) => keyOf(t.pipeline_id) === pipeline?.key).filter(byDirector(director));
+    const onBoard = shown.filter((t) => keyOf(t.pipeline_id) === pipeline?.key);
     const byStage = (s) => onBoard.filter((t) => (t.pipeline_status || NO_STAGE) === s);
     const cols = stages.map((s) => ({ key: s, label: s, tickets: byStage(s) }));
     const none = byStage(NO_STAGE);
     // Tickets with no stage get their own column, shown only when there are some.
     return none.length ? [{ key: NO_STAGE, label: 'No stage', tickets: none }, ...cols] : cols;
-  }, [tickets, stages, director, pipeline?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shown, stages, pipeline?.key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
 
@@ -112,6 +113,7 @@ export default function Pipeline() {
     <div className="flex h-full flex-col">
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
         <PageHeader title="BD Pipeline" subtitle="Bid tickets by pipeline stage. Drag a ticket to move it.">
+          <PipelineViewToggle />
           <div className="w-80 text-left">
             <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or type…" />
           </div>
@@ -130,7 +132,7 @@ export default function Pipeline() {
           </div>
           <button type="button" onClick={() => setCreating(true)} title="New ticket" aria-label="New ticket"
             className="btn-primary h-[38px] w-[38px] shrink-0 p-0"><Plus size={18} /></button>
-          <DirectorSelect tickets={tickets} value={director} onChange={setDirector} className="h-[38px] w-48" />
+          <TagFilter value={tags} onChange={setTags} className="w-72" />
           {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
         </div>
         {pipelines.length > 1 && (
@@ -173,7 +175,7 @@ function Column({ column, onOpen, dragId, now }) {
   const closed = CLOSED.has(column.key);
   return (
     <section ref={setNodeRef} aria-label={`${column.label} stage`}
-      className={`flex w-64 shrink-0 flex-col rounded-xl border transition ${
+      className={`flex min-w-40 flex-1 basis-0 flex-col rounded-xl border transition ${
         isOver ? 'border-brand-500 bg-brand-50/60 ring-2 ring-brand-100' : closed ? 'border-slate-200 bg-slate-100/70' : 'border-slate-200 bg-white/70'}`}>
       <header className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-3 py-2.5">
         <div className="flex items-baseline gap-1.5">

@@ -19,6 +19,7 @@ import AdminAccess from './pages/AdminAccess.jsx';
 import MyTeam from './pages/MyTeam.jsx';
 import Reports from './pages/Reports.jsx';
 import Archive from './pages/Archive.jsx';
+import LostTickets from './pages/LostTickets.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -43,6 +44,7 @@ export default function App() {
         <Route path="/priorities" element={<WeeklyPriorities />} />
         <Route path="/tickets" element={<Tickets />} />
         <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/pipeline/lost" element={<LostTickets />} />
         <Route path="/delivery" element={<Delivery />} />
         <Route path="/crm" element={<Crm />} />
         <Route path="/solutions" element={<TechnicalSolutions />} />

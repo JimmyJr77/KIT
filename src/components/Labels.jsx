@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Tag, Plus, Check, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useClickAway } from './UserCombobox.jsx';
+import MultiSelect from './MultiSelect.jsx';
 
 // Pipedrive's label colors: solid, with white text (dark text on yellow), as Pipedrive draws them.
 const COLORS = {
@@ -152,5 +153,20 @@ export function TicketLabels({ ticket, onChanged }) {
       <LabelPicker value={labels} onChange={save} />
       {error && <span className="text-[11px] text-red-600">{error}</span>}
     </span>
+  );
+}
+
+/** Whether a ticket carries any of the `selected` tags (all tickets when none are chosen). */
+export const byTags = (selected) => (t) => !selected.length
+  || (t.labels || []).some((l) => selected.some((s) => s.toLowerCase() === String(l).toLowerCase()));
+
+/** Pick any number of tags to narrow a list of tickets to those carrying at least one of them. */
+export function TagFilter({ value, onChange, className = '' }) {
+  const labels = useLabels();
+  return (
+    <div className={className}>
+      <MultiSelect compact options={labels.map((l) => ({ value: l.name, label: l.name, sub: l.pipedrive_id ? 'Pipedrive' : undefined }))}
+        value={value} onChange={onChange} placeholder={labels.length ? 'Filter by tag…' : 'No tags yet'} />
+    </div>
   );
 }

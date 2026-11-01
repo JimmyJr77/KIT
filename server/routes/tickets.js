@@ -108,20 +108,13 @@ r.put('/pwin-weights', (req, res) => {
   res.json(weightsOut());
 });
 
-/** People who own (created) at least one master ticket, for the Tickets page filter. */
-r.get('/owners', (req, res) => {
-  res.json({ owners: withTeams(db.prepare(`SELECT u.id, u.first_name, u.last_name, COUNT(t.id) AS ticket_count
-    FROM tickets t JOIN users u ON u.id = t.created_by
-    GROUP BY u.id ORDER BY u.last_name, u.first_name`).all()) });
-});
-
 /**
- * Master tickets. scope: mine (default) | all | filter. Outside "mine", `team` keeps tickets whose owner is
+ * Master tickets. scope: mine (default) | all. Outside "mine", `team` keeps tickets whose owner is
  * on that team. In any scope, `owners` (comma-separated user ids) keeps those owners' tickets and `types`
  * (comma-separated account types) keeps those account types.
  */
 r.get('/', (req, res) => {
-  const scope = ['all', 'filter'].includes(req.query.scope) ? req.query.scope : 'mine';
+  const scope = req.query.scope === 'all' ? 'all' : 'mine';
   const q = `%${req.query.q || ''}%`;
   const team = scope !== 'mine' && Number(req.query.team) ? Number(req.query.team) : null;
   const owners = String(req.query.owners || '').split(',').map(Number).filter(Boolean);

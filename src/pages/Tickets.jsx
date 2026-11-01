@@ -3,11 +3,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Package, CheckSquare, MessageSquare, Paperclip, ListOrdered, UserRound, Plus, ArrowDownAZ, Columns3, Archive, RotateCcw, Ticket as TicketIcon, DollarSign, Zap, MapPin } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { ago, fullName, fullStamp, ticketKind } from '../lib/format.js';
+import { ago, fullStamp, ticketKind } from '../lib/format.js';
 import { useApi } from '../lib/data.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
-import MultiSelect from '../components/MultiSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel from './NewTicketPanel.jsx';
 import TicketLanes from './TicketLanes.jsx';
@@ -21,10 +20,8 @@ export default function Tickets() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const teams = useApi('/teams');
-  const ownersApi = useApi('/tickets/owners');
-  const [scope, setScope] = useState('mine'); // mine | all | filter
+  const [scope, setScope] = useState('mine'); // mine | all
   const [teamId, setTeamId] = useState('');
-  const [owners, setOwners] = useState([]);
   const [q, setQ] = useState('');
   const [tickets, setTickets] = useState(null);
   const [creating, setCreating] = useState(false);
@@ -46,26 +43,15 @@ export default function Tickets() {
   });
   const openId = Number(params.get('open')) || null;
 
-  // Account holders: people who own at least one master ticket, narrowed to the chosen team.
-  const ownerOptions = (ownersApi.data?.owners || [])
-    .filter((o) => !teamId || (o.team_ids || []).includes(Number(teamId)))
-    .map((o) => ({ value: o.id, label: fullName(o), sub: `${o.team_name || 'No team'} · ${o.ticket_count} ticket${o.ticket_count === 1 ? '' : 's'}` }));
-  // Drop selected people who aren't on the newly chosen team.
-  useEffect(() => {
-    const allowed = new Set(ownerOptions.map((o) => o.value));
-    setOwners((xs) => (xs.every((x) => allowed.has(x)) ? xs : xs.filter((x) => allowed.has(x))));
-  }, [teamId, ownersApi.data]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const load = () => {
     const p = new URLSearchParams({ scope, q });
     if (scope !== 'mine' && teamId) p.set('team', teamId);
-    if (scope === 'filter' && owners.length) p.set('owners', owners.join(','));
     return api.get(`/tickets?${p}`).then((d) => setTickets(d.tickets));
   };
   useEffect(() => {
     const h = setTimeout(load, q ? 200 : 0);
     return () => clearTimeout(h);
-  }, [scope, q, teamId, owners]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scope, q, teamId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = (id) => setParams(id ? { open: String(id) } : {});
   // Archived tickets leave both views; they live in the archive.
@@ -79,14 +65,14 @@ export default function Tickets() {
   return (
     <div className="space-y-5 p-8">
       <PageHeader title="Tickets" subtitle="Master tickets you own or work on. Select one for its timeline.">
-        {/* Team and the toggle share one height (h-9). Team narrows All tickets and Filter tickets. */}
+        {/* Team and the toggle share one height (h-9). Team narrows All tickets. */}
         <select className="input h-9 w-44 py-0" value={teamId} onChange={(e) => setTeamId(e.target.value)} disabled={scope === 'mine'}
-          aria-label="Team" title={scope === 'mine' ? 'Team applies to All tickets and Filter tickets' : 'Team'}>
+          aria-label="Team" title={scope === 'mine' ? 'Team applies to All tickets' : 'Team'}>
           <option value="">All teams</option>
           {teams.data?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
         <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
-          {[['mine', 'My tickets'], ['all', 'All tickets'], ['filter', 'Filter tickets']].map(([k, l]) => (
+          {[['mine', 'My tickets'], ['all', 'All tickets']].map(([k, l]) => (
             <button key={k} type="button" onClick={() => setScope(k)}
               className={`rounded px-3 ${scope === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
           ))}
@@ -138,13 +124,6 @@ export default function Tickets() {
             <option value="territory">By territory</option>
             <option value="director">By BD director</option>
           </select>
-        )}
-        {scope === 'filter' && (
-          <div className="min-w-72 flex-1">
-            <label className="label">Account holders</label>
-            <MultiSelect options={ownerOptions} value={owners} onChange={setOwners}
-              placeholder={ownerOptions.length ? 'Everyone — type a name to filter…' : 'No one on this team owns a ticket'} />
-          </div>
         )}
       </div>
 
