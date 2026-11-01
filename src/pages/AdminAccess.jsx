@@ -14,7 +14,7 @@ import BookingTargetsPanel from '../components/BookingTargets.jsx';
 import SampleDataPanel from '../components/SampleDataPanel.jsx';
 import ArchiveAllPanel from '../components/ArchiveAllPanel.jsx';
 import PipedrivePanel from '../components/PipedrivePanel.jsx';
-import { TerritoryTags, AddTerritorySelect, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
+import { TerritoryTags, TerritoryChecklist, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
 
 /** Admins only: access requests from the sign-in page, approved accounts, and the team directory. */
 export default function AdminAccess() {
@@ -244,7 +244,7 @@ function DirectoryPanel({ approved, users, teams, territories, onError }) {
           {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
       </div>
-      <p className="text-xs text-slate-500">Right-click a team tag to make someone that team's lead. Add territories from the edit button.</p>
+      <p className="text-xs text-slate-500">Right-click a team tag to make someone that team's lead. Set territories with the edit button.</p>
       <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
         {shown.map((u) => {
           const ids = u.team_ids || [];
@@ -312,7 +312,7 @@ function EditAccountPanel({ user, territories, onClose, onSaved }) {
     }
   };
   return (
-    <SidePanel title={`Edit ${fullName(user)}`} subtitle="Account details, teams and site role" onClose={onClose}
+    <SidePanel title={`Edit ${fullName(user)}`} subtitle="Account details, teams, territories and site role" onClose={onClose}
       footer={(
         <div className="flex items-center gap-2">
           <button type="button" className="btn-primary flex-1" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
@@ -323,11 +323,8 @@ function EditAccountPanel({ user, territories, onClose, onSaved }) {
         <ProfileFields value={form} onChange={setForm} roles={rolesOf(user)} />
         <div>
           <label className="label">Territories</label>
-          <div className="flex min-h-[38px] flex-wrap items-center gap-1.5">
-            <TerritoryTags territories={territories.filter((t) => territoryIds.includes(t.id))} onRemove={(id) => setTerritoryIds(territoryIds.filter((x) => x !== id))} />
-            <AddTerritorySelect territories={territories} value={territoryIds} onAdd={(id) => setTerritoryIds([...territoryIds, id])} className="w-auto py-1.5 text-sm" />
-          </div>
-          <p className="mt-1 text-xs text-slate-500">The customer areas they cover, usually for BD directors.</p>
+          <TerritoryChecklist territories={territories} value={territoryIds} onChange={setTerritoryIds} />
+          <p className="mt-1.5 text-xs text-slate-500">Tick the territories (Pipedrive's Account) they cover, usually for BD directors.</p>
         </div>
         <div>
           <label className="label">Site role</label>

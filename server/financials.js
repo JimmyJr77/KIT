@@ -32,14 +32,17 @@ export function filtersFrom(q = {}) {
 }
 const matches = (t, f) => (!f.director || t.bd_director_id === f.director) && (!f.territory || t.territory_id === f.territory);
 
-/** Every bid ticket with its director and territory names and its PWIN (0–1, or null). */
+/**
+ * Every bid ticket with its director and territory names and its PWIN (0–1, or null). Bids in an archived dataset are left
+ * out, and so are open bids archived by hand: they're no longer being pursued. Closed bids count wherever they're kept.
+ */
 export function bids(f = {}) {
   const model = pwinModel();
   return db.prepare(`SELECT t.id, t.opportunity_title, t.organization, t.pipeline_status, t.value, t.bd_director_id, t.territory_id,
       t.projected_win_date, t.win_date_undetermined, t.assessment, t.created_at, t.done_at,
       d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
     FROM tickets t LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id
-    WHERE t.ticket_type = 'bid'`).all()
+    WHERE t.ticket_type = 'bid' AND t.archive_set_id IS NULL AND (t.archived_at IS NULL OR t.pipeline_status IN ('Awarded', 'Lost'))`).all()
     .filter((t) => matches(t, f))
     .map((t) => {
       const p = pwin(json.parse(t.assessment, {}), model.weights, model.gates);
@@ -107,11 +110,11 @@ export function qualifiedBy(list, key) {
   return [...groups.values()].sort((a, b) => b.value - a.value);
 }
 
-/** Won contracts with their director, territory, funding and billing (filtered like bids). */
+/** Won contracts with their director, territory, funding and billing (filtered like bids), less those whose bid is in an archived dataset. */
 export function contracts(f = {}) {
   const rows = db.prepare(`SELECT p.*, t.bd_director_id, t.territory_id, d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
     FROM delivery_programs p LEFT JOIN tickets t ON t.id = p.ticket_id LEFT JOIN users d ON d.id = t.bd_director_id
-    LEFT JOIN territories tr ON tr.id = t.territory_id`).all().filter((p) => matches(p, f));
+    LEFT JOIN territories tr ON tr.id = t.territory_id WHERE t.archive_set_id IS NULL`).all().filter((p) => matches(p, f));
   const entries = db.prepare('SELECT * FROM program_entries').all();
   return rows.map((p) => {
     const mine = entries.filter((e) => e.program_id === p.id);

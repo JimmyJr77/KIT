@@ -9,7 +9,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { db, json, getSetting, setSetting } from '../db.js';
+import { db, json, getSetting, setSetting, TERRITORY_RENAMES } from '../db.js';
 import { hashPassword } from '../auth.js';
 import '../sample/registry.js'; // archived_rows, used to skip records archived by a full reset
 
@@ -23,11 +23,8 @@ export const pushEnabled = () => pipedriveConfigured() && (process.env.NODE_ENV 
 const TIME_ZONE = process.env.PIPEDRIVE_TIME_ZONE || 'America/New_York';
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
 
-// The "Account" deal field holds the territory, under slightly different names.
-const ACCOUNT_TERRITORIES = {
-  Army: 'Army', 'Navy/USMC': 'Navy / Marine Corps', 'USAF/USSF': 'Air Force & Space Force', 'DoD 4th Estate': 'DoD 4th Estate',
-  'DHS/DOJ': 'DHS & FBI', Intel: 'Intelligence Community (Agencies)', 'FedCiv (Other)': 'FedCiv & Other',
-};
+// The "Account" deal field holds the territory: each of its options is a KIT territory of the same name, except N/A (none).
+const NO_ACCOUNT = 'N/A';
 const ACTIVITY_TYPES = { call: 'Call', meeting: 'Meeting', task: 'Task', deadline: 'Deadline', email: 'Email', lunch: 'Lunch' };
 const OWNER_FIELD = 'Pipedrive owner';
 const MIME = { '.pdf': 'application/pdf', '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -365,7 +362,19 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
   const accountField = customFields.find((f) => f.name === 'Account');
   const labelField = fieldByKey.get('label');
   const channelField = fieldByKey.get('channel');
-  const territories = new Map(db.prepare('SELECT id, name FROM territories').all().map((t) => [t.name, t.id]));
+  // Territories follow the Account field's options: matched by option, else by name (or the name KIT used to give it),
+  // renamed and ordered as in Pipedrive, and added when Pipedrive has a new one. KIT-only territories are left alone.
+  const territories = new Map();
+  (accountField?.options || []).filter((o) => o.label !== NO_ACCOUNT).forEach((o, i) => {
+    const oldName = Object.keys(TERRITORY_RENAMES).find((k) => TERRITORY_RENAMES[k] === o.label);
+    const row = db.prepare('SELECT id FROM main.territories WHERE pipedrive_id = ?').get(o.id)
+      || db.prepare('SELECT id FROM main.territories WHERE name = ?').get(o.label)
+      || (oldName && db.prepare('SELECT id FROM main.territories WHERE name = ?').get(oldName));
+    const id = row
+      ? (db.prepare('UPDATE territories SET name = ?, position = ?, pipedrive_id = ? WHERE id = ?').run(o.label, i, o.id, row.id), row.id)
+      : db.prepare('INSERT INTO territories (name, position, pipedrive_id) VALUES (?, ?, ?)').run(o.label, i, o.id).lastInsertRowid;
+    territories.set(String(o.id), id);
+  });
   // Pipedrive's labels, with their colors. A KIT tag with the same name becomes that label.
   (labelField?.options || []).forEach((o, i) => {
     const row = db.prepare('SELECT id FROM labels WHERE pipedrive_id = ?').get(o.id) || db.prepare('SELECT id FROM labels WHERE name = ? COLLATE NOCASE').get(o.label);
@@ -417,7 +426,7 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
     const closedAt = d.status === 'won' ? d.won_time || d.close_time : d.status === 'lost' ? d.lost_time || d.close_time
       : statusNow === 'Awarded' ? d.stage_change_time || d.update_time : null; // still open, but in an Awarded stage
     const owner = account(d.user_id);
-    const territory = ACCOUNT_TERRITORIES[fieldText(accountField || {}, accountField && d[accountField.key])];
+    const territory = accountField ? territories.get(String(d[accountField.key] ?? '')) ?? null : null;
     const custom = customFields.map((f) => ({ name: f.name, value: fieldText(f, d[f.key]) })).filter((f) => f.value);
     if (!owner && d.user_id) custom.push({ name: OWNER_FIELD, value: d.user_id.name || d.owner_name || 'Unknown' });
     const fields = {
@@ -437,7 +446,7 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
           bd_director_id, territory_id, currency, probability, lost_reason, labels, source, projected_win_date, pipeline_id, custom_fields, pipedrive_id)
         VALUES (@opportunity_title, @organization, @stage, @value, @owner, @added, @updated, 'bid', @owner, @territory, @currency, @probability, @lost_reason,
           @labels, @source, @projected_win_date, @pipeline_id, @custom, @pd)`)
-        .run({ ...fields, stage: start, owner, added: d.add_time, updated: d.update_time, territory: territories.get(territory) ?? null, custom: json.str(custom), pd: d.id }).lastInsertRowid;
+        .run({ ...fields, stage: start, owner, added: d.add_time, updated: d.update_time, territory, custom: json.str(custom), pd: d.id }).lastInsertRowid;
       dateHistory.run(d.add_time, id, 0);
       if (statusNow !== start) {
         const before = lastHistory.get(id).id;
@@ -458,7 +467,7 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
           bd_director_id = COALESCE(@owner, bd_director_id), territory_id = COALESCE(@territory, territory_id),
           updated_at = CASE WHEN updated_at > @updated THEN updated_at ELSE @updated END
         WHERE id = @id`)
-        .run({ ...fields, status: statusNow, owner, territory: territories.get(territory) ?? null, custom: json.str([...custom, ...kept]), pd: d.id, updated: d.update_time, id: t.id });
+        .run({ ...fields, status: statusNow, owner, territory, custom: json.str([...custom, ...kept]), pd: d.id, updated: d.update_time, id: t.id });
       // Date any change the update logged when it happened in Pipedrive, not now.
       const stageChanged = t.pipeline_status !== statusNow;
       dateHistory.run(stageChanged ? (closedAt || d.stage_change_time || d.update_time) : d.update_time, t.id, before);

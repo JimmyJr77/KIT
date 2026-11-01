@@ -26,7 +26,7 @@ export function snapshotForecast(date = localToday()) {
   const key = `forecast_snapshot:${quarter}`;
   if (getSetting(key)) return 0;
   const { start, end } = quarterRange(quarter);
-  const bids = db.prepare(`SELECT * FROM tickets WHERE ticket_type = 'bid' AND projected_win_date BETWEEN ? AND ?
+  const bids = db.prepare(`SELECT * FROM tickets WHERE ticket_type = 'bid' AND archived_at IS NULL AND projected_win_date BETWEEN ? AND ?
     AND (pipeline_status IS NULL OR pipeline_status NOT IN (SELECT value FROM json_each(?)))`).all(start, end, JSON.stringify(CLOSED));
   if (!bids.length) return 0;
   const model = pwinModel();

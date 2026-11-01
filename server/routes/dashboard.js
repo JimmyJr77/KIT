@@ -58,7 +58,7 @@ r.get('/', (req, res) => {
   // ?director= narrows the pipeline to bids that person is BD director on.
   const director = Number(req.query.director) || null;
   const pipelineRows = db.prepare(`SELECT pipeline_status, COUNT(*) AS count, COALESCE(SUM(value), 0) AS value FROM tickets
-    WHERE ticket_type = 'bid' ${director ? 'AND bd_director_id = ?' : ''} GROUP BY pipeline_status`).all(...(director ? [director] : []));
+    WHERE ticket_type = 'bid' AND archive_set_id IS NULL AND (archived_at IS NULL OR pipeline_status IN ('Awarded', 'Lost')) ${director ? 'AND bd_director_id = ?' : ''} GROUP BY pipeline_status`).all(...(director ? [director] : []));
   const pipeline = [...PIPELINE_STATUSES, null].map((status) => {
     const p = pipelineRows.find((x) => (x.pipeline_status || null) === status);
     return { status, count: p?.count || 0, value: p?.value || 0 };

@@ -24,8 +24,9 @@ const CLOSED = new Set(['Awarded', 'Lost']);
 export default function Pipeline() {
   const meta = useApi('/priorities/meta');
   const users = useApi('/users');
+  const territories = useApi('/territories');
   const [scope, setScope] = useState('all');
-  const [filters, setFilters] = useState([]); // "o:<user id>" for account owners, "t:<account type>" for account types
+  const [filters, setFilters] = useState([]); // "o:<user id>" for account owners, "t:<territory id>" for territories
   const [q, setQ] = useState('');
   const [tags, setTags] = useState([]);
   const [tickets, setTickets] = useState(null);
@@ -45,9 +46,9 @@ export default function Pipeline() {
   const load = () => {
     const p = new URLSearchParams({ scope, q, kind: 'bid' }); // only bid tickets move through the pipeline
     const owners = filters.filter((f) => f.startsWith('o:')).map((f) => f.slice(2));
-    const types = filters.filter((f) => f.startsWith('t:')).map((f) => f.slice(2));
+    const terrs = filters.filter((f) => f.startsWith('t:')).map((f) => f.slice(2));
     if (owners.length) p.set('owners', owners.join(','));
-    if (types.length) p.set('types', types.join(','));
+    if (terrs.length) p.set('territories', terrs.join(','));
     // Archived bids (closed more than 14 days ago, or archived by hand) live in the Archive, not on the board.
     return api.get(`/tickets?${p}`).then((d) => setTickets(d.tickets.filter((t) => !t.archived)));
   };
@@ -56,13 +57,13 @@ export default function Pipeline() {
     return () => clearTimeout(h);
   }, [scope, filters, q]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // BD account owners (everyone on the BD team), alphabetical, then the account types.
+  // BD account owners (everyone on the BD team), alphabetical, then the territories (Pipedrive's "Account"), in their order.
   const filterOptions = useMemo(() => [
     ...(users.data?.users || []).filter((u) => (u.teams || []).some((t) => t.name === 'BD'))
       .sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }))
       .map((u) => ({ value: `o:${u.id}`, label: fullName(u), group: 'BD account owners' })),
-    ...(meta.data?.accountTypes || []).map((t) => ({ value: `t:${t}`, label: t, group: 'Account types' })),
-  ], [users.data, meta.data]);
+    ...(territories.data?.territories || []).map((t) => ({ value: `t:${t.id}`, label: t.name, group: 'Territories' })),
+  ], [users.data, territories.data]);
 
   // One board per pipeline: KIT's own, plus one for each Pipedrive pipeline. KIT's own shows only when it has bids or
   // is the only one.
@@ -115,7 +116,7 @@ export default function Pipeline() {
         <PageHeader title="BD Pipeline" subtitle="Bid tickets by pipeline stage. Drag a ticket to move it.">
           <PipelineViewToggle />
           <div className="w-80 text-left">
-            <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or type…" />
+            <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or territory…" />
           </div>
           <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
             {[['mine', 'My tickets'], ['all', 'All tickets']].map(([k, l]) => (

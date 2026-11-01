@@ -8,7 +8,7 @@ const r = Router();
 
 const list = () => db.prepare(`SELECT t.*,
     (SELECT COUNT(*) FROM user_territories ut JOIN users u ON u.id = ut.user_id WHERE ut.territory_id = t.id AND u.active = 1) AS people,
-    (SELECT COUNT(*) FROM tickets k WHERE k.territory_id = t.id) AS tickets
+    (SELECT COUNT(*) FROM tickets k WHERE k.territory_id = t.id AND k.archive_set_id IS NULL) AS tickets
   FROM territories t ORDER BY t.position, t.name`).all();
 
 r.get('/', (req, res) => res.json({ territories: list(), canManage: canManageBd(req.user) }));

@@ -430,19 +430,29 @@ CREATE TABLE IF NOT EXISTS user_territories (
 // Each bid ticket belongs to one BD director and one territory.
 addColumn('tickets', 'bd_director_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 addColumn('tickets', 'territory_id', 'INTEGER REFERENCES territories(id) ON DELETE SET NULL');
+// Territories are the options of Pipedrive's "Account" deal field, named as Pipedrive names them (the sync keeps them so).
+addColumn('territories', 'pipedrive_id', 'INTEGER');
+export const TERRITORY_RENAMES = {
+  'Navy / Marine Corps': 'Navy/USMC', 'Air Force & Space Force': 'USAF/USSF', 'DHS & FBI': 'DHS/DOJ',
+  'Intelligence Community (Agencies)': 'Intel', 'FedCiv & Other': 'FedCiv (Other)',
+};
 if (!hadTerritories) {
   const add = db.prepare('INSERT INTO territories (name, position) VALUES (?, ?)');
-  ['Army', 'Navy / Marine Corps', 'Intelligence Community (Agencies)', 'DoD 4th Estate', 'Air Force & Space Force', 'DHS & FBI', 'FedCiv & Other']
+  ['Army', 'Navy/USMC', 'USAF/USSF', 'DoD 4th Estate', 'DHS/DOJ', 'Intel', 'FedCiv (Other)']
     .forEach((name, i) => add.run(name, i));
   // Existing bid tickets: territory from their account type, BD director from whoever created them if they're on BD.
   db.exec(`
     UPDATE tickets SET territory_id = (SELECT id FROM territories WHERE name = CASE tickets.account_type
-      WHEN 'Army' THEN 'Army' WHEN 'Air Force' THEN 'Air Force & Space Force' WHEN 'Navy / Marine' THEN 'Navy / Marine Corps' END)
+      WHEN 'Army' THEN 'Army' WHEN 'Air Force' THEN 'USAF/USSF' WHEN 'Navy / Marine' THEN 'Navy/USMC' END)
     WHERE ticket_type = 'bid' AND territory_id IS NULL;
     UPDATE tickets SET bd_director_id = created_by
     WHERE ticket_type = 'bid' AND bd_director_id IS NULL AND created_by IN
       (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD');
   `);
+}
+{
+  const rename = db.prepare('UPDATE main.territories SET name = ? WHERE name = ? AND NOT EXISTS (SELECT 1 FROM main.territories WHERE name = ?)');
+  Object.entries(TERRITORY_RENAMES).forEach(([from, to]) => rename.run(to, from, to));
 }
 
 // Archived priority cards leave the boards (and close-out counts) but keep everything on them until deleted for good.
@@ -950,7 +960,7 @@ export function setUserTerritories(userId, territoryIds) {
  */
 export function defaultAssignment(userId, accountType) {
   const onBd = !!db.prepare("SELECT 1 FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE ut.user_id = ? AND t.name = 'BD'").get(userId);
-  const byType = { Army: 'Army', 'Air Force': 'Air Force & Space Force', 'Navy / Marine': 'Navy / Marine Corps' }[accountType];
+  const byType = { Army: 'Army', 'Air Force': 'USAF/USSF', 'Navy / Marine': 'Navy/USMC' }[accountType];
   const mapped = byType && db.prepare('SELECT id FROM territories WHERE name = ?').get(byType);
   const own = db.prepare('SELECT territory_id FROM user_territories WHERE user_id = ?').all(userId);
   return { bd_director_id: onBd ? userId : null, territory_id: mapped?.id ?? (own.length === 1 ? own[0].territory_id : null) };

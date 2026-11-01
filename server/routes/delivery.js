@@ -42,6 +42,8 @@ const SELECT = `SELECT p.*, u.first_name AS pm_first, u.last_name AS pm_last, t.
     t.bd_director_id, d.first_name AS dir_first, d.last_name AS dir_last, tr.name AS territory_name
   FROM delivery_programs p LEFT JOIN users u ON u.id = p.program_manager_id LEFT JOIN tickets t ON t.id = p.ticket_id
   LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id`;
+// A contract won from a bid that's in an archived dataset is archived with it, until the dataset is loaded back.
+const LIVE = '(t.id IS NULL OR t.archive_set_id IS NULL)';
 const one = (id) => programsOut(db.prepare(`${SELECT} WHERE p.id = ?`).all(id))[0] || null;
 
 /** Tell someone they've been put on a won contract: as its Program Manager, or on its delivery team (with their role). */
@@ -52,7 +54,7 @@ function alertAssigned(userId, actor, programId, kind, role) {
 /** status: active (default) | complete | all. Newest wins first. */
 r.get('/', (req, res) => {
   const status = { active: 'Active', complete: 'Complete' }[req.query.status];
-  const rows = db.prepare(`${SELECT} ${status ? 'WHERE p.status = ?' : ''} ORDER BY p.awarded_at DESC, p.id DESC`).all(...(status ? [status] : []));
+  const rows = db.prepare(`${SELECT} WHERE ${LIVE} ${status ? 'AND p.status = ?' : ''} ORDER BY p.awarded_at DESC, p.id DESC`).all(...(status ? [status] : []));
   res.json({ programs: programsOut(rows) });
 });
 

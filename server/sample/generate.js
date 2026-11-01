@@ -43,10 +43,10 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
   // ---- People (fictional names; 202-555-01xx phone numbers are reserved for fiction)
   const PEOPLE = [
     ['Avery', 'Collins', 'BD Director', ['BD'], ['Army'], true],
-    ['Jordan', 'Reyes', 'BD Director', ['BD'], ['Navy / Marine Corps', 'DoD 4th Estate']],
-    ['Taylor', 'Nguyen', 'Capture Manager', ['BD', 'Technical Solutioning'], ['Air Force & Space Force']],
-    ['Morgan', 'Patel', 'BD Director', ['BD'], ['Intelligence Community (Agencies)']],
-    ['Casey', 'Brooks', 'BD Director', ['BD'], ['DHS & FBI', 'FedCiv & Other']],
+    ['Jordan', 'Reyes', 'BD Director', ['BD'], ['Navy/USMC', 'DoD 4th Estate']],
+    ['Taylor', 'Nguyen', 'Capture Manager', ['BD', 'Technical Solutioning'], ['USAF/USSF']],
+    ['Morgan', 'Patel', 'BD Director', ['BD'], ['Intel']],
+    ['Casey', 'Brooks', 'BD Director', ['BD'], ['DHS/DOJ', 'FedCiv (Other)']],
     ['Riley', 'Kim', 'Proposal Manager', ['BD', 'Marketing'], []],
     ['Quinn', 'Okafor', 'Director of Operations', ['Operations'], []],
     ['Drew', 'Becker', 'Program Manager', ['Operations'], []],
@@ -76,9 +76,9 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
   const directors = bd.filter((p) => p.territories.length);
 
   // ---- Customers and contacts
-  const ORGS = [['Army PEO STRI', 'Army'], ['Army Futures Command', 'Army'], ['AFLCMC Hanscom', 'Air Force & Space Force'], ['Space Systems Command', 'Air Force & Space Force'],
-    ['NAVWAR', 'Navy / Marine Corps'], ['Marine Corps Systems Command', 'Navy / Marine Corps'], ['DIA', 'Intelligence Community (Agencies)'], ['NGA', 'Intelligence Community (Agencies)'],
-    ['DLA J6', 'DoD 4th Estate'], ['DISA', 'DoD 4th Estate'], ['CBP', 'DHS & FBI'], ['FBI CJIS', 'DHS & FBI'], ['HHS', 'FedCiv & Other']];
+  const ORGS = [['Army PEO STRI', 'Army'], ['Army Futures Command', 'Army'], ['AFLCMC Hanscom', 'USAF/USSF'], ['Space Systems Command', 'USAF/USSF'],
+    ['NAVWAR', 'Navy/USMC'], ['Marine Corps Systems Command', 'Navy/USMC'], ['DIA', 'Intel'], ['NGA', 'Intel'],
+    ['DLA J6', 'DoD 4th Estate'], ['DISA', 'DoD 4th Estate'], ['CBP', 'DHS/DOJ'], ['FBI CJIS', 'DHS/DOJ'], ['HHS', 'FedCiv (Other)']];
   const directorFor = (territoryName) => directors.find((d) => d.territories.includes(territoryName)) || pick(directors);
   const CONTACTS = [['Rebecca', 'Stone', 'Contracting Officer'], ['Darnell', 'Price', 'Program Manager'], ['Ann', 'Mercer', 'Program Executive'], ['Steve', 'Kowalski', 'Deputy PM'],
     ['Lisa', 'Tran', 'Contract Specialist'], ['Ben', 'Ortiz', 'Requirements Lead'], ['Helen', 'Cho', 'Chief Engineer'], ['Raj', 'Mehta', 'Small Business Liaison'],

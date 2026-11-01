@@ -30,6 +30,27 @@ export function AddTerritorySelect({ territories = [], value = [], onAdd, classN
   );
 }
 
+/** Every territory as a checkbox chip, ticked for the ones in `value` (ids); ticking one adds it, unticking removes it. */
+export function TerritoryChecklist({ territories = [], value = [], onChange }) {
+  if (!territories.length) return <p className="text-sm text-slate-400">No territories yet.</p>;
+  return (
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Territories">
+      {territories.map((t) => {
+        const on = value.includes(t.id);
+        return (
+          <button key={t.id} type="button" role="checkbox" aria-checked={on} onClick={() => onChange(on ? value.filter((x) => x !== t.id) : [...value, t.id])}
+            className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm ring-1 ring-inset ${on ? 'bg-teal-50 font-medium text-teal-800 ring-teal-300' : 'bg-white text-slate-600 ring-slate-300 hover:bg-slate-50'}`}>
+            <span className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded-sm border ${on ? 'border-teal-600 bg-teal-600 text-white' : 'border-slate-300'}`}>
+              {on && <Check size={10} strokeWidth={3} />}
+            </span>
+            {t.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Save the territories one person covers. */
 export const saveUserTerritories = (userId, ids) => api.put(`/territories/people/${userId}`, { territory_ids: ids });
 

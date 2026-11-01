@@ -176,7 +176,7 @@ export function reportCard(director, p) {
 export function directors() {
   return db.prepare(`SELECT DISTINCT u.id, u.first_name, u.last_name, u.title FROM users u
     WHERE u.active = 1 AND (u.id IN (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD')
-      OR u.id IN (SELECT bd_director_id FROM tickets WHERE bd_director_id IS NOT NULL))
+      OR u.id IN (SELECT bd_director_id FROM tickets WHERE bd_director_id IS NOT NULL AND archive_set_id IS NULL))
     ORDER BY u.last_name, u.first_name`).all();
 }
 

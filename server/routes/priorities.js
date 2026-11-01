@@ -163,7 +163,7 @@ r.get('/tickets', (req, res) => {
   const dir = req.query.dir === 'asc' ? 'ASC' : 'DESC';
   const rows = db.prepare(`SELECT t.*, COUNT(c.id) AS card_count, MIN(c.due_date) AS next_due
     FROM tickets t LEFT JOIN priority_cards c ON c.ticket_id = t.id
-    WHERE t.opportunity_title LIKE ? OR t.organization LIKE ?
+    WHERE t.archive_set_id IS NULL AND (t.opportunity_title LIKE ? OR t.organization LIKE ?)
     GROUP BY t.id ORDER BY ${sort} ${dir} LIMIT 200`).all(q, q);
   res.json({ tickets: rows });
 });
