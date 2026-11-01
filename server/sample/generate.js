@@ -266,6 +266,24 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
     event_id: e.id, title: pick(['Booth banner', 'One-pager for the booth']), category: pick(['Graphic design', 'Collateral / print']), details: `Materials for ${e.name}.`,
     requested_by: pick(bd).id, due_date: addDays(today, e.from - 7), status: 'open',
   }));
+  // Marketing spend over the last year: event sponsorships (split between whoever goes), spend on specific bids and
+  // directors, territory campaigns, and some company-wide.
+  const spender = (onTeam('Marketing')[0] || people[0]).id;
+  events.forEach((e) => insert('marketing_spend', { spent_on: addDays(today, Math.min(e.from, 0) - int(10, 40)), amount: int(4, 15) * 1000, description: `${e.name} sponsorship`,
+    category: 'Event sponsorship', vendor: e.name, event_id: e.id, created_by: spender }));
+  for (let i = 0; i < 14; i++) {
+    const b = pick(bids);
+    const on = addDays(today, -int(5, 360));
+    const kind = i % 4;
+    insert('marketing_spend', {
+      spent_on: on, amount: int(5, 60) * 100, created_by: spender,
+      ...(kind === 0 ? { description: `Capture collateral: ${b.title}`, category: 'Collateral & print', ticket_id: b.id }
+        : kind === 1 ? { description: 'Customer dinner', category: 'Hospitality', user_id: pick(directors).id, organization: b.org }
+        : kind === 2 ? { description: 'Targeted LinkedIn campaign', category: 'Digital & web', territory_id: terr(pick(directors).territories[0]) }
+        : { description: pick(['Brand video refresh', 'Website update', 'Trade show swag']), category: pick(['Content & video', 'Digital & web', 'Swag & giveaways']) }),
+    });
+  }
+
   [['Company boilerplate', 'Boilerplate', 'We deliver data, cloud and AI solutions that help defense customers decide faster.'],
     ['30-second pitch', 'Elevator pitch', 'We turn mission data into decisions: fast, secure, and built for the warfighter.']]
     .forEach(([title, category, body]) => insert('marketing_copy', { title, category, body, created_by: (onTeam('Marketing')[1] || people[0]).id }));

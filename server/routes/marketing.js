@@ -9,6 +9,7 @@ import path from 'node:path';
 import { db } from '../db.js';
 import { recordWork } from '../worklog.js';
 import { ASSET_KINDS, COPY_CATEGORIES, REQUEST_CATEGORIES } from '../../src/lib/marketing.js';
+import { SPEND_CATEGORIES, spendEntries, spendBreakdown } from '../marketingSpend.js';
 
 const r = Router();
 
@@ -85,7 +86,7 @@ export function acceptRequest(user, requestId, ticketTitle) {
 /** Who gets alerted for a request, whether the signed-in user is on Marketing, and the choices for each form. */
 r.get('/meta', (req, res) => res.json({
   team: marketingTeam(), canManage: isMarketing(req.user),
-  assetKinds: ASSET_KINDS, copyCategories: COPY_CATEGORIES, requestCategories: REQUEST_CATEGORIES,
+  assetKinds: ASSET_KINDS, copyCategories: COPY_CATEGORIES, requestCategories: REQUEST_CATEGORIES, spendCategories: SPEND_CATEGORIES,
 }));
 
 /** Every support request, from here or from an event: open ones first, then newest first. */
@@ -247,6 +248,61 @@ r.put('/copy/:id', (req, res) => {
 r.delete('/copy/:id', (req, res) => {
   if (!isMarketing(req.user)) return res.status(403).json({ error: 'Only the Marketing team can change copy' });
   db.prepare('DELETE FROM marketing_copy WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// ---- Spend: what Marketing spent, on what and for whom. Everyone can see it; the Marketing team (and admins) keep it.
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const idOr = (v, table) => (Number(v) && db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(Number(v)) ? Number(v) : null);
+
+function spendFields(b = {}) {
+  const amount = Number(String(b.amount ?? '').replace(/[$,]/g, ''));
+  if (!DATE.test(b.spent_on || '')) return { error: 'Choose the date it was spent' };
+  if (!(amount > 0)) return { error: 'Enter the amount spent' };
+  if (!s(b.description)) return { error: 'Say what it was for' };
+  return {
+    f: {
+      spent_on: b.spent_on, amount: Math.round(amount * 100) / 100, description: s(b.description).slice(0, 300),
+      category: SPEND_CATEGORIES.includes(b.category) ? b.category : null, vendor: s(b.vendor) || null,
+      event_id: idOr(b.event_id, 'events'), ticket_id: idOr(b.ticket_id, 'tickets'), user_id: idOr(b.user_id, 'users'),
+      territory_id: idOr(b.territory_id, 'territories'), organization: s(b.organization) || null, note: s(b.note) || null,
+    },
+  };
+}
+const oneSpend = (id) => spendEntries().find((x) => x.id === Number(id));
+
+/** Entries between ?from and ?to (dates; default all), newest first, and what they add up to by account, territory, etc. */
+r.get('/spend', (req, res) => {
+  const range = { from: DATE.test(req.query.from || '') ? req.query.from : null, to: DATE.test(req.query.to || '') ? req.query.to : null };
+  const entries = spendEntries(range);
+  res.json({ entries, summary: spendBreakdown(entries), categories: SPEND_CATEGORIES, canManage: isMarketing(req.user) });
+});
+
+r.post('/spend', (req, res) => {
+  if (!isMarketing(req.user)) return res.status(403).json({ error: 'Only the Marketing team can record spend' });
+  const { f, error } = spendFields(req.body);
+  if (error) return res.status(400).json({ error });
+  const id = db.prepare(`INSERT INTO marketing_spend (spent_on, amount, description, category, vendor, event_id, ticket_id, user_id, territory_id, organization, note, created_by)
+    VALUES (@spent_on, @amount, @description, @category, @vendor, @event_id, @ticket_id, @user_id, @territory_id, @organization, @note, @by)`)
+    .run({ ...f, by: req.user.id }).lastInsertRowid;
+  res.json({ entry: oneSpend(id) });
+});
+
+r.put('/spend/:id', (req, res) => {
+  if (!isMarketing(req.user)) return res.status(403).json({ error: 'Only the Marketing team can change spend' });
+  const { f, error } = spendFields(req.body);
+  if (error) return res.status(400).json({ error });
+  const info = db.prepare(`UPDATE marketing_spend SET spent_on=@spent_on, amount=@amount, description=@description, category=@category, vendor=@vendor,
+    event_id=@event_id, ticket_id=@ticket_id, user_id=@user_id, territory_id=@territory_id, organization=@organization, note=@note, updated_at=datetime('now')
+    WHERE id=@id`).run({ ...f, id: Number(req.params.id) });
+  if (!info.changes) return res.status(404).json({ error: 'Entry not found' });
+  res.json({ entry: oneSpend(req.params.id) });
+});
+
+r.delete('/spend/:id', (req, res) => {
+  if (!isMarketing(req.user)) return res.status(403).json({ error: 'Only the Marketing team can change spend' });
+  db.prepare('DELETE FROM marketing_spend WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 

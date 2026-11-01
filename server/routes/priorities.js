@@ -25,10 +25,12 @@ export function weekStartFor(iso, dow) {
 
 const team = (id) => db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
 
+// A priority leaves the board when it's archived, or when its ticket is (by hand, or with Archive all); restoring the
+// ticket brings it back.
 function loadCards(teamId, weekStart) {
   const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.value, t.ticket_type
     FROM priority_cards c JOIN tickets t ON t.id = c.ticket_id
-    WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL ORDER BY c.id`).all(teamId, weekStart);
+    WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL AND t.archived_at IS NULL ORDER BY c.id`).all(teamId, weekStart);
   const assignees = db.prepare(`SELECT a.* FROM card_assignees a JOIN priority_cards c ON c.id = a.card_id
     WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL`).all(teamId, weekStart);
   // A card's notes (status updates) are the comments on its activity.
@@ -412,8 +414,9 @@ r.put('/lanes', (req, res) => {
   const weeks = team_id === 'all'
     ? Object.entries(allTeamWeeks(week_start).teamWeeks).map(([id, w]) => [Number(id), w])
     : [[Number(team_id), week_start]];
-  // Archived cards aren't on the board, so a reorder never touches them.
-  const weekCards = new Set(weeks.flatMap(([id, w]) => db.prepare('SELECT id FROM priority_cards WHERE team_id = ? AND week_start = ? AND archived_at IS NULL')
+  // Archived cards, and cards on archived tickets, aren't on the board, so a reorder never touches them.
+  const weekCards = new Set(weeks.flatMap(([id, w]) => db.prepare(`SELECT c.id FROM priority_cards c JOIN tickets t ON t.id = c.ticket_id
+    WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL AND t.archived_at IS NULL`)
     .all(id, w).map((c) => c.id)));
   db.transaction(() => {
     const del = db.prepare('DELETE FROM card_assignees WHERE user_id = ? AND card_id = ?');

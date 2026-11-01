@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Megaphone, Image as ImageIcon, FileText, Type, Download, Copy, Check, Pencil, Plus, Search, Upload, Ticket, Loader2, Trash2, CalendarDays } from 'lucide-react';
+import { Megaphone, Image as ImageIcon, FileText, Type, Download, Copy, Check, Pencil, Plus, Search, Upload, Ticket, Loader2, Trash2, CalendarDays, Receipt } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ago, fullName, fullStamp, shortDate, todayIso } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import Avatar from '../components/Avatar.jsx';
+import MarketingSpend from '../components/MarketingSpend.jsx';
 
 const TABS = [
   { key: 'brand', label: 'Logos & Images', icon: ImageIcon },
   { key: 'copy', label: 'Text Copy', icon: Type },
   { key: 'files', label: 'Files', icon: FileText },
   { key: 'requests', label: 'Support Requests', icon: Megaphone },
+  { key: 'spend', label: 'Spend', icon: Receipt },
 ];
 
 export const fileSize = (n) => (n == null ? '' : n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 ** 2).toFixed(1)} MB`);
@@ -53,7 +55,7 @@ export default function Marketing() {
   };
   const close = () => setOpen(null);
 
-  const addButton = tab === 'requests'
+  const addButton = tab === 'spend' ? null : tab === 'requests'
     ? <button className="btn-primary" onClick={() => setOpen({ type: 'request' })}><Megaphone size={15} /> Request support</button>
     : canManage && (tab === 'copy'
       ? <button className="btn-primary" onClick={() => setOpen({ type: 'copy' })}><Plus size={15} /> Add copy</button>
@@ -61,7 +63,7 @@ export default function Marketing() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Marketing" subtitle="Logos, images, approved copy, and files ready to use, and a place to ask the Marketing team for help.">
+      <PageHeader title="Marketing" subtitle="Logos, images, approved copy, and files ready to use, a place to ask the Marketing team for help, and what marketing spends.">
         {addButton}
       </PageHeader>
 
@@ -76,7 +78,7 @@ export default function Marketing() {
             </button>
           ))}
         </nav>
-        {tab !== 'requests' && (
+        {!['requests', 'spend'].includes(tab) && (
           <div className="relative mb-2 w-full max-w-xs">
             <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
             <input className="input pl-9" placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -88,6 +90,7 @@ export default function Marketing() {
       {tab === 'files' && assets && <FileList assets={assets.filter((a) => a.kind === 'file' && matches(q, a.title, a.description, a.name))} canManage={canManage} onEdit={(item) => setOpen({ type: 'asset', item })} />}
       {tab === 'copy' && copy && <CopyList copy={copy} q={q} categories={meta?.copyCategories || []} canManage={canManage} onEdit={(item) => setOpen({ type: 'copy', item })} />}
       {tab === 'requests' && requests && <Requests requests={requests} meta={meta} onChanged={loadRequests} />}
+      {tab === 'spend' && <MarketingSpend />}
 
       {open?.type === 'asset' && (
         <AssetForm key={open.item?.id ?? 'new'} asset={open.item} kind={open.kind} kinds={meta?.assetKinds || []} onClose={close}

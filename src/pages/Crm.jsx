@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Search, Plus, ContactRound } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { ago, fullStamp } from '../lib/format.js';
@@ -9,7 +10,12 @@ import AccountObjectives from './AccountObjectives.jsx';
 
 /** The CRM: customer contacts, and the account development objectives BD directors are working on with each customer. */
 export default function Crm() {
-  const [tab, setTabState] = useState(() => { try { return localStorage.getItem('kit.crm.tab') || 'contacts'; } catch { return 'contacts'; } });
+  const [params] = useSearchParams();
+  // ?tab=objectives opens on that tab (links from the dashboard); otherwise the tab last used.
+  const [tab, setTabState] = useState(() => {
+    if (['contacts', 'objectives'].includes(params.get('tab'))) return params.get('tab');
+    try { return localStorage.getItem('kit.crm.tab') || 'contacts'; } catch { return 'contacts'; }
+  });
   const setTab = (t) => { setTabState(t); try { localStorage.setItem('kit.crm.tab', t); } catch { /* ignore */ } };
   const tabs = (
     <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="tablist">

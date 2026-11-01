@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp } from 'lucide-react';
+import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp, Star } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullName, fullStamp } from '../lib/format.js';
@@ -251,17 +251,33 @@ function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now }) {
   );
 }
 
-function TicketCard({ ticket: t, now, overlay, onOpenStep }) {
+/** A ticket on someone's priority ticket list (from the top of their My dashboard) carries this tag. */
+export function PriorityTag({ of }) {
+  if (!of) return null;
+  return (
+    <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-px text-[11px] font-semibold text-amber-800" title={`On ${of}'s priority tickets`}>
+      <Star size={10} className="fill-amber-500 text-amber-500" /> Priority
+    </span>
+  );
+}
+
+/** The standard pipeline ticket card. Used on the board and on My dashboard's priority tickets. */
+export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, className = '' }) {
   const owner = t.owner_first_name ? { id: t.created_by, first_name: t.owner_first_name, last_name: t.owner_last_name } : null;
   const days = daysSince(t.last_activity, now);
   const { bar, counter } = activityTimer(days);
   const idle = `${Math.floor(days)} day${Math.floor(days) === 1 ? '' : 's'} since last activity (${fullStamp(t.last_activity)})`;
   return (
-    <div className={`relative cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pr-10 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${overlay ? 'w-60 rotate-2 shadow-xl' : ''}`}>
+    <div className={`relative cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pr-10 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${overlay ? 'w-60 rotate-2 shadow-xl' : ''} ${className}`}>
       <NextStepBadge step={t.next_step} onOpen={() => onOpenStep?.(t)} className="absolute top-1/2 right-2 -translate-y-1/2" />
       <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
       <div className="mt-0.5 h-4 truncate text-xs text-slate-500">{[t.organization, t.account_type].filter(Boolean).join(' · ')}</div>
-      <LabelList labels={t.labels} className="mt-1.5" />
+      {(t.priority_of || t.labels?.length > 0) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          <PriorityTag of={t.priority_of} />
+          <LabelList labels={t.labels} />
+        </div>
+      )}
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1">
           <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 tabular-nums">{t.value != null ? money(t.value) : '—'}</span>

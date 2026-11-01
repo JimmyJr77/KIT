@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { Table2, BarChart3 } from 'lucide-react';
+import { Table2, BarChart3, LineChart as LineIcon } from 'lucide-react';
 
 // Chart building blocks for the dashboards. Colors are the validated categorical slots, in fixed order (never cycled);
 // three of them sit below 3:1 on the light surface, so every chart carries direct labels and a table view.
@@ -38,6 +38,37 @@ export function ChartCard({ title, subtitle, table, children, actions, className
         )}
       </header>
       {asTable && table ? <DataTable {...table} /> : children}
+    </section>
+  );
+}
+
+const VIEWS = [['table', 'Table', Table2], ['bar', 'Bar chart', BarChart3], ['timeline', 'Timeline', LineIcon]];
+
+/**
+ * A titled card that shows the same numbers as a table, a bar chart or a timeline, whichever the viewer picks. Pass the
+ * views it has: `table` (DataTable props), `bar` and `timeline` (elements). It opens on `initial`, else the bar chart.
+ */
+export function ViewCard({ title, subtitle, table, bar, timeline, initial, footer, className = '' }) {
+  const has = { table: !!table, bar: !!bar, timeline: !!timeline };
+  const [view, setView] = useState(has[initial] ? initial : has.bar ? 'bar' : has.timeline ? 'timeline' : 'table');
+  return (
+    <section className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${className}`}>
+      <header className="mb-3 flex items-start gap-2">
+        <div className="mr-auto min-w-0">
+          <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
+          {subtitle && <p className="text-xs text-slate-500">{subtitle}</p>}
+        </div>
+        <div className="flex shrink-0 rounded-md bg-white p-0.5 ring-1 ring-slate-200" role="radiogroup" aria-label={`Show ${title} as`}>
+          {VIEWS.filter(([k]) => has[k]).map(([k, label, Icon]) => (
+            <button key={k} type="button" role="radio" aria-checked={view === k} title={label} aria-label={label} onClick={() => setView(k)}
+              className={`rounded p-1 ${view === k ? 'bg-brand-600 text-white' : 'text-slate-500 hover:text-slate-900'}`}>
+              <Icon size={14} />
+            </button>
+          ))}
+        </div>
+      </header>
+      {view === 'table' ? <DataTable {...table} /> : view === 'bar' ? bar : timeline}
+      {footer}
     </section>
   );
 }
@@ -160,7 +191,7 @@ export function BarList({ rows, format = compact, color = SERIES[0], empty = 'No
  * Vertical stacked columns: categories along the bottom, `series` [{ key, label, color, values[] }] stacked bottom-up
  * with 2px gaps; each column's total is printed above it. Hover any segment for its value.
  */
-export function StackedColumns({ categories, series, format = compact, height = 180 }) {
+export function StackedColumns({ categories, series, format = compact, tipFormat = fullMoney, height = 180 }) {
   const ref = useRef(null);
   const [tip, show, hide] = useTip(ref);
   const totals = categories.map((_, i) => series.reduce((s, x) => s + (x.values[i] || 0), 0));
@@ -181,8 +212,8 @@ export function StackedColumns({ categories, series, format = compact, height = 
                   return (
                     <div key={s.key} tabIndex={0} className={`transition-[filter] hover:brightness-110 focus:brightness-110 focus:outline-none ${topmost ? 'rounded-t' : ''}`}
                       style={{ height: Math.max(2, (v / max) * height), background: s.color }}
-                      onPointerMove={(e) => show(e, c, [{ label: s.label, value: fullMoney(v), color: s.color }])}
-                      onFocus={(e) => { const b = e.currentTarget.getBoundingClientRect(); show({ clientX: b.right, clientY: b.top + b.height / 2 }, c, [{ label: s.label, value: fullMoney(v), color: s.color }]); }}
+                      onPointerMove={(e) => show(e, c, [{ label: s.label, value: tipFormat(v), color: s.color }])}
+                      onFocus={(e) => { const b = e.currentTarget.getBoundingClientRect(); show({ clientX: b.right, clientY: b.top + b.height / 2 }, c, [{ label: s.label, value: tipFormat(v), color: s.color }]); }}
                       onBlur={hide} />
                   );
                 })}
@@ -204,7 +235,7 @@ export function StackedColumns({ categories, series, format = compact, height = 
  * Lines over time: `points` (x labels) and `series` [{ key, label, values[] }]. More than eight series fold the
  * smallest into "Other". A crosshair snaps to the nearest point and lists every series there.
  */
-export function LineChart({ points, labels = points, series, format = compact, height = 220 }) {
+export function LineChart({ points, labels = points, series, format = compact, tipFormat = fullMoney, height = 220, reference, referenceLabel, ceiling }) {
   const wrap = useRef(null);
   const [width, setWidth] = useState(600);
   const [hover, setHover] = useState(null);
@@ -226,11 +257,13 @@ export function LineChart({ points, labels = points, series, format = compact, h
 
   const pad = { l: 52, r: 16, t: 10, b: 24 };
   const w = Math.max(width, 200);
-  const max = Math.max(...shown.flatMap((s) => s.values), 0) || 1;
+  // `ceiling` caps the axis so one outlier doesn't flatten the rest; values above it are drawn on the top edge (the tooltip
+  // still gives the real value).
+  const max = Math.min(Math.max(...shown.flatMap((s) => s.values.filter((v) => v != null)), reference ?? 0, 0), ceiling ?? Infinity) || 1;
   const ticks = niceTicks(max);
   const top = ticks[ticks.length - 1];
   const x = (i) => pad.l + (points.length < 2 ? (w - pad.l - pad.r) / 2 : (i * (w - pad.l - pad.r)) / (points.length - 1));
-  const y = (v) => pad.t + (height - pad.t - pad.b) * (1 - v / top);
+  const y = (v) => pad.t + (height - pad.t - pad.b) * (1 - Math.min(v, top) / top);
   const every = Math.max(1, Math.ceil(points.length / Math.max(2, Math.floor((w - pad.l) / 70))));
 
   const move = (e) => {
@@ -255,14 +288,22 @@ export function LineChart({ points, labels = points, series, format = compact, h
             <text key={i} x={x(i)} y={height - 6} textAnchor={i === labels.length - 1 ? 'end' : 'middle'} fontSize="10" fill={INK.muted}>{l}</text>
           ))}
           {hover != null && <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={height - pad.b} stroke={INK.muted} strokeWidth="1" strokeDasharray="2 3" />}
+          {reference != null && (
+            <g>
+              <line x1={pad.l} x2={w - pad.r} y1={y(reference)} y2={y(reference)} stroke={INK.secondary} strokeWidth="1" strokeDasharray="4 3" />
+              {referenceLabel && <text x={w - pad.r} y={y(reference) - 4} textAnchor="end" fontSize="10" fill={INK.secondary}>{referenceLabel}</text>}
+            </g>
+          )}
+          {/* A missing value (null) breaks the line rather than dropping it to zero. */}
           {shown.map((s) => (
-            <path key={s.key} d={s.values.map((v, i) => `${i ? 'L' : 'M'}${x(i)},${y(v)}`).join('')} fill="none" stroke={s.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+            <path key={s.key} d={s.values.map((v, i) => (v == null ? '' : `${i && s.values[i - 1] != null ? 'L' : 'M'}${x(i)},${y(v)}`)).join('')} fill="none" stroke={s.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
           ))}
-          {hover != null && shown.map((s) => <circle key={s.key} cx={x(hover)} cy={y(s.values[hover])} r="4" fill={s.color} stroke="#fff" strokeWidth="2" />)}
+          {shown.map((s) => s.values.map((v, i) => v != null && (s.values[i - 1] == null && s.values[i + 1] == null) && <circle key={`${s.key}${i}`} cx={x(i)} cy={y(v)} r="2.5" fill={s.color} />))}
+          {hover != null && shown.map((s) => s.values[hover] != null && <circle key={s.key} cx={x(hover)} cy={y(s.values[hover])} r="4" fill={s.color} stroke="#fff" strokeWidth="2" />)}
         </svg>
         {hover != null && (
           <Tooltip tip={{ x: x(hover), y: height / 2, flip: x(hover) > w * 0.6, title: labels[hover],
-            rows: [...shown].sort((a, b) => b.values[hover] - a.values[hover]).map((s) => ({ label: s.label, value: fullMoney(s.values[hover]), color: s.color })) }} />
+            rows: [...shown].sort((a, b) => (b.values[hover] ?? -Infinity) - (a.values[hover] ?? -Infinity)).map((s) => ({ label: s.label, value: s.values[hover] == null ? '—' : tipFormat(s.values[hover]), color: s.color })) }} />
         )}
       </div>
       <Legend items={shown} line />

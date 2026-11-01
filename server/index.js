@@ -31,6 +31,7 @@ import eventRoutes from './routes/events.js';
 import contactRoutes from './routes/contacts.js';
 import deliveryRoutes from './routes/delivery.js';
 import marketingRoutes from './routes/marketing.js';
+import priorityAccountRoutes from './routes/priorityAccounts.js';
 import aiRoutes from './routes/ai.js';
 
 ensureGsaRates();
@@ -71,6 +72,7 @@ app.use('/api/events', requireAuth, eventRoutes);
 app.use('/api/contacts', requireAuth, contactRoutes);
 app.use('/api/delivery', requireAuth, deliveryRoutes);
 app.use('/api/marketing', requireAuth, marketingRoutes);
+app.use('/api/priority-accounts', requireAuth, priorityAccountRoutes);
 app.use('/api/ai', requireAuth, aiRoutes);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

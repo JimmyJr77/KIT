@@ -122,6 +122,7 @@ r.get('/', (req, res) => {
   const types = String(req.query.types || '').split(',').filter(Boolean);
   const kind = ['bid', 'work'].includes(req.query.kind) ? req.query.kind : null; // bid or work tickets only
   const territories = String(req.query.territories || '').split(',').map(Number).filter(Boolean);
+  const ids = String(req.query.ids || '').split(',').map(Number).filter(Boolean); // just these tickets
   const rows = db.prepare(`SELECT t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name,
       d.first_name AS director_first_name, d.last_name AS director_last_name, tr.name AS territory_name, tr.position AS territory_position,
       (SELECT GROUP_CONCAT(name, ', ') FROM (SELECT tm.name FROM user_teams ut JOIN teams tm ON tm.id = ut.team_id
@@ -130,6 +131,8 @@ r.get('/', (req, res) => {
       (SELECT COUNT(*) FROM ticket_comments m WHERE m.ticket_id = t.id AND m.parent_id IS NULL AND m.kind = 'question') AS question_count,
       (SELECT COUNT(*) FROM ticket_comments m WHERE m.ticket_id = t.id AND m.parent_id IS NULL AND m.kind IN ('comment', 'note')) AS comment_count,
       (SELECT COUNT(*) FROM ticket_files f WHERE f.ticket_id = t.id) AS file_count,
+      (SELECT GROUP_CONCAT(u.first_name || ' ' || u.last_name, ', ') FROM priority_list_tickets pl JOIN users u ON u.id = pl.user_id
+        WHERE pl.ticket_id = t.id) AS priority_of,
       ${NEXT_STEP_SQL} AS next_step,
       MAX(t.updated_at,
         COALESCE((SELECT MAX(c.updated_at) FROM priority_cards c WHERE c.ticket_id = t.id), ''),
@@ -145,7 +148,9 @@ r.get('/', (req, res) => {
       AND (@types = '[]' OR t.account_type IN (SELECT value FROM json_each(@types)))
       AND (@kind IS NULL OR t.ticket_type = @kind)
       AND (@territories = '[]' OR t.territory_id IN (SELECT value FROM json_each(@territories)))
-    ORDER BY last_activity DESC`).all({ q, mine: scope === 'mine' ? 1 : 0, me: req.user.id, team, owners: JSON.stringify(owners), types: JSON.stringify(types), kind, territories: JSON.stringify(territories) });
+      AND (@ids = '[]' OR t.id IN (SELECT value FROM json_each(@ids)))
+    ORDER BY last_activity DESC`).all({ q, mine: scope === 'mine' ? 1 : 0, me: req.user.id, team, owners: JSON.stringify(owners), types: JSON.stringify(types), kind,
+      territories: JSON.stringify(territories), ids: JSON.stringify(ids) });
   // Task counts: each ticket's activities and their subtasks.
   const tasks = {};
   db.prepare(`SELECT ticket_id, done FROM ticket_tasks UNION ALL

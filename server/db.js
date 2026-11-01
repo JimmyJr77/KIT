@@ -904,6 +904,57 @@ addColumn('priority_cards', 'activity_id', 'INTEGER REFERENCES ticket_tasks(id) 
 addColumn('priority_cards', 'locked_rank', 'INTEGER'); // the activity's place on its ticket when the week's planning closed
 migrateToActivities();
 
+db.exec(`
+-- Marketing spend: money spent on marketing, as specific as it's known. Any of the links can be empty: an entry can be
+-- for an event, a bid ticket, a person (usually a BD director), a territory or an account (organization), or just generic.
+CREATE TABLE IF NOT EXISTS marketing_spend (
+  id INTEGER PRIMARY KEY,
+  spent_on TEXT NOT NULL,   -- YYYY-MM-DD
+  amount REAL NOT NULL,
+  description TEXT NOT NULL,
+  category TEXT,
+  vendor TEXT,
+  event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+  ticket_id INTEGER REFERENCES tickets(id) ON DELETE SET NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  territory_id INTEGER REFERENCES territories(id) ON DELETE SET NULL,
+  organization TEXT,
+  note TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS marketing_spend_date ON marketing_spend(spent_on);
+
+-- Each person's priority accounts, in tiers (Tier 1, Tier 2, …: tiers, not a ranking), the bid tickets that matter at
+-- each account, and their own ordered list of priority tickets picked from those.
+CREATE TABLE IF NOT EXISTS priority_tiers (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS priority_tiers_user ON priority_tiers(user_id);
+CREATE TABLE IF NOT EXISTS priority_accounts (
+  id INTEGER PRIMARY KEY,
+  tier_id INTEGER NOT NULL REFERENCES priority_tiers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,       -- the agency, department or organization
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS priority_account_tickets (
+  account_id INTEGER NOT NULL REFERENCES priority_accounts(id) ON DELETE CASCADE,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (account_id, ticket_id)
+);
+CREATE TABLE IF NOT EXISTS priority_list_tickets (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, ticket_id)
+);
+`);
+
 function migrateToActivities() {
   const hasTable = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
   const steps = db.prepare('SELECT * FROM ticket_steps ORDER BY ticket_id, is_next DESC, position, id DESC').all();

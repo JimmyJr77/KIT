@@ -120,7 +120,7 @@ export function contracts(f = {}) {
     const mine = entries.filter((e) => e.program_id === p.id);
     const funded = sum(mine.filter((e) => e.kind === 'funding'), (e) => e.amount);
     return { ...p, awarded_on: p.awarded_at.slice(0, 10), funded, billed: sum(mine.filter((e) => e.kind === 'billing'), (e) => e.amount),
-      billings: mine.filter((e) => e.kind === 'billing') };
+      billings: mine.filter((e) => e.kind === 'billing'), fundings: mine.filter((e) => e.kind === 'funding') };
   });
 }
 

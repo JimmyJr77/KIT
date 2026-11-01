@@ -31,9 +31,9 @@ export function recordWork(user, entry) {
   }
 }
 
-/** Additional work for one team-week, newest first, with the ticket and priority it was about. */
+/** Additional work for one team-week, newest first, with the ticket and priority it was about. Work on an archived ticket isn't shown. */
 export function loadWorkLog(teamId, weekStart) {
   return db.prepare(`SELECT w.*, t.opportunity_title AS ticket_title, c.title AS card_title
     FROM work_log w LEFT JOIN tickets t ON t.id = w.ticket_id LEFT JOIN priority_cards c ON c.id = w.card_id
-    WHERE w.team_id = ? AND w.week_start = ? ORDER BY w.created_at DESC, w.id DESC`).all(teamId, weekStart);
+    WHERE w.team_id = ? AND w.week_start = ? AND t.archived_at IS NULL ORDER BY w.created_at DESC, w.id DESC`).all(teamId, weekStart);
 }

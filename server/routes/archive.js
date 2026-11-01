@@ -58,11 +58,12 @@ function liveItems() {
 }
 
 // Everything else a full reset archives along with the tickets and priority cards: the CRM, events, travel, contracts
-// and their funding and billing, actual travel spend, booking targets, account objectives, forecasts, marketing, alerts and work logs.
+// and their funding and billing, actual travel spend, booking targets, account objectives, forecasts, marketing and its spend, alerts, work logs and priority account lists.
 // People, teams, territories and settings stay.
 const RESET_TABLES = ['contacts', 'contact_interactions', 'ticket_contacts', 'task_participants', 'events', 'event_attendees', 'event_support_requests',
   'trips', 'travel_actuals', 'delivery_programs', 'delivery_team', 'program_entries', 'booking_targets', 'account_objectives', 'forecast_snapshots',
-  'marketing_assets', 'marketing_copy', 'alerts', 'work_log'];
+  'marketing_assets', 'marketing_copy', 'marketing_spend', 'alerts', 'work_log',
+  'priority_tiers', 'priority_accounts', 'priority_account_tickets', 'priority_list_tickets'];
 
 function datasets() {
   const other = archivedRowCounts();

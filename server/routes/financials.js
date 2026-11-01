@@ -9,6 +9,7 @@ import {
 } from '../financials.js';
 import { addDays, quarterFor } from '../../src/lib/travelCalc.js';
 import { reportCard, period, directors, THRESHOLDS } from '../reportCard.js';
+import { spendEntries } from '../marketingSpend.js';
 
 const r = Router();
 const sum = (rows, f) => rows.reduce((s, x) => s + (f(x) || 0), 0);
@@ -78,6 +79,7 @@ r.get('/teams', (req, res) => {
       openValue: sum(list.filter((t) => OPEN_STAGES.includes(t.pipeline_status)), (t) => t.value),
       bookedYtd: sum(deals.filter((p) => p.awarded_on >= `${year}-01-01`), (p) => p.value),
     },
+    marketing: { year: sum(spendEntries({ from: `${year}-01-01`, to: localToday() }), (x) => x.amount) },
     operations: {
       activeContracts: deals.filter((p) => p.status === 'Active').length,
       ...backlog(deals),
