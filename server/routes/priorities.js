@@ -264,7 +264,8 @@ r.post('/cards', (req, res) => {
     const isPlanned = planningClosed(t.id, weekStart) ? 0 : 1;
     const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, is_planned, created_by)
       VALUES (?, ?, ?, ?, ?, ?)`).run(ticketId, t.id, weekStart, activityId, isPlanned, req.user.id).lastInsertRowid;
-    if (isNew) saveToActivity(activityId, b, req.user);
+    // An existing next step picked in the priority panel comes with its edits (title and all); placed from the ticket, as is.
+    if (isNew || 'title' in b) saveToActivity(activityId, b, req.user);
     else {
       if ('waiting_client' in b) setWaiting(activityId, b.waiting_client);
       mirrorCards(activityId);

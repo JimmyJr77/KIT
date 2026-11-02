@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { X, Plus, Trash2, Search, Ticket, ArrowLeft, Archive, Hourglass } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { fullName, ticketKind } from '../lib/format.js';
+import { fullName, shortDate, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import MultiSelect from '../components/MultiSelect.jsx';
 import CardNotes from './CardNotes.jsx';
@@ -21,6 +21,9 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   const isNew = !card;
   const [ticketMode, setTicketMode] = useState('new'); // 'new' | 'existing' (new cards only)
   const [ticketId, setTicketId] = useState(card?.ticket_id ?? null);
+  // On an existing ticket, the priority can be one of its open next steps (activities) instead of a new one.
+  const [openSteps, setOpenSteps] = useState([]);
+  const [activityId, setActivityId] = useState(null);
   const [ticket, setTicket] = useState(card ? {
     ticket_type: card.ticket_type || 'bid', opportunity_title: card.opportunity_title, organization: card.organization || '', account_type: card.account_type || '', pipeline_status: card.pipeline_status || '', value: card.value ?? '',
   } : EMPTY_TICKET);
@@ -54,6 +57,27 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
 
+  useEffect(() => {
+    setOpenSteps([]);
+    setActivityId(null);
+    if (!isNew || !ticketId) return;
+    let live = true;
+    api.get(`/activities?ticket=${ticketId}`).then((d) => live && setOpenSteps(d.activities.filter((a) => !a.done))).catch(() => {});
+    return () => { live = false; };
+  }, [isNew, ticketId]);
+
+  // Picking a next step fills the priority from it, to change as needed; going back to a new one clears it.
+  const pickStep = (a) => {
+    setActivityId(a?.id ?? null);
+    setForm((f) => ({
+      ...f,
+      title: a?.subject || '',
+      due_date: a?.due_date || '',
+      checklist: a ? a.subtasks.map((s) => ({ text: s.text, done: s.done })) : [],
+      waiting_client: !!a?.waiting_client,
+    }));
+  };
+
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setT = (k, v) => setTicket((t) => ({ ...t, [k]: v }));
 
@@ -69,6 +93,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
         await api.post('/priorities/cards', {
           ...form, team_id: picked ? picked.id : teamId, week_start: picked ? picked.week : weekStart, ticket, new_notes: pendingNotes,
           ticket_id: ticketMode === 'existing' ? ticketId : null,
+          activity_id: ticketMode === 'existing' && ticketId ? activityId : null,
         });
       } else {
         await api.put(`/priorities/cards/${card.id}`, { ...form, ticket });
@@ -142,7 +167,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
               {isNew && !ro && (
                 <div className="flex rounded-md bg-white p-0.5 text-xs ring-1 ring-slate-200">
                   {[['new', 'New ticket'], ['existing', 'Existing ticket']].map(([m, l]) => (
-                    <button key={m} type="button" onClick={() => { setTicketMode(m); setTicketId(null); setTicket(EMPTY_TICKET); }}
+                    <button key={m} type="button" onClick={() => { setTicketMode(m); setTicketId(null); setTicket(EMPTY_TICKET); if (activityId) pickStep(null); }}
                       className={`rounded px-2 py-1 ${ticketMode === m ? 'bg-brand-600 text-white' : 'text-slate-600'}`}>{l}</button>
                   ))}
                 </div>
@@ -157,7 +182,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
               <>
                 {!isNew && <p className="text-xs text-slate-500">Ticket changes apply to every priority card on this ticket.</p>}
                 {isNew && ticketId && (
-                  <button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => { setTicketId(null); setTicket(EMPTY_TICKET); }}>
+                  <button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => { setTicketId(null); setTicket(EMPTY_TICKET); if (activityId) pickStep(null); }}>
                     ← Choose a different ticket
                   </button>
                 )}
@@ -206,6 +231,34 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
               </>
             )}
           </section>
+
+          {isNew && !ro && ticketId && openSteps.length > 0 && (
+            <Field label="Open next steps on this ticket">
+              <ul className="divide-y divide-slate-100 rounded-md ring-1 ring-slate-200" role="radiogroup" aria-label="Next step">
+                {[null, ...openSteps].map((a) => {
+                  const on = (a?.id ?? null) === activityId;
+                  return (
+                    <li key={a?.id ?? 'new'}>
+                      <button type="button" role="radio" aria-checked={on} onClick={() => pickStep(a)}
+                        className={`flex w-full items-start gap-2 px-3 py-2 text-left text-sm ${on ? 'bg-brand-50' : 'hover:bg-slate-50'}`}>
+                        <span className={`mt-1 h-3 w-3 shrink-0 rounded-full ring-1 ${on ? 'bg-brand-600 ring-brand-600' : 'ring-slate-300'}`} />
+                        {a ? (
+                          <span className="min-w-0">
+                            <span className="block font-medium">{a.rank === 1 && <span className="mr-1 text-xs font-semibold text-brand-700">Next ·</span>}{a.subject}</span>
+                            <span className="block text-xs text-slate-500">
+                              {[a.due_date ? `Due ${shortDate(a.due_date)}` : 'No date', a.subtasks.length ? `${a.subtasks.length} subtask${a.subtasks.length === 1 ? '' : 's'}` : null,
+                                a.waiting_client ? 'Waiting on client' : null, a.cards.length ? `On ${a.cards.length} board${a.cards.length === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ')}
+                            </span>
+                          </span>
+                        ) : <span className="text-slate-600">A new next step</span>}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {activityId && <p className="mt-1 text-xs text-slate-500">Changes below are saved to this next step on the ticket.</p>}
+            </Field>
+          )}
 
           {/* Card */}
           <Field label="Priority / next step">
