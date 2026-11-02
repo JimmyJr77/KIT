@@ -5,6 +5,8 @@ import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, formatPhoneInput, shortDate, stamp, fullStamp } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
+import { useApi } from '../lib/data.js';
+import MultiSelect from '../components/MultiSelect.jsx';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
@@ -17,7 +19,7 @@ const dateRange = (e) => {
   return `${shortDate(e.date_from)} – ${shortDate(e.date_to, year)}`;
 };
 const EMPTY_EVENT = {
-  name: '', date_from: '', date_to: '', description: '', goal: '', fee: '', website: '',
+  name: '', date_from: '', date_to: '', description: '', goal: '', notes: '', rep_ids: [], fee: '', website: '',
   poc_name: '', poc_phone: '', address: '', location: { ...EMPTY_LOCATION },
 };
 
@@ -47,7 +49,7 @@ export default function Events() {
 
   const shown = (events || []).filter((e) => {
     const s = q.trim().toLowerCase();
-    return !s || [e.name, e.description, e.goal, locationLabel(e.location), e.address].filter(Boolean).join(' ').toLowerCase().includes(s);
+    return !s || [e.name, e.description, e.goal, e.notes, ...(e.reps || []).map(fullName), locationLabel(e.location), e.address].filter(Boolean).join(' ').toLowerCase().includes(s);
   });
 
   const setAttending = async (e, attending) => {
@@ -94,7 +96,7 @@ export default function Events() {
           <table className="w-full min-w-[56rem] text-sm">
             <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
               <tr>
-                <th className="px-4 py-3">Event</th><th className="px-4 py-3">Dates</th><th className="px-4 py-3">Goal / benefit</th>
+                <th className="px-4 py-3">Event</th><th className="px-4 py-3">Dates</th><th className="px-4 py-3">Knexus rep/POC</th><th className="px-4 py-3">Goal / benefit</th>
                 <th className="px-4 py-3 text-right">Fee</th><th className="px-4 py-3">Knexus attendees</th><th className="px-4 py-3" />
               </tr>
             </thead>
@@ -108,6 +110,7 @@ export default function Events() {
                       {locationLabel(e.location) && <div className="flex items-center gap-1 text-xs text-slate-500"><MapPin size={11} /> {locationLabel(e.location)}</div>}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-slate-700">{dateRange(e)}</td>
+                    <td className="px-4 py-3 text-slate-700">{e.reps?.length ? e.reps.map(fullName).join(', ') : <span className="text-slate-300">—</span>}</td>
                     <td className="max-w-xs px-4 py-3 text-slate-600"><p className="line-clamp-2">{e.goal || <span className="text-slate-300">—</span>}</p></td>
                     <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{e.fee != null ? money(e.fee) : <span className="text-slate-300">—</span>}</td>
                     <td className="px-4 py-3">
@@ -145,8 +148,10 @@ export default function Events() {
 function EventPanel({ event, onClose, onAttend, onPlanTravel, onSaved, onDeleted, onUpdated }) {
   const { user } = useAuth();
   const isNew = !event.id;
+  const users = useApi('/users');
   const toForm = (e) => ({ ...EMPTY_EVENT, ...e, fee: e.fee ?? '', location: { ...EMPTY_LOCATION, ...e.location },
-    ...Object.fromEntries(['description', 'goal', 'website', 'poc_name', 'poc_phone', 'address'].map((k) => [k, e[k] || ''])) });
+    rep_ids: (e.reps || []).map((r) => r.id), reps: undefined, attendees: undefined, support: undefined,
+    ...Object.fromEntries(['description', 'goal', 'notes', 'website', 'poc_name', 'poc_phone', 'address'].map((k) => [k, e[k] || ''])) });
   const [form, setForm] = useState(() => toForm(event));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -234,6 +239,13 @@ function EventPanel({ event, onClose, onAttend, onPlanTravel, onSaved, onDeleted
         <Field label="Description"><textarea className="input min-h-20" value={form.description} onChange={(e) => set('description', e.target.value)} /></Field>
         <Field label="Goal / benefit of attendance">
           <textarea className="input min-h-20" placeholder="Who we want to meet, what we want to learn, which pursuits it supports…" value={form.goal} onChange={(e) => set('goal', e.target.value)} />
+        </Field>
+        <Field label="Notes">
+          <textarea className="input min-h-20" placeholder="Who we're going with, sponsorships, overlaps with other events…" value={form.notes} onChange={(e) => set('notes', e.target.value)} />
+        </Field>
+        <Field label="Knexus Event Rep/POC">
+          <MultiSelect options={(users.data?.users || []).filter((u) => u.active !== 0).map((u) => ({ value: u.id, label: fullName(u), sub: u.title }))}
+            value={form.rep_ids} onChange={(v) => set('rep_ids', v)} placeholder="Who at Knexus owns this event…" />
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Fee ($)"><input type="number" min="0" className="input" value={form.fee} onChange={(e) => set('fee', e.target.value)} /></Field>

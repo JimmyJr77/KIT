@@ -99,9 +99,10 @@ export function tripCosts(trip = {}) {
     car: carCost(trip.car),
     lodging: lodging.reduce((s, l) => s + l.total, 0),
     mie: mieCost(trip).total,
+    events: (trip.events || []).reduce((s, e) => s + (num(e.fee) ?? 0), 0), // registration and other event fees
   };
   costs.travel = costs.airfare + costs.train + costs.pov + costs.car;
-  costs.total = costs.travel + costs.lodging + costs.mie;
+  costs.total = costs.travel + costs.lodging + costs.mie + costs.events;
   return costs;
 }
 

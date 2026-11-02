@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Plane, TrainFront, Car, CarFront, Hotel, Utensils, Plus, Trash2, RefreshCw, Info } from 'lucide-react';
+import { ArrowLeft, Plane, TrainFront, Car, CarFront, Hotel, Utensils, Plus, Trash2, RefreshCw, Info, CalendarDays } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { PURPOSES, quarterFor, tripCosts, lodgingSegmentCost, mieCost, usd, nightsBetween } from '../lib/travelCalc.js';
@@ -9,11 +9,10 @@ import LocationInput, { EMPTY_LOCATION, locationKey, locationLabel } from '../co
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 /**
- * A new trip filled in from an event: its dates, its city as the destination, and a Conference purpose.
- * Flights, car, and lodging pick up those dates and that city on their own.
+ * A new trip filled in from an event: its dates, its city as the destination, a Conference purpose, and the event's fee
+ * under Events. Flights, car, and lodging pick up those dates and that city on their own.
  */
 export function tripFromEvent(event, userId, mileageRate) {
-  const fee = event.fee != null ? `Registration fee: $${Number(event.fee).toLocaleString('en-US')} (not included in this estimate)` : null;
   return {
     ...newTrip(userId, mileageRate),
     event_id: event.id,
@@ -21,9 +20,13 @@ export function tripFromEvent(event, userId, mileageRate) {
     location_to: { ...EMPTY_LOCATION, ...event.location },
     date_from: event.date_from,
     date_to: event.date_to,
-    details: [event.name, event.address, fee, event.website].filter(Boolean).join('\n'),
+    details: [event.name, event.address, event.website].filter(Boolean).join('\n'),
+    events: [eventFee(event)],
   };
 }
+
+/** One row under Events: the event and its fee (blank when the event has none yet). */
+const eventFee = (event) => ({ id: uid(), event_id: event?.id ?? null, name: event?.name || '', fee: event?.fee ?? '' });
 
 export function newTrip(userId, mileageRate) {
   return {
@@ -40,6 +43,7 @@ export function newTrip(userId, mileageRate) {
     car: { enabled: false, mode: 'estimated', vehicleClass: 'Economy / Compact', location: '', pickupDate: '', pickupTime: '10:00', dropoffDate: '', dropoffTime: '10:00', datesCustom: false, estimate: null, bookedAmount: '' },
     lodging: [{ id: uid(), hotelName: '', location: { ...EMPTY_LOCATION }, locationCustom: false, checkIn: '', checkOut: '', datesCustom: false, rates: null, ratesKey: '', overrideRate: '' }],
     mie: { rates: null, ratesKey: '', overrideRate: '' },
+    events: [],
   };
 }
 
@@ -324,6 +328,9 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
 
           {/* ---------------- M&IE ---------------- */}
           <MieSection trip={trip} onChange={(p) => patchIn('mie', p)} total={costs.mie} />
+
+          {/* ---------------- Events ---------------- */}
+          <EventsSection rows={trip.events || []} total={costs.events} onChange={(events) => patch({ events })} />
         </div>
 
         {/* ---------------- Summary ---------------- */}
@@ -338,6 +345,7 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
               <Row k="Travel subtotal" v={costs.travel} />
               <Row k="Lodging" v={costs.lodging} />
               <Row k="M&IE" v={costs.mie} />
+              <Row k="Event fees" v={costs.events} />
             </dl>
             <div className="flex items-center justify-between border-t border-slate-200 pt-3">
               <span className="font-semibold">Total</span>
@@ -443,6 +451,49 @@ function MieSection({ trip, onChange, total }) {
           </tbody>
         </table>
       )}
+    </section>
+  );
+}
+
+/** Events the trip is for, and their fees (registration, sponsorship, …). Picking an event fills in its fee. */
+function EventsSection({ rows, total, onChange }) {
+  const [events, setEvents] = useState(null);
+  useEffect(() => { api.get('/events?scope=all').then((d) => setEvents(d.events)).catch(() => setEvents([])); }, []);
+  const byId = new Map((events || []).map((e) => [e.id, e]));
+  const update = (id, p) => onChange(rows.map((r) => (r.id === id ? { ...r, ...p } : r)));
+  const pick = (row, value) => {
+    if (value === 'other') return update(row.id, { event_id: null, name: '' });
+    const e = byId.get(Number(value));
+    if (e) update(row.id, { event_id: e.id, name: e.name, fee: e.fee ?? row.fee });
+  };
+  // Upcoming events first, then past ones (most recent first).
+  const today = new Date().toLocaleDateString('en-CA');
+  const options = [...(events || [])].sort((a, b) => (a.date_to < today) - (b.date_to < today)
+    || (a.date_to < today ? b.date_from.localeCompare(a.date_from) : a.date_from.localeCompare(b.date_from)));
+  return (
+    <section className="panel space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-lg font-semibold"><CalendarDays size={18} className="text-brand-600" /> Events</h2>
+        <span className="font-semibold">{usd(total)}</span>
+      </div>
+      <p className="-mt-2 text-xs text-slate-500">Registration and other fees for the events on this trip. Picking an event fills in the fee from the Events calendar.</p>
+      {rows.map((row) => (
+        <div key={row.id} className="grid items-end gap-3 sm:grid-cols-[1fr_10rem_auto]">
+          <div>
+            <label className="label">Event</label>
+            <select className="input" value={row.event_id ?? 'other'} onChange={(e) => pick(row, e.target.value)}>
+              <option value="other">Other (type a name)</option>
+              {row.event_id && !byId.has(row.event_id) && <option value={row.event_id}>{row.name}</option>}
+              {options.map((e) => <option key={e.id} value={e.id}>{e.name} · {e.date_from}</option>)}
+            </select>
+            {!row.event_id && <input className="input mt-2" placeholder="Event or fee name" value={row.name} onChange={(e) => update(row.id, { name: e.target.value })} />}
+          </div>
+          <Money label="Fee" value={row.fee} onChange={(fee) => update(row.id, { fee })} />
+          <button type="button" className="mb-2 text-slate-400 hover:text-red-600" onClick={() => onChange(rows.filter((r) => r.id !== row.id))}
+            aria-label={`Remove ${row.name || 'this event'}`}><Trash2 size={15} /></button>
+        </div>
+      ))}
+      <button type="button" className="btn" onClick={() => onChange([...rows, eventFee(null)])}><Plus size={15} /> Add event fee</button>
     </section>
   );
 }

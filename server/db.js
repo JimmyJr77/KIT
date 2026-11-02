@@ -300,6 +300,15 @@ addColumn('tickets', 'assessment_updated_at', 'TEXT');
 addColumn('tickets', 'assessment_updated_by', 'INTEGER');
 // A trip planned from an event links back to it.
 addColumn('trips', 'event_id', 'INTEGER REFERENCES events(id) ON DELETE SET NULL');
+addColumn('events', 'notes', 'TEXT'); // anything else worth knowing: who we're going with, sponsorships, overlaps
+// Knexus Event Rep/POC: the people at Knexus who own an event (not necessarily attending).
+db.exec(`CREATE TABLE IF NOT EXISTS event_reps (
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (event_id, user_id)
+)`);
+// A trip's event fees: [{ id, event_id, name, fee }]. A trip planned from an event starts with that event's fee.
+addColumn('trips', 'events', "TEXT NOT NULL DEFAULT '[]'");
 // Swim lanes on the Tickets page (todo | in_work | stale | done). Work tickets keep the lane people put them in;
 // bid tickets move on their own from their activity unless lane_locked holds them where they are.
 addColumn('tickets', 'lane', 'TEXT');

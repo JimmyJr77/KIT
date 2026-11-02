@@ -9,6 +9,8 @@ const r = Router();
 function eventsOut(rows) {
   const attendees = db.prepare(`SELECT a.event_id, u.id, u.first_name, u.last_name, u.title FROM event_attendees a
     JOIN users u ON u.id = a.user_id ORDER BY u.last_name, u.first_name`).all();
+  const reps = db.prepare(`SELECT r.event_id, u.id, u.first_name, u.last_name, u.title FROM event_reps r
+    JOIN users u ON u.id = r.user_id ORDER BY u.last_name, u.first_name`).all();
   const trips = db.prepare('SELECT event_id, COUNT(*) AS n FROM trips WHERE event_id IS NOT NULL GROUP BY event_id').all();
   const requests = db.prepare(`SELECT r.*, q.first_name AS req_first, q.last_name AS req_last, k.first_name AS acc_first, k.last_name AS acc_last,
       t.opportunity_title AS ticket_title
@@ -18,6 +20,7 @@ function eventsOut(rows) {
     ...e,
     location: json.parse(e.location, {}),
     attendees: attendees.filter((a) => a.event_id === e.id).map(({ event_id, ...u }) => u),
+    reps: reps.filter((a) => a.event_id === e.id).map(({ event_id, ...u }) => u),
     trip_count: trips.find((t) => t.event_id === e.id)?.n || 0,
     support: requests.filter((x) => x.event_id === e.id).map((x) => ({
       id: x.id, details: x.details, status: x.status, created_at: x.created_at, accepted_at: x.accepted_at,
@@ -37,6 +40,7 @@ function fields(b = {}) {
     date_to: s(b.date_to) || s(b.date_from),
     description: s(b.description) || null,
     goal: s(b.goal) || null,
+    notes: s(b.notes) || null,
     fee: b.fee === '' || b.fee == null ? null : Number(b.fee),
     website: s(b.website) || null,
     poc_name: s(b.poc_name) || null,
@@ -49,7 +53,16 @@ function fields(b = {}) {
   if (f.date_to < f.date_from) return { error: 'Date To must be on or after Date From' };
   if (f.fee != null && (!Number.isFinite(f.fee) || f.fee < 0)) return { error: 'Fee must be a dollar amount' };
   if (f.website && !/^https?:\/\//i.test(f.website)) f.website = `https://${f.website}`;
-  return { f };
+  // Knexus Event Rep/POC: KIT users.
+  const repIds = [...new Set((Array.isArray(b.rep_ids) ? b.rep_ids : (b.reps || []).map((x) => x.id)).map(Number).filter(Boolean))]
+    .filter((id) => db.prepare('SELECT 1 FROM users WHERE id = ?').get(id));
+  return { f, repIds };
+}
+
+function setReps(eventId, ids) {
+  db.prepare('DELETE FROM event_reps WHERE event_id = ?').run(eventId);
+  const add = db.prepare('INSERT OR IGNORE INTO event_reps (event_id, user_id) VALUES (?, ?)');
+  ids.forEach((id) => add.run(eventId, id));
 }
 
 // ---- Marketing support (shared with the Marketing page; see routes/marketing.js)
@@ -85,19 +98,27 @@ r.get('/', (req, res) => {
 });
 
 r.post('/', (req, res) => {
-  const { f, error } = fields(req.body);
+  const { f, repIds, error } = fields(req.body);
   if (error) return res.status(400).json({ error });
-  const id = db.prepare(`INSERT INTO events (name, date_from, date_to, description, goal, fee, website, poc_name, poc_phone, address, location, created_by)
-    VALUES (@name, @date_from, @date_to, @description, @goal, @fee, @website, @poc_name, @poc_phone, @address, @location, @created_by)`)
+  const id = db.prepare(`INSERT INTO events (name, date_from, date_to, description, goal, notes, fee, website, poc_name, poc_phone, address, location, created_by)
+    VALUES (@name, @date_from, @date_to, @description, @goal, @notes, @fee, @website, @poc_name, @poc_phone, @address, @location, @created_by)`)
     .run({ ...f, created_by: req.user.id }).lastInsertRowid;
+  setReps(id, repIds);
+  // Whoever adds an event can say who's already going (say, from a list of events being entered); after that, people
+  // sign themselves up.
+  const going = (Array.isArray(req.body?.attendee_ids) ? req.body.attendee_ids : []).map(Number)
+    .filter((uid) => db.prepare('SELECT 1 FROM users WHERE id = ?').get(uid));
+  const attend = db.prepare('INSERT OR IGNORE INTO event_attendees (event_id, user_id) VALUES (?, ?)');
+  going.forEach((uid) => attend.run(id, uid));
   res.json({ event: one(id) });
 });
 
 r.put('/:id', (req, res) => {
   if (!db.prepare('SELECT 1 FROM events WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'Event not found' });
-  const { f, error } = fields(req.body);
+  const { f, repIds, error } = fields(req.body);
   if (error) return res.status(400).json({ error });
-  db.prepare(`UPDATE events SET name=@name, date_from=@date_from, date_to=@date_to, description=@description, goal=@goal, fee=@fee,
+  setReps(Number(req.params.id), repIds);
+  db.prepare(`UPDATE events SET name=@name, date_from=@date_from, date_to=@date_to, description=@description, goal=@goal, notes=@notes, fee=@fee,
     website=@website, poc_name=@poc_name, poc_phone=@poc_phone, address=@address, location=@location, updated_at=datetime('now') WHERE id=@id`)
     .run({ ...f, id: Number(req.params.id) });
   res.json({ event: one(req.params.id) });

@@ -6,7 +6,7 @@ import { quarterFor, tripCosts, upcomingQuarters, PURPOSES } from '../../src/lib
 
 const r = Router();
 
-const JSON_COLS = { purposes: [], location_from: {}, location_to: {}, airfare: {}, pov: {}, car: {}, lodging: [], mie: {} };
+const JSON_COLS = { purposes: [], location_from: {}, location_to: {}, airfare: {}, pov: {}, car: {}, lodging: [], mie: {}, events: [] };
 
 function hydrate(row) {
   if (!row) return null;
