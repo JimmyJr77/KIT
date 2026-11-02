@@ -147,7 +147,6 @@ export default function Pipeline() {
     <div className="flex h-full flex-col">
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
         <PageHeader title="BD Pipeline" subtitle="Bid tickets by pipeline stage. Drag a ticket to move it.">
-          <PipelineViewToggle />
           <div className="w-80 text-left">
             <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or territory…" />
           </div>
@@ -157,6 +156,7 @@ export default function Pipeline() {
                 className={`rounded px-3 ${scope === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
             ))}
           </div>
+          <PipelineViewToggle />
           <button type="button" className="btn h-9 py-0" onClick={() => setSettingsOpen(true)}><Settings size={15} /> Settings</button>
         </PageHeader>
         <div className="flex flex-wrap items-center gap-4">

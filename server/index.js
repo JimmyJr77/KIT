@@ -21,6 +21,7 @@ import activityRoutes from './routes/activities.js';
 import pipedriveRoutes from './routes/pipedrive.js';
 import labelRoutes from './routes/labels.js';
 import { schedulePipedriveSync } from './services/pipedrive.js';
+import { handleWebhook } from './services/pipedriveLive.js';
 import travelRoutes from './routes/travel.js';
 import gsaRoutes from './routes/gsa.js';
 import priorityRoutes from './routes/priorities.js';
@@ -64,6 +65,8 @@ app.use('/api/gsa', requireAuth, gsaRoutes);
 app.use('/api/priorities', requireAuth, priorityRoutes);
 app.use('/api/tickets', requireAuth, ticketRoutes);
 app.use('/api/activities', requireAuth, activityRoutes);
+// Pipedrive's webhooks sign in with HTTP Basic auth (see pipedriveLive.js), not a KIT session.
+app.post('/api/pipedrive/webhook', handleWebhook);
 app.use('/api/pipedrive', requireAuth, pipedriveRoutes);
 app.use('/api/labels', requireAuth, labelRoutes);
 app.use('/api/dashboard', requireAuth, dashboardRoutes);

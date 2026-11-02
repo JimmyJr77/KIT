@@ -45,6 +45,11 @@ services:
       # Pipedrive (Settings → Personal preferences → API in Pipedrive). Secret: set it in Render's dashboard.
       - key: PIPEDRIVE_API_KEY
         sync: false
+      # Live updates: the password Pipedrive's webhooks use to sign in to /api/pipedrive/webhook. Render makes one; an admin
+      # then turns live updates on in Admin Access › Pipedrive, which registers the webhooks at this service's address
+      # (RENDER_EXTERNAL_URL, set by Render; set PUBLIC_URL to use another HTTPS address).
+      - key: PIPEDRIVE_WEBHOOK_SECRET
+        generateValue: true
       # GSA Per Diem API (free key from https://api.data.gov/signup). Secret: set it in Render's dashboard.
       - key: GSA_API_KEY
         sync: false

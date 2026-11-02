@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X, Archive } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X, Archive, Target } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, pointerWithin, useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, horizontalListSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -13,6 +13,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import PriorityPanel from './PriorityPanel.jsx';
 import PriorityCard from './PriorityCard.jsx';
+import StrategicPriorities from '../components/StrategicPriorities.jsx';
 import CommentPanel from './CommentPanel.jsx';
 import { ViewSwitcher, TicketsView, TasksView, ThreadsView, WorkEntry } from './LaneViews.jsx';
 
@@ -38,6 +39,9 @@ export default function WeeklyPriorities() {
   const [board, setBoard] = useState(null);
   const [lanes, setLanes] = useState({});
   const [filter, setFilter] = useState([]);
+  const [mode, setModeState] = useState(() => readPref('kit.priorities.mode', 'weekly'));
+  const setMode = (m) => { setModeState(m); writePref('kit.priorities.mode', m); };
+  const strategic = mode === 'strategic';
   const [orientation, setOrientation] = useState(readPref('kit.priorities.orientation', 'rows'));
   const [panel, setPanel] = useState(null); // { card } | { newFor: userId }
   const [thread, setThread] = useState(null); // { id } | { options } for a new question or comment
@@ -186,15 +190,29 @@ export default function WeeklyPriorities() {
   return (
     <div className="flex h-full flex-col">
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
-        <PageHeader title="Weekly Priorities" subtitle="Set the week's priorities at check-in. Left-most (or top) card is the top priority.">
+        <PageHeader title={strategic ? 'Strategic Priorities' : 'Weekly Priorities'}
+          subtitle={strategic ? 'Priority accounts and priority tickets: the agencies and bids that matter most, for the team or each member.' : "Set the week's priorities at check-in. Left-most (or top) card is the top priority."}>
+          {!strategic && <>
           <button className="btn" onClick={() => { const o = orientation === 'rows' ? 'columns' : 'rows'; setOrientation(o); writePref('kit.priorities.orientation', o); }}>
             <ArrowLeftRight size={15} /> {orientation === 'rows' ? 'Members as columns' : 'Members as rows'}
           </button>
           <button className="btn" onClick={() => navigate('/archive?tab=cards')} title="Archived priority cards"><Archive size={15} /> Archive</button>
           <button className="btn" onClick={() => setSettingsOpen(true)}><Settings size={15} /> Settings</button>
+          </>}
         </PageHeader>
 
         <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <span className="label">View</span>
+            <div className="flex h-[38px] rounded-lg bg-white p-0.5 ring-1 ring-slate-200" role="radiogroup" aria-label="Priorities view">
+              {[['strategic', 'Strategic', Target], ['weekly', 'Weekly', CalendarDays]].map(([k, label, Icon]) => (
+                <button key={k} type="button" role="radio" aria-checked={mode === k} onClick={() => setMode(k)}
+                  className={`flex items-center gap-1.5 rounded-md px-3 text-sm ${mode === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>
+                  <Icon size={14} /> {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="w-52">
             <label className="label">Team</label>
             <select className="input" value={teamId} onChange={(e) => changeTeam(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
@@ -213,9 +231,9 @@ export default function WeeklyPriorities() {
           </div>
         </div>
 
-        {board && <WeekStrip weekStart={board.weekStart} current={board.currentWeekStart} onPick={setWeekDate} />}
+        {board && !strategic && <WeekStrip weekStart={board.weekStart} current={board.currentWeekStart} onPick={setWeekDate} />}
 
-        <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
+        {!strategic && <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-brand-600 bg-white ring-1 ring-slate-200" /> Priority (planned)</span>
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-amber-500 bg-amber-50 ring-1 ring-amber-200" /> Work (added after planning closed)</span>
           {board && !editable && <span className="flex items-center gap-1 text-slate-600"><Lock size={12} /> Past week — read only</span>}
@@ -233,10 +251,11 @@ export default function WeeklyPriorities() {
               )}
             </div>
           )}
-        </div>
+        </div>}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
+        {strategic ? (board && <StrategicPriorities members={members} me={user.id} />) : <>
         {board && !members.length && <p className="py-16 text-center text-slate-400">No members on this team yet. Assign people to the team from their Profile.</p>}
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={({ active }) => setActiveId(active.id)} onDragEnd={onDragEnd} onDragCancel={() => setActiveId(null)}>
           <div className={orientation === 'rows' ? 'inline-flex min-w-full flex-col gap-3' : 'flex items-start gap-4'}>
@@ -252,6 +271,7 @@ export default function WeeklyPriorities() {
           </div>
           <DragOverlay>{activeCard && <PriorityCard card={activeCard} usersById={usersById} rank={null} overlay />}</DragOverlay>
         </DndContext>
+        </>}
       </div>
 
       {settingsOpen && (

@@ -5,6 +5,7 @@ import { db } from '../db.js';
 import { requireAdmin } from '../auth.js';
 import { startPull, lastPull, syncStatus } from '../services/pipedrive.js';
 import { startSend, lastSend, preview, linkedTickets, SEND_KINDS } from '../services/pipedriveSend.js';
+import { liveStatus, turnOn, turnOff } from '../services/pipedriveLive.js';
 
 const r = Router();
 
@@ -58,6 +59,21 @@ r.post('/send', requireAdmin, (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// ---- Admins: live updates (Pipedrive's webhooks → KIT)
+
+/** Whether live updates are on: the webhook address, KIT's webhooks in Pipedrive, and the last events and update. */
+r.get('/live', requireAdmin, async (req, res) => res.json(await liveStatus(req)));
+
+/** Register KIT's webhooks in Pipedrive. This changes Pipedrive's webhook settings only, never its data. */
+r.post('/live', requireAdmin, async (req, res) => {
+  try { res.json(await turnOn(req)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+/** Remove KIT's webhooks from Pipedrive. */
+r.delete('/live', requireAdmin, async (req, res) => {
+  try { res.json(await turnOff(req)); } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 export default r;

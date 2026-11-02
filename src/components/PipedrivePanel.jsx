@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Loader2, Check, TriangleAlert, Send, Eye, ChevronRight } from 'lucide-react';
+import { RefreshCw, Loader2, Check, TriangleAlert, Send, Eye, ChevronRight, Radio } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { stamp } from '../lib/format.js';
@@ -345,9 +345,95 @@ export default function PipedrivePanel() {
         <PipedrivePull scope="all" status={status} />
       </section>
       <section className="space-y-2 border-t border-slate-100 pt-4">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><Radio size={14} className="text-brand-600" /> Live updates from Pipedrive</h3>
+        <PipedriveLive />
+      </section>
+      <section className="space-y-2 border-t border-slate-100 pt-4">
         <h3 className="text-sm font-semibold text-slate-800">Send to Pipedrive</h3>
         <PipedriveSend status={status} />
       </section>
+    </div>
+  );
+}
+
+/**
+ * Admins: Pipedrive's webhooks tell KIT the moment a deal, activity, note, person, pipeline or stage changes, and KIT
+ * pulls just those deals. Turning it on or off changes only Pipedrive's webhook settings, never its data.
+ */
+function PipedriveLive() {
+  const live = useApi('/pipedrive/live');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const l = live.data;
+  const on = !!l?.webhooks?.length;
+  const complete = on && !l.missing?.length;
+  // Check again every 15 seconds while it's on, so new events and updates show.
+  useEffect(() => {
+    if (!on) return undefined;
+    const t = setTimeout(() => live.reload(), 15000);
+    return () => clearTimeout(t);
+  }, [l]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const change = async (turnOn) => {
+    if (!turnOn && !window.confirm('Turn off live updates? KIT will only get Pipedrive changes from the nightly pull and pulls people run.')) return;
+    setBusy(true);
+    setError('');
+    try { await (turnOn ? api.post('/pipedrive/live', {}) : api.del('/pipedrive/live')); await live.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  if (live.error) return <p className="text-sm text-red-600">{live.error.message}</p>;
+  if (!l) return <p className="text-sm text-slate-400">Checking…</p>;
+  const blocker = !l.configured ? 'Pipedrive isn’t set up on this server yet (PIPEDRIVE_API_KEY).'
+    : !l.secret ? 'Set PIPEDRIVE_WEBHOOK_SECRET on the server to turn on live updates.'
+      : !l.public ? `Pipedrive can only send to a public HTTPS address, and this server is at ${l.url.replace('/api/pipedrive/webhook', '')}. Live updates work on the production server.`
+        : null;
+  const last = l.last;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-slate-500">
+        Pipedrive tells KIT as soon as a deal, activity, note, person, pipeline or stage changes, and KIT pulls those deals a few seconds later, the same
+        way a pull does. Deletions in Pipedrive aren&apos;t copied, as with any pull. Turning this on or off changes only Pipedrive&apos;s webhook settings.
+      </p>
+      {blocker && !on && <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{blocker}</p>}
+      {l.error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">Couldn&apos;t read Pipedrive&apos;s webhooks: {l.error}</p>}
+      {on && (
+        <Result ok={complete && l.webhooks.every((w) => w.active)}>
+          <div className="flex items-center gap-1.5 font-medium">
+            {complete ? <Check size={14} /> : <TriangleAlert size={14} />}
+            {complete ? 'On' : `Partly on: no webhook for ${l.missing.join(', ')}`}
+            {l.turned_on?.by && <span className="font-normal">· turned on by {l.turned_on.by} {when(l.turned_on.at)}</span>}
+          </div>
+          <div className="mt-0.5 space-y-0.5 text-xs">
+            <div>Sending to {l.url}</div>
+            {l.webhooks.some((w) => !w.active) && <div>Pipedrive has paused {l.webhooks.filter((w) => !w.active).map((w) => w.object).join(', ')}. Turn live updates off and on again.</div>}
+            <div>
+              {l.received.count ? `${plural(l.received.count, 'event')} since the server started; last ${when(l.received.last_at)} (${l.received.last})` : 'No events since the server started.'}
+              {l.waiting > 0 && ` · ${plural(l.waiting, 'deal')} waiting to be pulled`}
+              {l.received.rejected > 0 && ` · ${plural(l.received.rejected, 'request')} turned away`}
+            </div>
+          </div>
+        </Result>
+      )}
+      {last && (
+        <Result ok={last.ok}>
+          <div className="flex items-center gap-1.5 font-medium">
+            {last.ok ? <Check size={14} /> : <TriangleAlert size={14} />}
+            {last.ok ? 'Last live update' : 'Last live update failed'} {when(last.at)} · {plural(last.deals || 0, 'deal')}
+          </div>
+          <div className="mt-0.5 text-xs">{last.ok ? summary(last.result) || 'Nothing changed.' : last.error}</div>
+        </Result>
+      )}
+      <div className="flex flex-wrap items-center gap-3">
+        {(!on || !complete) && (
+          <button type="button" className="btn-primary" onClick={() => change(true)} disabled={busy || !!blocker}>
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <Radio size={15} />} {on ? 'Finish turning on' : 'Turn on live updates'}
+          </button>
+        )}
+        {on && <button type="button" className="btn" onClick={() => change(false)} disabled={busy}>Turn off</button>}
+        <button type="button" className="btn-ghost text-sm" onClick={() => live.reload()} disabled={busy}><RefreshCw size={14} /> Check</button>
+      </div>
+      {error && <p className="text-sm text-red-600">{error}</p>}
     </div>
   );
 }

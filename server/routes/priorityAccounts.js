@@ -55,6 +55,12 @@ r.get('/', (req, res) => {
   res.json({ ...priorityAccounts(userId), canEdit: mine, organizations });
 });
 
+/** ?users=1,2,3: several people's tiers and lists at once, for the Strategic view of Priorities. Nothing is created. */
+r.get('/people', (req, res) => {
+  const ids = [...new Set(String(req.query.users || '').split(',').map(Number).filter(Boolean))].slice(0, 300);
+  res.json({ people: ids.map((id) => ({ user_id: id, ...priorityAccounts(id) })) });
+});
+
 r.post('/tiers', (req, res) => {
   const n = name(req.body?.name);
   if (!n) return res.status(400).json({ error: 'Name the tier' });

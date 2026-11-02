@@ -12,7 +12,7 @@ const NAV = [
   { to: '/reports', label: 'Reports', icon: FileChartColumn },
   { to: '/events', label: 'Events', icon: CalendarDays },
   { to: '/travel', label: 'Travel', icon: Plane },
-  { to: '/priorities', label: 'Weekly Priorities', icon: ListChecks },
+  { to: '/priorities', label: 'Priorities', icon: ListChecks },
   { to: '/tickets', label: 'Tickets', icon: Ticket },
   { to: '/pipeline', label: 'BD Pipeline', icon: SquareKanban },
   { to: '/delivery', label: 'Delivery', icon: BriefcaseBusiness },

@@ -95,6 +95,7 @@ const primary = (list) => (Array.isArray(list) ? (list.find((x) => x.primary) ||
 export const idOf = (v) => (v && typeof v === 'object' ? v.value ?? v.id : v) ?? null;
 const later = (a, b) => (!a ? b : !b ? a : a > b ? a : b);
 const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** First and last name for a Pipedrive user, from their name or, failing that, their email ("kathy.devereaux@…"). */
 function splitName(name, email) {
@@ -188,10 +189,13 @@ export function runJob(label, work, done) {
  * `by` is who asked ({ id, name }), or null for the nightly pull.
  */
 export function startPull(scope, by = null) {
-  const key = scope.kind === 'all' ? 'pipedrive_last_sync' : `pipedrive_last_pull_${by.id}`;
-  const label = scope.kind === 'all' ? 'full pull' : scope.kind === 'team' ? `team pull for ${by.name}` : `pull for ${by.name}`;
+  const live = scope.kind === 'deals';
+  const key = scope.kind === 'all' ? 'pipedrive_last_sync' : live ? 'pipedrive_last_live' : `pipedrive_last_pull_${by.id}`;
+  const label = scope.kind === 'all' ? 'full pull' : live ? `live update (${scope.dealIds.length} deal${scope.dealIds.length === 1 ? '' : 's'})`
+    : scope.kind === 'team' ? `team pull for ${by.name}` : `pull for ${by.name}`;
   runJob(label, (phase) => pull(scope, phase), (result, e) => setSetting(key, json.str({
-    at: new Date().toISOString(), by: by?.name || null, scope: scope.kind, ok: !e, ...(e ? { error: e.message } : { result }),
+    at: new Date().toISOString(), by: by?.name || null, scope: scope.kind, ...(live ? { deals: scope.dealIds.length } : {}),
+    ok: !e, ...(e ? { error: e.message } : { result }),
   })));
 }
 export const lastPull = (key) => json.parse(getSetting(key), null);
@@ -235,6 +239,20 @@ async function pull(scope, phase) {
   let extras;
   if (scope.kind === 'all') {
     [deals, extras] = await Promise.all([all('deals', { status: 'all_not_deleted' }), everything()]);
+  } else if (scope.kind === 'deals') {
+    // Live updates: just the deals Pipedrive said changed (none: only pipelines, stages and fields are refreshed).
+    // A deal deleted in Pipedrive is left in KIT, as a pull would.
+    phase(`Reading ${plural(scope.dealIds.length, 'deal')}`);
+    deals = [];
+    for (const id of scope.dealIds) {
+      try {
+        const d = (await call(`deals/${id}`)).data;
+        if (d && !d.deleted && d.status !== 'deleted') deals.push(d);
+      } catch (e) {
+        if (!/: (404|410) /.test(e.message)) throw e;
+      }
+    }
+    extras = await dealExtras(deals, phase);
   } else {
     const owners = pipedriveUsers(scope.userIds, users);
     if (!owners.length) {
