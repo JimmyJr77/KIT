@@ -100,8 +100,8 @@ export default function TeamPicker({ teams = [], value = [], roles, onChange, di
   const ids = value.map(Number);
   return (
     <div className="flex min-h-[38px] flex-wrap items-center gap-1.5">
-      <TeamTags teams={teams} value={ids} roles={roles} onRemove={disabled ? undefined : (id) => onChange(ids.filter((x) => x !== id))} />
       {!disabled && <AddTeamSelect teams={teams} value={ids} onAdd={(id) => onChange([...ids, id])} className="w-auto py-1.5 text-sm" />}
+      <TeamTags teams={teams} value={ids} roles={roles} onRemove={disabled ? undefined : (id) => onChange(ids.filter((x) => x !== id))} />
     </div>
   );
 }

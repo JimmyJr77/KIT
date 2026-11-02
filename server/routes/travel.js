@@ -15,7 +15,31 @@ function hydrate(row) {
   return t;
 }
 
-const SELECT = `SELECT t.*, u.first_name || ' ' || u.last_name AS traveler_name FROM trips t JOIN users u ON u.id = t.traveler_id`;
+const SELECT = `SELECT t.*, u.first_name || ' ' || u.last_name AS traveler_name, a.first_name || ' ' || a.last_name AS approver_name
+  FROM trips t JOIN users u ON u.id = t.traveler_id LEFT JOIN users a ON a.id = t.approved_by`;
+
+// ---- Approval: every saved trip is a travel request for a lead of one of the traveler's teams to approve.
+
+/** Who approves someone's travel: the leads of their teams, or the admins when none of their teams has a lead. */
+export function approversFor(travelerId) {
+  const leads = db.prepare(`SELECT DISTINCT user_id AS id FROM user_teams WHERE role = 'lead' AND user_id != @t
+    AND team_id IN (SELECT team_id FROM user_teams WHERE user_id = @t)`).all({ t: travelerId }).map((x) => x.id);
+  if (leads.length) return leads;
+  return db.prepare("SELECT id FROM users WHERE role = 'admin' AND active = 1 AND id != ?").all(travelerId).map((x) => x.id);
+}
+/** Admins can decide any request but their own; leads, those of people on their teams. */
+const canApprove = (user, trip) => trip.traveler_id !== user.id && (user.role === 'admin' || approversFor(trip.traveler_id).includes(user.id));
+const withApproval = (user) => (t) => ({ ...t, can_approve: !!t.approval && canApprove(user, t) });
+
+const alertTrip = (userIds, actorId, kind, tripId, excerpt = null) => {
+  const ins = db.prepare('INSERT INTO alerts (user_id, actor_id, kind, trip_id, excerpt) VALUES (?, ?, ?, ?, ?)');
+  userIds.forEach((uid) => ins.run(uid, actorId, kind, tripId, excerpt));
+};
+/** A request (re)submitted for approval: its approvers hear about it. */
+function submitted(trip, actorId) {
+  db.prepare("DELETE FROM alerts WHERE trip_id = ? AND kind = 'travel_request' AND read_at IS NULL").run(trip.id);
+  alertTrip(approversFor(trip.traveler_id).filter((id) => id !== actorId), actorId, 'travel_request', trip.id);
+}
 
 function validate(b = {}) {
   if (!b.traveler_id) return 'Traveler is required';
@@ -61,7 +85,13 @@ r.get('/', (req, res) => {
   if (req.query.team) { where.push(`t.${ON_TEAM}`); params.team = Number(req.query.team); }
   if (req.query.quarter) { where.push('t.quarter = @quarter'); params.quarter = req.query.quarter; }
   const rows = db.prepare(`${SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY t.date_from DESC`).all(params);
-  res.json({ trips: withTravelerTeams(rows.map(hydrate)) });
+  res.json({ trips: withTravelerTeams(rows.map(hydrate)).map(withApproval(req.user)) });
+});
+
+/** Requests waiting on the signed-in user's decision, whatever the filters. */
+r.get('/awaiting', (req, res) => {
+  const rows = db.prepare(`${SELECT} WHERE t.approval = 'pending' ORDER BY t.date_from`).all().map(hydrate).filter((t) => canApprove(req.user, t));
+  res.json({ trips: withTravelerTeams(rows).map(withApproval(req.user)) });
 });
 
 /** Estimated spend for this quarter and the next three, optionally for one traveler or team. */
@@ -147,7 +177,7 @@ r.delete('/actuals/:id', (req, res) => {
 r.get('/:id', (req, res) => {
   const trip = hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(req.params.id));
   if (!trip) return res.status(404).json({ error: 'Not found' });
-  res.json({ trip });
+  res.json({ trip: withApproval(req.user)(trip) });
 });
 
 r.post('/', (req, res) => {
@@ -155,18 +185,43 @@ r.post('/', (req, res) => {
   if (err) return res.status(400).json({ error: err });
   const row = toRow(req.body);
   const cols = Object.keys(row);
-  const info = db.prepare(`INSERT INTO trips (${cols.join(',')}, created_by) VALUES (${cols.map((c) => '@' + c).join(',')}, @created_by)`)
+  const info = db.prepare(`INSERT INTO trips (${cols.join(',')}, created_by, approval) VALUES (${cols.map((c) => '@' + c).join(',')}, @created_by, 'pending')`)
     .run({ ...row, created_by: req.user.id });
-  res.json({ trip: hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(info.lastInsertRowid)) });
+  const trip = hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(info.lastInsertRowid));
+  submitted(trip, req.user.id);
+  res.json({ trip: withApproval(req.user)(trip) });
 });
 
 r.put('/:id', (req, res) => {
   const err = validate(req.body);
   if (err) return res.status(400).json({ error: err });
+  const before = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id);
+  if (!before) return res.status(404).json({ error: 'Not found' });
   const row = toRow(req.body);
-  db.prepare(`UPDATE trips SET ${Object.keys(row).map((c) => `${c}=@${c}`).join(',')}, updated_at = datetime('now') WHERE id = @id`)
+  // A decided request goes back for approval when what was approved changes: who, when, where, or what it costs.
+  const changed = ['traveler_id', 'date_from', 'date_to', 'location_to', 'total_estimate'].some((k) => String(row[k] ?? '') !== String(before[k] ?? ''));
+  const resubmit = !before.approval || (before.approval !== 'pending' && changed);
+  db.prepare(`UPDATE trips SET ${Object.keys(row).map((c) => `${c}=@${c}`).join(',')}, updated_at = datetime('now')
+    ${resubmit ? ", approval = 'pending', approved_by = NULL, approved_at = NULL, approval_note = NULL" : ''} WHERE id = @id`)
     .run({ ...row, id: Number(req.params.id) });
-  res.json({ trip: hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(req.params.id)) });
+  const trip = hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(req.params.id));
+  if (resubmit || (before.approval === 'pending' && row.traveler_id !== before.traveler_id)) submitted(trip, req.user.id);
+  res.json({ trip: withApproval(req.user)(trip) });
+});
+
+/** Approve or decline a travel request. Body: { decision: 'approved' | 'declined', note }. The traveler gets an alert. */
+r.post('/:id/approval', (req, res) => {
+  const trip = hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(req.params.id));
+  if (!trip) return res.status(404).json({ error: 'Not found' });
+  if (!canApprove(req.user, trip)) return res.status(403).json({ error: 'Only a lead of one of the traveler’s teams can approve this request' });
+  const decision = req.body?.decision;
+  if (!['approved', 'declined'].includes(decision)) return res.status(400).json({ error: 'Approve or decline the request' });
+  const note = String(req.body?.note || '').trim() || null;
+  db.prepare("UPDATE trips SET approval = ?, approved_by = ?, approved_at = datetime('now'), approval_note = ? WHERE id = ?")
+    .run(decision, req.user.id, note, trip.id);
+  db.prepare("UPDATE alerts SET read_at = COALESCE(read_at, datetime('now')) WHERE trip_id = ? AND kind = 'travel_request'").run(trip.id);
+  alertTrip([trip.traveler_id], req.user.id, 'travel_decision', trip.id, note);
+  res.json({ trip: withApproval(req.user)(hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(trip.id))) });
 });
 
 r.delete('/:id', (req, res) => {

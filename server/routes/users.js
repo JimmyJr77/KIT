@@ -67,6 +67,22 @@ r.put('/me', (req, res) => {
   updateUser(req.user.id, req.body, res, { allowRole: false });
 });
 
+/**
+ * Where you usually travel from, filled into your new trips. Body: { location, airport }, or { declined: true } when
+ * you'd rather not keep one; either way you aren't asked again after your first trip.
+ */
+r.put('/me/travel-from', (req, res) => {
+  const b = req.body || {};
+  const l = b.location && typeof b.location === 'object' ? b.location : {};
+  const value = b.declined ? null : {
+    location: { intl: !!l.intl, city: String(l.city || '').trim(), state: String(l.state || '').trim(), country: String(l.country || '').trim() || 'United States' },
+    airport: String(b.airport || '').trim(),
+  };
+  db.prepare('UPDATE users SET travel_from = ?, travel_from_asked = 1 WHERE id = ?')
+    .run(value && (value.location.city || value.airport) ? JSON.stringify(value) : null, req.user.id);
+  res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(req.user.id))) });
+});
+
 r.put('/me/password', (req, res) => {
   const { current, next } = req.body || {};
   if (!checkPassword(current, req.user.password_hash)) return res.status(400).json({ error: 'Current password is incorrect' });

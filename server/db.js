@@ -307,6 +307,41 @@ db.exec(`CREATE TABLE IF NOT EXISTS event_reps (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   PRIMARY KEY (event_id, user_id)
 )`);
+// Potential events the event scout (Gemini with Google Search) has found, waiting for someone to add them to the
+// Events list. Refreshing appends to it; nothing is deleted. Dismissed ones stay so the scout doesn't suggest them again.
+db.exec(`CREATE TABLE IF NOT EXISTS event_candidates (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  date_from TEXT,       -- may be unknown until the organizer announces it
+  date_to TEXT,
+  description TEXT,
+  goal TEXT,            -- value to Knexus: who we'd meet, which pursuits it supports
+  notes TEXT,           -- deadlines, sponsorship, how sure the dates are
+  fee REAL,
+  website TEXT,
+  poc_name TEXT,
+  poc_phone TEXT,
+  address TEXT,
+  location TEXT NOT NULL DEFAULT '{}',
+  relevance INTEGER,    -- 1 (marginal) … 5 (must attend)
+  source TEXT NOT NULL DEFAULT 'refresh', -- refresh | search
+  prompt TEXT,          -- the search that found it
+  status TEXT NOT NULL DEFAULT 'open',    -- open | added | dismissed
+  event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+// Signed up for an event as going, or as a maybe. Either way they have a travel request for it.
+addColumn('event_attendees', 'status', "TEXT NOT NULL DEFAULT 'going'"); // going | maybe
+// A saved trip is a travel request: a lead of one of the traveler's teams approves or declines it. NULL on trips
+// from before approvals, until someone saves them again.
+addColumn('trips', 'approval', 'TEXT'); // pending | approved | declined
+addColumn('trips', 'approved_by', 'INTEGER REFERENCES users(id)');
+addColumn('trips', 'approved_at', 'TEXT');
+addColumn('trips', 'approval_note', 'TEXT');
+// Where someone usually travels from, filled into new trips: { location, airport }. Asked once, after their first trip.
+addColumn('users', 'travel_from', 'TEXT');
+addColumn('users', 'travel_from_asked', 'INTEGER NOT NULL DEFAULT 0');
 // A trip's event fees: [{ id, event_id, name, fee }]. A trip planned from an event starts with that event's fee.
 addColumn('trips', 'events', "TEXT NOT NULL DEFAULT '[]'");
 // Swim lanes on the Tickets page (todo | in_work | stale | done). Work tickets keep the lane people put them in;
@@ -731,6 +766,8 @@ END;
 `);
 // Alerts telling someone they've been put on a won contract.
 addColumn('alerts', 'program_id', 'INTEGER REFERENCES delivery_programs(id) ON DELETE CASCADE');
+// Travel request alerts: a lead has one to approve (travel_request), or the traveler's was decided (travel_decision).
+addColumn('alerts', 'trip_id', 'INTEGER REFERENCES trips(id) ON DELETE CASCADE');
 
 // Bid tickets already Awarded before Delivery existed.
 db.exec(`INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value)

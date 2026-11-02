@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import ProfileFields, { EMPTY_PROFILE } from '../components/ProfileFields.jsx';
@@ -49,7 +50,7 @@ export default function Login() {
             </div>
             <div>
               <label className="label">Password</label>
-              <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              <PasswordInput value={password} onChange={setPassword} />
             </div>
           </div>
         )}
@@ -59,7 +60,7 @@ export default function Login() {
             <ProfileFields value={profile} onChange={setProfile} />
             <div className="sm:w-1/2 sm:pr-2">
               <label className="label">Password</label>
-              <input className="input" type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required />
+              <PasswordInput minLength={8} value={password} onChange={setPassword} />
             </div>
           </div>
         )}
@@ -113,6 +114,21 @@ export default function Login() {
           <button type="button" className="mt-3 w-full text-center text-sm text-brand-600 hover:underline" onClick={() => go('login')}>Back to sign in</button>
         )}
       </form>
+    </div>
+  );
+}
+
+/** A password field with a Show/Hide toggle that reveals what's typed. */
+function PasswordInput({ value, onChange, minLength }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <input className="input pr-16" type={show ? 'text' : 'password'} minLength={minLength} value={value} onChange={(e) => onChange(e.target.value)} required
+        autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+      <button type="button" onClick={() => setShow((v) => !v)} aria-pressed={show} aria-label={show ? 'Hide password' : 'Show password'}
+        className="absolute inset-y-0 right-0 flex items-center gap-1 px-2.5 text-xs font-medium text-slate-500 hover:text-slate-800">
+        {show ? <EyeOff size={14} /> : <Eye size={14} />} {show ? 'Hide' : 'Show'}
+      </button>
     </div>
   );
 }

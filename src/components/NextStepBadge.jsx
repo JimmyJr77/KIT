@@ -11,19 +11,31 @@ const ROTATE = { right: '', left: 'rotate-180', down: 'rotate-90' };
 
 /**
  * The ticket's next step as a circle: its color and arrow say how soon it's due (see lib/nextStep.js). Selecting it
- * opens the activity; with no next step it opens the Activity pane to add one.
+ * opens the activity; with no next step it's a yellow yield-style caution sign that opens the Activity pane to add one.
  */
 export default function NextStepBadge({ step, onOpen, className = '' }) {
   const s = nextStepState(step);
   const title = step ? `Next step: ${step.subject} · ${s.label}` : 'No next step. Add an activity.';
+  if (s.arrow === 'none') {
+    return (
+      <button type="button" title={title} aria-label={title}
+        onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); onOpen?.(step); }}
+        className={`grid h-6 w-6 shrink-0 place-items-center drop-shadow-sm transition hover:scale-110 ${className}`}>
+        <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+          <path d="M3 4.5h18L12 20.5z" className="fill-amber-400 stroke-amber-400" strokeWidth="4" strokeLinejoin="round" />
+          <path d="M12 7.5v5" className="stroke-amber-950" strokeWidth="2.4" strokeLinecap="round" />
+          <circle cx="12" cy="15.6" r="1.3" className="fill-amber-950" />
+        </svg>
+      </button>
+    );
+  }
   return (
     <button type="button" title={title} aria-label={title}
       onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
       onClick={(e) => { e.stopPropagation(); onOpen?.(step); }}
       className={`grid h-6 w-6 shrink-0 place-items-center rounded-full shadow-sm ring-2 transition hover:scale-110 ${TONES[s.tone]} ${s.flash ? 'animate-blink' : ''} ${className}`}>
-      {s.arrow === 'none'
-        ? <span className="text-sm leading-none font-black">!</span>
-        : <Play size={11} className={`fill-current ${s.arrow === 'right' ? 'translate-x-px' : ''} ${ROTATE[s.arrow]}`} strokeWidth={0} />}
+      <Play size={11} className={`fill-current ${s.arrow === 'right' ? 'translate-x-px' : ''} ${ROTATE[s.arrow]}`} strokeWidth={0} />
     </button>
   );
 }

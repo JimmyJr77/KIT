@@ -7,22 +7,28 @@ import { marketingTeam, isMarketing, createRequest, acceptRequest } from './mark
 const r = Router();
 
 function eventsOut(rows) {
-  const attendees = db.prepare(`SELECT a.event_id, u.id, u.first_name, u.last_name, u.title FROM event_attendees a
-    JOIN users u ON u.id = a.user_id ORDER BY u.last_name, u.first_name`).all();
+  const attendees = db.prepare(`SELECT a.event_id, a.status, u.id, u.first_name, u.last_name, u.title FROM event_attendees a
+    JOIN users u ON u.id = a.user_id ORDER BY a.status = 'maybe', u.last_name, u.first_name`).all();
+  // Each attendee's travel request for the event: their latest trip linked to it.
+  const requests = db.prepare(`SELECT event_id, traveler_id, id, approval FROM trips WHERE event_id IS NOT NULL ORDER BY id`).all();
+  const tripOf = (eventId, userId) => {
+    const t = requests.filter((x) => x.event_id === eventId && x.traveler_id === userId).pop();
+    return t ? { id: t.id, approval: t.approval } : null;
+  };
   const reps = db.prepare(`SELECT r.event_id, u.id, u.first_name, u.last_name, u.title FROM event_reps r
     JOIN users u ON u.id = r.user_id ORDER BY u.last_name, u.first_name`).all();
   const trips = db.prepare('SELECT event_id, COUNT(*) AS n FROM trips WHERE event_id IS NOT NULL GROUP BY event_id').all();
-  const requests = db.prepare(`SELECT r.*, q.first_name AS req_first, q.last_name AS req_last, k.first_name AS acc_first, k.last_name AS acc_last,
+  const support = db.prepare(`SELECT r.*, q.first_name AS req_first, q.last_name AS req_last, k.first_name AS acc_first, k.last_name AS acc_last,
       t.opportunity_title AS ticket_title
     FROM event_support_requests r LEFT JOIN users q ON q.id = r.requested_by LEFT JOIN users k ON k.id = r.accepted_by
     LEFT JOIN tickets t ON t.id = r.ticket_id ORDER BY r.created_at DESC, r.id DESC`).all();
   return rows.map((e) => ({
     ...e,
     location: json.parse(e.location, {}),
-    attendees: attendees.filter((a) => a.event_id === e.id).map(({ event_id, ...u }) => u),
+    attendees: attendees.filter((a) => a.event_id === e.id).map(({ event_id, ...u }) => ({ ...u, trip: tripOf(e.id, u.id) })),
     reps: reps.filter((a) => a.event_id === e.id).map(({ event_id, ...u }) => u),
     trip_count: trips.find((t) => t.event_id === e.id)?.n || 0,
-    support: requests.filter((x) => x.event_id === e.id).map((x) => ({
+    support: support.filter((x) => x.event_id === e.id).map((x) => ({
       id: x.id, details: x.details, status: x.status, created_at: x.created_at, accepted_at: x.accepted_at,
       ticket_id: x.ticket_id, ticket_title: x.ticket_title,
       requested_by: x.req_first ? { id: x.requested_by, first_name: x.req_first, last_name: x.req_last } : null,
@@ -133,12 +139,23 @@ r.delete('/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-/** Sign yourself up as attending, or take yourself off. Body: { attending: boolean }. */
+/**
+ * Sign yourself up as going or maybe, switch between them, or take yourself off.
+ * Body: { status: 'going' | 'maybe' | null, erase_trip: boolean }. Taking yourself off can erase your travel request
+ * for the event; switching between going and maybe keeps it.
+ */
 r.put('/:id/attending', (req, res) => {
   if (!db.prepare('SELECT 1 FROM events WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'Event not found' });
-  if (req.body?.attending) db.prepare('INSERT OR IGNORE INTO event_attendees (event_id, user_id) VALUES (?, ?)').run(req.params.id, req.user.id);
-  else db.prepare('DELETE FROM event_attendees WHERE event_id = ? AND user_id = ?').run(req.params.id, req.user.id);
-  res.json({ event: one(req.params.id) });
+  const status = ['going', 'maybe'].includes(req.body?.status) ? req.body.status : req.body?.attending === true ? 'going' : null;
+  let erased = 0;
+  if (status) {
+    db.prepare(`INSERT INTO event_attendees (event_id, user_id, status) VALUES (?, ?, ?)
+      ON CONFLICT (event_id, user_id) DO UPDATE SET status = excluded.status`).run(req.params.id, req.user.id, status);
+  } else {
+    db.prepare('DELETE FROM event_attendees WHERE event_id = ? AND user_id = ?').run(req.params.id, req.user.id);
+    if (req.body?.erase_trip) erased = db.prepare('DELETE FROM trips WHERE event_id = ? AND traveler_id = ?').run(req.params.id, req.user.id).changes;
+  }
+  res.json({ event: one(req.params.id), erased });
 });
 
 export default r;

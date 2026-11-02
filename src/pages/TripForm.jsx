@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Plane, TrainFront, Car, CarFront, Hotel, Utensils, Plus, Trash2, RefreshCw, Info, CalendarDays } from 'lucide-react';
+import { ArrowLeft, Plane, TrainFront, Car, CarFront, Hotel, Utensils, Plus, Trash2, RefreshCw, Info, CalendarDays, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { PURPOSES, quarterFor, tripCosts, lodgingSegmentCost, mieCost, usd, nightsBetween } from '../lib/travelCalc.js';
@@ -12,9 +12,9 @@ const uid = () => Math.random().toString(36).slice(2, 9);
  * A new trip filled in from an event: its dates, its city as the destination, a Conference purpose, and the event's fee
  * under Events. Flights, car, and lodging pick up those dates and that city on their own.
  */
-export function tripFromEvent(event, userId, mileageRate) {
+export function tripFromEvent(event, userId, mileageRate, from) {
   return {
-    ...newTrip(userId, mileageRate),
+    ...newTrip(userId, mileageRate, from),
     event_id: event.id,
     purposes: ['Conference'],
     location_to: { ...EMPTY_LOCATION, ...event.location },
@@ -28,16 +28,22 @@ export function tripFromEvent(event, userId, mileageRate) {
 /** One row under Events: the event and its fee (blank when the event has none yet). */
 const eventFee = (event) => ({ id: uid(), event_id: event?.id ?? null, name: event?.name || '', fee: event?.fee ?? '' });
 
-export function newTrip(userId, mileageRate) {
+/** Someone's default travel-from ({ location, airport }), kept on their profile, or null. */
+export const travelFromOf = (u) => {
+  try { return u?.travel_from ? JSON.parse(u.travel_from) : null; } catch { return null; }
+};
+
+/** A blank trip. `from` (someone's default travel-from) fills in where they leave from and their home airport. */
+export function newTrip(userId, mileageRate, from) {
   return {
     traveler_id: userId,
     purposes: [],
-    location_from: { ...EMPTY_LOCATION },
+    location_from: { ...EMPTY_LOCATION, ...from?.location },
     location_to: { ...EMPTY_LOCATION },
     details: '',
     date_from: '',
     date_to: '',
-    airfare: { mode: 'estimated', tripType: 'round-trip', origin: '', destination: '', departDate: '', returnDate: '', datesCustom: false, estimate: null, bookedAmount: '', airline: '', confirmation: '' },
+    airfare: { mode: 'estimated', tripType: 'round-trip', origin: from?.airport || '', destination: '', departDate: '', returnDate: '', datesCustom: false, estimate: null, bookedAmount: '', airline: '', confirmation: '' },
     train: '',
     pov: { enabled: false, miles: '', roundTrip: true, rate: mileageRate },
     car: { enabled: false, mode: 'estimated', vehicleClass: 'Economy / Compact', location: '', pickupDate: '', pickupTime: '10:00', dropoffDate: '', dropoffTime: '10:00', datesCustom: false, estimate: null, bookedAmount: '' },
@@ -352,13 +358,77 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
               <span className="text-xl font-bold text-brand-700">{usd(costs.total)}</span>
             </div>
             {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-            <button className="btn-primary w-full" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save trip'}</button>
+            <button className="btn-primary w-full" onClick={save} disabled={saving}>
+              {saving ? 'Submitting…' : trip.id ? 'Save travel request' : 'Submit travel request'}
+            </button>
             {trip.id && (trip.created_by === user.id || user.role === 'admin') && (
               <button className="btn-danger w-full" onClick={remove}><Trash2 size={15} /> Delete trip</button>
             )}
           </div>
+          {trip.id && <Approval trip={trip} onDecided={(t) => setTrip((x) => ({ ...x, ...pickApproval(t) }))} />}
         </aside>
       </div>
+    </div>
+  );
+}
+
+const pickApproval = (t) => ({ approval: t.approval, approved_by: t.approved_by, approver_name: t.approver_name, approved_at: t.approved_at, approval_note: t.approval_note, can_approve: t.can_approve });
+
+export const APPROVAL_BADGE = {
+  pending: ['Awaiting approval', 'bg-amber-100 text-amber-800', Clock],
+  approved: ['Approved', 'bg-emerald-100 text-emerald-800', CheckCircle2],
+  declined: ['Not approved', 'bg-red-100 text-red-700', XCircle],
+};
+export function ApprovalBadge({ approval }) {
+  const [label, tone, Icon] = APPROVAL_BADGE[approval] || ['Not submitted', 'bg-slate-100 text-slate-500', Clock];
+  return <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap ${tone}`}><Icon size={12} /> {label}</span>;
+}
+
+/**
+ * Where the travel request stands. A lead of one of the traveler's teams approves or declines it; a change to who,
+ * when, where, or the cost after that sends it back for approval.
+ */
+function Approval({ trip, onDecided }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const decide = async (decision) => {
+    setBusy(true);
+    setError('');
+    try {
+      const d = await api.post(`/travel/${trip.id}/approval`, { decision, note });
+      setNote('');
+      onDecided(d.trip);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="panel mt-4 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="section-title">Approval</h3>
+        <ApprovalBadge approval={trip.approval} />
+      </div>
+      {trip.approval && trip.approval !== 'pending' && (
+        <p className="text-xs text-slate-500">
+          {trip.approval === 'approved' ? 'Approved' : 'Declined'} by {trip.approver_name || 'a team lead'}
+          {trip.approved_at && ` on ${new Date(`${trip.approved_at.replace(' ', 'T')}Z`).toLocaleDateString()}`}
+        </p>
+      )}
+      {trip.approval_note && <p className="rounded-md bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">{trip.approval_note}</p>}
+      {trip.approval === 'pending' && !trip.can_approve && <p className="text-xs text-slate-500">Waiting on a lead of the traveler’s team.</p>}
+      {trip.can_approve && (
+        <div className="space-y-2 border-t border-slate-200 pt-2">
+          <textarea className="input min-h-14 text-sm" placeholder="Note to the traveler (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+          {error && <p className="text-xs text-red-600">{error}</p>}
+          <div className="flex gap-2">
+            {trip.approval !== 'declined' && <button type="button" className="btn-danger flex-1" disabled={busy} onClick={() => decide('declined')}><XCircle size={15} /> Decline</button>}
+            {trip.approval !== 'approved' && <button type="button" className="btn-primary flex-1" disabled={busy} onClick={() => decide('approved')}><CheckCircle2 size={15} /> Approve</button>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

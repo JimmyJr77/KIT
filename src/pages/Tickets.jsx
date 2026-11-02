@@ -80,6 +80,10 @@ export default function Tickets() {
               className={`rounded px-3 ${scope === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
           ))}
         </div>
+        <button type="button" className="btn h-9 text-sm" onClick={() => navigate('/tickets/done')}
+          title="Every ticket that reached Done, including those archived from this page after 14 days">
+          <CheckCircle2 size={15} /> Done archive
+        </button>
         <button type="button" className="btn relative h-9 w-9 p-0" onClick={() => navigate(`/archive?tab=${types.length === 1 ? types[0] : 'bid'}`)}
           title={`Archive: done tickets, archived after 14 days or by hand${archived.length ? ` (${archived.length})` : ''}`} aria-label="Archive">
           <Archive size={16} />
@@ -87,19 +91,15 @@ export default function Tickets() {
             <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-slate-500 px-1 text-[10px] font-semibold text-white">{archived.length}</span>
           )}
         </button>
-        <button type="button" className="btn h-9 text-sm" onClick={() => navigate('/tickets/done')}
-          title="Every ticket that reached Done, including those archived from this page after 14 days">
-          <CheckCircle2 size={15} /> Done archive
-        </button>
       </PageHeader>
 
       <div className="flex flex-wrap items-end gap-3">
+        <button type="button" onClick={() => setCreating(true)} title="New ticket" aria-label="New ticket"
+            className="btn-primary h-[38px] w-[38px] shrink-0 p-0"><Plus size={18} /></button>
         <div className="relative w-full max-w-md">
           <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
           <input className="input pl-9" placeholder="Search by opportunity or organization…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <button type="button" onClick={() => setCreating(true)} title="New ticket" aria-label="New ticket"
-            className="btn-primary h-[38px] w-[38px] shrink-0 p-0"><Plus size={18} /></button>
         <div className="flex h-[38px] rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="radiogroup" aria-label="View">
           {[['az', 'A–Z', ArrowDownAZ], ['lanes', 'Swim lanes', Columns3]].map(([k, l, Icon]) => (
             <button key={k} type="button" role="radio" aria-checked={view === k} onClick={() => setView(k)} title={l} aria-label={l}

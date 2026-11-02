@@ -16,6 +16,10 @@ const isSupport = (a) => a.kind === 'support_request' || a.kind === 'support_acc
 /** What a support request is about: its event, or its own title when asked for from the Marketing page. */
 const supportSubject = (a) => (a.event_id ? a.event_name : a.request_title || (a.request_id ? 'a request' : 'a deleted request'));
 const isDelivery = (a) => a.kind === 'delivery_pm' || a.kind === 'delivery_team';
+const isTravel = (a) => a.kind === 'travel_request' || a.kind === 'travel_decision';
+/** What a travel request is for: its event, or where it goes. */
+const tripSubject = (a) => (!a.trip_id ? 'a deleted trip' : a.trip_event_name || [a.trip_destination?.city, a.trip_destination?.state].filter(Boolean).join(', ') || 'a trip');
+const DECISION = { approved: 'approved', declined: 'declined', pending: 'is reviewing' };
 
 /** Where an alert's "Go to comment" lands: the ticket timeline, scrolled to the item. */
 const goToUrl = (a) => `/tickets?open=${a.ticket_id}&focus=${a.comment_id ? `c-${a.comment_id}` : `n-${a.note_id}`}`;
@@ -38,6 +42,7 @@ export default function Alerts() {
   const select = (a) => {
     markRead(a);
     if (isDelivery(a)) return a.program_id && navigate(`/delivery?open=${a.program_id}`);
+    if (isTravel(a)) return a.trip_id && navigate(`/travel?open=${a.trip_id}`);
     setOpen(a);
   };
   const goTo = (a) => { markRead(a); navigate(goToUrl(a)); };
@@ -51,7 +56,7 @@ export default function Alerts() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Alerts" subtitle="@mentions, marketing support requests, and contracts you’re put on in Delivery. Alerts about a priority come first, then the rest, newest first.">
+      <PageHeader title="Alerts" subtitle="@mentions, marketing support requests, travel requests, and contracts you’re put on in Delivery. Alerts about a priority come first, then the rest, newest first.">
         {unread > 0 && <button className="btn" onClick={readAll}><CheckCheck size={15} /> Mark all as read</button>}
       </PageHeader>
 
@@ -85,22 +90,36 @@ export default function Alerts() {
                       : a.kind === 'support_accepted' ? <>created a work ticket for your marketing support request{a.event_id ? ' on' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>
                         : a.kind === 'delivery_pm' ? <>made you Program Manager for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
                           : a.kind === 'delivery_team' ? <>added you to the delivery team for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
+                          : a.kind === 'travel_request' ? <>submitted a travel request for <span className="font-semibold">{tripSubject(a)}</span></>
+                          : a.kind === 'travel_decision' ? <>{DECISION[a.trip_approval] || 'decided'} your travel request for <span className="font-semibold">{tripSubject(a)}</span></>
                         : <>mentioned you in {a.note_id ? 'a note' : 'a comment'} on <span className="font-semibold">{a.ticket_title || 'a deleted ticket'}</span></>}
                   </span>
                   <span className="text-[11px] text-slate-400" title={fullStamp(a.created_at)}>{ago(a.created_at)}</span>
                 </div>
                 {a.card_title && <div className="text-xs text-slate-500">Priority: {a.card_title}</div>}
-                {isDelivery(a) ? (
+                {isTravel(a) ? (
+                  <p className="mt-1 text-xs text-slate-500">
+                    {[a.trip_date_from && shortDate(a.trip_date_from, { month: 'short', day: 'numeric', year: 'numeric' }),
+                      a.kind === 'travel_request' && a.trip_approval && a.trip_approval !== 'pending' ? `Already ${a.trip_approval}` : null,
+                      a.excerpt ? `Note: ${a.excerpt}` : null].filter(Boolean).join(' · ')}
+                  </p>
+                ) : isDelivery(a) ? (
                   <p className="mt-1 text-xs text-slate-500">{[a.program_organization, a.kind === 'delivery_team' && a.excerpt ? `Your role: ${a.excerpt}` : null].filter(Boolean).join(' · ')}</p>
                 ) : <p className="mt-1.5 line-clamp-3 text-sm whitespace-pre-wrap text-slate-700"><MentionText text={a.excerpt} /></p>}
                 {isSupport(a) && <SupportActions alert={a} onDone={load} markRead={markRead} />}
+                {isTravel(a) && a.trip_id && (
+                  <button type="button" onClick={(e) => { e.stopPropagation(); select(a); }}
+                    className="mt-2 flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
+                    Open travel request <ArrowRight size={12} />
+                  </button>
+                )}
                 {isDelivery(a) && a.program_id && (
                   <button type="button" onClick={(e) => { e.stopPropagation(); select(a); }}
                     className="mt-2 flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
                     Open in Delivery <ArrowRight size={12} />
                   </button>
                 )}
-                {!isSupport(a) && !isDelivery(a) && a.ticket_id && (
+                {!isSupport(a) && !isDelivery(a) && !isTravel(a) && a.ticket_id && (
                   <button type="button" onClick={(e) => { e.stopPropagation(); goTo(a); }}
                     className="mt-2 flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
                     Go to {a.note_id ? 'note' : 'comment'} <ArrowRight size={12} />

@@ -1,5 +1,5 @@
 // A ticket's next step is its top open activity. Its circle says how soon it's due:
-//   none            red, exclamation mark
+//   none            yellow yield-style caution sign, exclamation mark
 //   overdue         red, left-pointing arrow
 //   due today       flashing red, down-pointing arrow
 //   due in 1–3 days yellow, right-pointing arrow
@@ -11,7 +11,7 @@ const DAY = 864e5;
 const daysBetween = (from, to) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY);
 
 export function nextStepState(step, today = todayIso()) {
-  if (!step) return { tone: 'red', arrow: 'none', label: 'No next step' };
+  if (!step) return { tone: 'yellow', arrow: 'none', label: 'No next step' };
   if (step.due_date) {
     const days = daysBetween(today, step.due_date);
     const due = shortDate(step.due_date);

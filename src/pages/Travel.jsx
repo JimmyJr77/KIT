@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { Plus, RefreshCw, Upload, Settings2, ChevronUp, ChevronDown, ChevronsUpDown, Receipt, Trash2, Loader2 } from 'lucide-react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Plus, RefreshCw, Upload, Settings, Settings2, ChevronUp, ChevronDown, ChevronsUpDown, Receipt, Trash2, Loader2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
@@ -10,10 +10,11 @@ import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import UserCombobox from '../components/UserCombobox.jsx';
 import { locationLabel } from '../components/LocationInput.jsx';
-import TripForm, { newTrip, tripFromEvent } from './TripForm.jsx';
+import TripForm, { newTrip, tripFromEvent, travelFromOf, ApprovalBadge } from './TripForm.jsx';
 
 export default function Travel() {
-  const { user } = useAuth();
+  const { user, setUser } = useAuth();
+  const from = travelFromOf(user);
   const users = useApi('/users');
   const teams = useApi('/teams');
   const meta = useApi('/travel/meta');
@@ -31,6 +32,9 @@ export default function Travel() {
   const [actuals, setActuals] = useState([]);
   const [actualSummary, setActualSummary] = useState(null);
   const [editingActual, setEditingActual] = useState(null);
+  const [awaiting, setAwaiting] = useState([]); // requests waiting on my approval
+  const [onlyAwaiting, setOnlyAwaiting] = useState(false);
+  const [askDefault, setAskDefault] = useState(null); // a saved trip whose travel-from might become my default
 
   // Arriving from Events with an event: open a new trip filled in from it (once the mileage rate is known).
   const location = useLocation();
@@ -38,9 +42,19 @@ export default function Travel() {
   useEffect(() => {
     const ev = location.state?.fromEvent;
     if (!ev || !meta.data) return;
-    setEditing(tripFromEvent(ev, user.id, meta.data.mileageRate));
+    setEditing(tripFromEvent(ev, user.id, meta.data.mileageRate, from));
     navigate(location.pathname, { replace: true, state: null });
   }, [location.state, meta.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Open one travel request: from an event you already have one for (state.openTrip), or an alert (?open=<trip id>).
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const id = Number(location.state?.openTrip || params.get('open'));
+    if (!id) return;
+    api.get(`/travel/${id}`).then((d) => setEditing(d.trip)).catch(() => {});
+    if (params.get('open')) setParams({}, { replace: true });
+    else navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, params]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = () => {
     const qs = new URLSearchParams();
@@ -51,6 +65,7 @@ export default function Travel() {
     api.get(`/travel/actuals/summary?${qs}`).then(setActualSummary);
     if (quarter) qs.set('quarter', quarter);
     api.get(`/travel/actuals?${qs}`).then((d) => setActuals(d.actuals));
+    api.get('/travel/awaiting').then((d) => setAwaiting(d.trips));
     return api.get(`/travel?${qs}`).then((d) => setTrips(d.trips));
   };
 
@@ -91,7 +106,7 @@ export default function Travel() {
   const sorted = useMemo(() => {
     const get = SORTS[sort.key];
     const sign = sort.dir === 'asc' ? 1 : -1;
-    return [...trips].sort((a, b) => {
+    return [...(onlyAwaiting ? awaiting : trips)].sort((a, b) => {
       const x = get(a), y = get(b);
       if (x !== y) {
         if (x == null || x === '') return 1;
@@ -100,7 +115,7 @@ export default function Travel() {
       }
       return b.date_from.localeCompare(a.date_from);
     });
-  }, [trips, sort]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [trips, awaiting, onlyAwaiting, sort]); // eslint-disable-line react-hooks/exhaustive-deps
   const sortBy = (key) => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 'asc' ? 'desc' : 'asc') : key === 'date' || key === 'estimate' ? 'desc' : 'asc' }));
   const header = (key, label, className = '') => (
     <th className={`px-4 py-3 ${className}`} aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
@@ -119,18 +134,32 @@ export default function Travel() {
         teams={teams.data?.teams || []}
         meta={meta.data}
         onClose={() => setEditing(null)}
-        onSaved={() => { setEditing(null); load(); }}
+        onSaved={(t) => {
+          setEditing(null);
+          load();
+          // Your first trip: offer to keep where you left from as your default.
+          if (t && t.traveler_id === user.id && !user.travel_from_asked && !from && (t.location_from?.city || t.airfare?.origin)) setAskDefault(t);
+        }}
       />
     );
   }
+  const keepDefault = async (keep) => {
+    const t = askDefault;
+    setAskDefault(null);
+    const d = await api.put('/users/me/travel-from', keep ? { location: t.location_from, airport: t.airfare?.origin } : { declined: true });
+    setUser(d.user);
+  };
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-8">
       <PageHeader title="Travel" subtitle="Plan trips and estimate costs against GSA FY rates">
-        <button className="btn" onClick={refresh} disabled={refreshing}>
+        <button className="btn-primary h-9" onClick={() => setEditing(newTrip(user.id, meta.data?.mileageRate, from))}><Plus size={15} /> New trip</button>
+        <button className="btn h-9" onClick={refresh} disabled={refreshing}>
           <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /> {refreshing ? 'Refreshing estimates…' : 'Refresh estimates'}
         </button>
-        <button className="btn-primary" onClick={() => setEditing(newTrip(user.id, meta.data?.mileageRate))}><Plus size={15} /> New trip</button>
+        <button className="btn h-9" onClick={() => navigate('/profile#travel')} title="Your travel defaults: where you usually travel from">
+          <Settings size={15} /> Settings
+        </button>
       </PageHeader>
 
       {outlook && (
@@ -205,6 +234,14 @@ export default function Travel() {
         )}
       </div>
 
+      {mode === 'estimated' && awaiting.length > 0 && (
+        <button type="button" onClick={() => setOnlyAwaiting((v) => !v)} aria-pressed={onlyAwaiting}
+          className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left text-sm shadow-sm ${onlyAwaiting ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-100' : 'border-amber-200 bg-amber-50/60 hover:border-amber-400'}`}>
+          <span className="font-medium text-amber-900">{awaiting.length} travel request{awaiting.length === 1 ? '' : 's'} waiting on your approval</span>
+          <span className="text-xs text-amber-800">{onlyAwaiting ? 'Show all trips' : 'Show only these'}</span>
+        </button>
+      )}
+
       {mode === 'actual' ? (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full text-sm">
@@ -232,7 +269,7 @@ export default function Travel() {
           <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
             <tr>
               {header('traveler', 'Traveler')}{header('team', 'Team')}<th className="px-4 py-3">Purpose</th><th className="px-4 py-3">Route</th>
-              {header('date', 'Dates')}<th className="px-4 py-3">Quarter</th><th className="px-4 py-3">Air</th>{header('estimate', 'Estimate', 'text-right')}
+              {header('date', 'Dates')}<th className="px-4 py-3">Quarter</th><th className="px-4 py-3">Air</th>{header('estimate', 'Estimate', 'text-right')}<th className="px-4 py-3">Approval</th>
             </tr>
           </thead>
           <tbody>
@@ -246,9 +283,12 @@ export default function Travel() {
                 <td className="px-4 py-3">{t.quarter}</td>
                 <td className="px-4 py-3 capitalize text-slate-500">{t.airfare?.mode === 'none' ? 'No air' : t.airfare?.mode}</td>
                 <td className="px-4 py-3 text-right font-semibold">{usd(t.total_estimate)}</td>
+                <td className="px-4 py-3" title={t.approver_name ? `${t.approval === 'declined' ? 'Declined' : 'Approved'} by ${t.approver_name}` : undefined}>
+                  {t.approval ? <ApprovalBadge approval={t.approval} /> : <span className="text-slate-300">—</span>}
+                </td>
               </tr>
             ))}
-            {!trips.length && <tr><td colSpan={8}className="px-4 py-10 text-center text-slate-400">No trips yet. Click “New trip” to plan one.</td></tr>}
+            {!sorted.length && <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400">No trips yet. Click “New trip” to plan one.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -260,6 +300,22 @@ export default function Travel() {
       )}
 
       <GsaPanel isAdmin={user.role === 'admin'} />
+
+      {askDefault && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/40 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="default-from-title" className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+            <h2 id="default-from-title" className="text-base font-semibold text-slate-900">Keep this as where you travel from?</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              New trips will start from <span className="font-semibold">{[locationLabel(askDefault.location_from), askDefault.airfare?.origin].filter(Boolean).join(' · ')}</span>.
+              You can change it any time under Settings on this page, or in your profile.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" className="btn" onClick={() => keepDefault(false)}>No thanks</button>
+              <button type="button" className="btn-primary" autoFocus onClick={() => keepDefault(true)}>Keep as default</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
