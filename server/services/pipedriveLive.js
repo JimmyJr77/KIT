@@ -141,7 +141,7 @@ export async function liveStatus(req) {
   const base = {
     secret: !!secret(), url: `${where.url}${WEBHOOK_PATH}`, public: where.ok, received, waiting: pending.size,
     last: json.parse(getSetting('pipedrive_last_live'), null), turned_on: json.parse(getSetting('pipedrive_live_on'), null),
-    configured: syncStatus().configured,
+    configured: syncStatus().configured, server: syncStatus().server,
   };
   if (!base.configured) return { ...base, webhooks: [] };
   try {

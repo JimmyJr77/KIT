@@ -18,7 +18,8 @@ import { hashPassword } from '../auth.js';
 import '../sample/registry.js'; // archived_rows, used to skip records archived by a full reset
 
 const API = process.env.PIPEDRIVE_API_URL || 'https://api.pipedrive.com/v1';
-const apiKey = () => process.env.PIPEDRIVE_API_KEY;
+// Pipedrive calls it the API token; either name works. Stray spaces or quotes from pasting are ignored.
+const apiKey = () => String(process.env.PIPEDRIVE_API_KEY || process.env.PIPEDRIVE_API_TOKEN || '').trim().replace(/^["']+|["']+$/g, '');
 export const pipedriveConfigured = () => !!apiKey();
 // Sending writes to the company's real deals, so a server may send only in production, or with PIPEDRIVE_PUSH=1 (so
 // testing KIT locally never posts into Pipedrive). Even then, only an admin's send does.
@@ -169,7 +170,8 @@ export function queueDelete(kind, pipedriveId, dealId = null) {
 // ---- One job at a time: a pull or a send
 
 let status = { running: false };
-export const syncStatus = () => ({ ...status, configured: pipedriveConfigured(), sending: sendingAllowed() });
+// `server` names the Render service, so an admin setting the token knows which service's Environment to open.
+export const syncStatus = () => ({ ...status, configured: pipedriveConfigured(), sending: sendingAllowed(), server: process.env.RENDER_SERVICE_NAME || null });
 
 /** Run `work(phase)` in the background; `done(result, error)` records how it went. Throws if one is already running. */
 export function runJob(label, work, done) {

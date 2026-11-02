@@ -66,7 +66,7 @@ export function PipedrivePull({ scope, status }) {
         except ones changed in KIT that an admin hasn&apos;t sent yet. KIT&apos;s own work on a ticket is kept.
         {scope === 'all' ? ' Everything is also pulled every night.' : ' Everything is pulled every night anyway; pull here to get today’s changes now.'}
       </p>
-      {s && !s.configured && <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">Pipedrive isn&apos;t set up on this server yet.</p>}
+      {s && !s.configured && <NotSetUp admin={scope === 'all'} server={s.server} />}
       {last && !s?.running && (
         <Result ok={last.ok}>
           <div className="flex items-center gap-1.5 font-medium">
@@ -91,6 +91,22 @@ export function PipedrivePull({ scope, status }) {
         {s?.running && <span className="text-sm text-slate-500">Pipedrive is busy ({s.label}): {s.phase}…</span>}
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+/** What's missing when the server has no Pipedrive API token, and (for admins) where to add it. */
+function NotSetUp({ admin, server }) {
+  return (
+    <div className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+      <p className="font-medium">Pipedrive isn&apos;t set up on this server yet: it has no Pipedrive API token.</p>
+      {admin ? (
+        <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-xs">
+          <li>In Pipedrive, open Settings › Personal preferences › API and copy your API token (an admin&apos;s, so every deal is visible).</li>
+          <li>In Render, open the {server ? <b>{server}</b> : 'KIT API'} service › Environment, add <code>PIPEDRIVE_API_KEY</code> with that token, and save.</li>
+          <li>Render restarts the service. Reload this page and this panel turns on.</li>
+        </ol>
+      ) : <p className="text-xs">An admin needs to add the API token to the server.</p>}
     </div>
   );
 }
@@ -383,7 +399,7 @@ function PipedriveLive() {
 
   if (live.error) return <p className="text-sm text-red-600">{live.error.message}</p>;
   if (!l) return <p className="text-sm text-slate-400">Checking…</p>;
-  const blocker = !l.configured ? 'Pipedrive isn’t set up on this server yet (PIPEDRIVE_API_KEY).'
+  const blocker = !l.configured ? `Add PIPEDRIVE_API_KEY to the ${l.server || 'KIT API'} service in Render first (see Pull from Pipedrive above).`
     : !l.secret ? 'Set PIPEDRIVE_WEBHOOK_SECRET on the server to turn on live updates.'
       : !l.public ? `Pipedrive can only send to a public HTTPS address, and this server is at ${l.url.replace('/api/pipedrive/webhook', '')}. Live updates work on the production server.`
         : null;
