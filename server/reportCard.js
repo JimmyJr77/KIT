@@ -2,7 +2,7 @@
 // over a quarter or a year. Each has a value, a plain-language detail, and a status: good, watch, or behind
 // (or "none" when there isn't enough to judge). Thresholds are below so they're easy to tune.
 import { db } from './db.js';
-import { bids, contracts, targets, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES } from './financials.js';
+import { bids, contracts, targets, quartersTarget, trailingQuarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES } from './financials.js';
 import { quarterFor } from '../src/lib/travelCalc.js';
 
 export const THRESHOLDS = {
@@ -14,12 +14,24 @@ export const THRESHOLDS = {
 };
 const DAY = 864e5;
 
-/** A period: { kind: 'quarter' | 'year', label: '2026 Q4' | '2026', start, end }, plus how much of it has passed. */
-export function period(kind = 'quarter', label) {
+/**
+ * A period: { kind: 'quarter' | 'year' | 't4q', label: '2026 Q4' | '2026' | '2025 Q4 – 2026 Q3', start, end, quarters },
+ * plus how much of it has passed. A 't4q' (trailing four quarters) is the four finished quarters before the quarter
+ * containing `label` (an ISO date, default today), or `back` sets of four before those.
+ */
+export function period(kind = 'quarter', label, back = 0) {
   const today = localToday();
-  const p = kind === 'year'
-    ? { kind, label: label || today.slice(0, 4), start: `${label || today.slice(0, 4)}-01-01`, end: `${label || today.slice(0, 4)}-12-31` }
-    : { kind: 'quarter', label: label || quarterFor(today), ...quarterRange(label || quarterFor(today)) };
+  let p;
+  if (kind === 't4q') {
+    const t = trailingQuarters(back, label || today);
+    p = { kind, noun: 'period', ...t };
+  } else if (kind === 'year') {
+    const y = label || today.slice(0, 4);
+    p = { kind, noun: 'year', label: y, start: `${y}-01-01`, end: `${y}-12-31`, quarters: [1, 2, 3, 4].map((q) => `${y} Q${q}`) };
+  } else {
+    const q = label || quarterFor(today);
+    p = { kind: 'quarter', noun: 'quarter', label: q, ...quarterRange(q), quarters: [q] };
+  }
   const total = (Date.parse(p.end) - Date.parse(p.start)) / DAY + 1;
   const passed = Math.min(total, Math.max(0, (Date.parse(today) - Date.parse(p.start)) / DAY + 1));
   return { ...p, elapsed: passed / total, done: today > p.end, future: today < p.start };
@@ -63,14 +75,13 @@ export function reportCard(director, p) {
 
   // 1. Bookings against target. During the period, judged against pace (the share of the period that has passed).
   const booked = sum(deals.filter((d) => within(d.awarded_on)), (d) => d.value);
-  const t = targets(Number(p.label.slice(0, 4)), director);
-  const target = p.kind === 'year' ? t.total : t.quarters[Number(p.label.slice(-1)) - 1];
+  const target = p.kind === 'year' ? targets(Number(p.label), director).total : quartersTarget(p.quarters, director);
   const attainment = target ? booked / target : null;
   const pace = p.done ? 1 : Math.max(p.elapsed, 0.05);
   const bookings = {
     key: 'bookings', title: 'Bookings against target', question: 'Are we delivering?',
     value: attainment, format: 'percent', amount: booked, target,
-    detail: target ? `$${fmt(booked)} booked of a $${fmt(target)} target${p.done ? '' : ` · ${Math.round(p.elapsed * 100)}% of the ${p.kind} has passed`}` : `$${fmt(booked)} booked · no target set`,
+    detail: target ? `$${fmt(booked)} booked of a $${fmt(target)} target${p.done ? '' : ` · ${Math.round(p.elapsed * 100)}% of the ${p.noun} has passed`}` : `$${fmt(booked)} booked · no target set`,
     status: target ? status(attainment / pace, { good: 1, watch: 0.75 }) : 'none',
   };
 
@@ -83,7 +94,7 @@ export function reportCard(director, p) {
   const newQualified = {
     key: 'newQualified', title: 'New qualified pipeline', question: 'Are we creating future growth opportunities?',
     value: sum(entered, (tk) => tk.value), format: 'money', count: entered.length,
-    detail: `${entered.length} bid${entered.length === 1 ? '' : 's'} reached Qualified or later this ${p.kind}`,
+    detail: `${entered.length} bid${entered.length === 1 ? '' : 's'} reached Qualified or later this ${p.noun}`,
     // Judged against the target too: a period's new qualified pipeline should be at least the period's target.
     status: target ? status(sum(entered, (tk) => tk.value) / (target * pace), { good: 1, watch: 0.5 }) : entered.length ? 'good' : 'none',
   };
@@ -113,7 +124,7 @@ export function reportCard(director, p) {
     key: 'winRate', title: 'Win rate', question: 'Are we pursuing and winning the right work?',
     value: decided.length ? won.length / decided.length : null, format: 'percent',
     valueRate: sum(decided, (tk) => tk.value) ? sum(won, (tk) => tk.value) / sum(decided, (tk) => tk.value) : null,
-    detail: decided.length ? `${won.length} won of ${decided.length} decided · $${fmt(sum(won, (tk) => tk.value))} of $${fmt(sum(decided, (tk) => tk.value))} by value` : `No bids won or lost this ${p.kind}`,
+    detail: decided.length ? `${won.length} won of ${decided.length} decided · $${fmt(sum(won, (tk) => tk.value))} of $${fmt(sum(decided, (tk) => tk.value))} by value` : `No bids won or lost this ${p.noun}`,
     status: status(decided.length ? won.length / decided.length : null, THRESHOLDS.winRate),
   };
 
@@ -140,7 +151,7 @@ export function reportCard(director, p) {
   };
 
   // 6. Forecast reliability: actual bookings against the forecast taken at the start of each quarter in the period.
-  const qs = p.kind === 'year' ? [1, 2, 3, 4].map((q) => `${p.label} Q${q}`) : [p.label];
+  const qs = p.quarters;
   const snaps = db.prepare('SELECT * FROM forecast_snapshots WHERE quarter IN (SELECT value FROM json_each(?))').all(JSON.stringify(qs))
     .filter((s) => !director || s.bd_director_id === director);
   const forecastQs = [...new Set(snaps.map((s) => s.quarter))].filter((q) => today > quarterRange(q).end); // finished quarters only
@@ -152,7 +163,7 @@ export function reportCard(director, p) {
     key: 'forecast', title: 'Forecast reliability', question: 'Can leadership rely on our outlook?',
     value: reliability, format: 'percent',
     detail: forecastQs.length ? `$${fmt(actual)} booked against a $${fmt(forecast)} forecast (${forecastQs.join(', ')})`
-      : inProgress.length ? `This ${p.kind}'s forecast: $${fmt(sum(inProgress, (s) => s.weighted))}, judged when the quarter ends` : 'No forecast was captured for this period',
+      : inProgress.length ? `This ${p.noun}'s forecast: $${fmt(sum(inProgress, (s) => s.weighted))}, judged when the quarter ends` : 'No forecast was captured for this period',
     status: reliability == null ? 'none' : status(Math.abs(reliability - 1), THRESHOLDS.forecast, false),
   };
 
@@ -167,18 +178,20 @@ export function reportCard(director, p) {
   const accounts = {
     key: 'accounts', title: 'Account development', question: 'Are we building access and shaping future demand?',
     value: judged ? achieved / judged : null, format: 'percent',
-    detail: `${achieved} achieved, ${missed} missed of ${due.length} due this ${p.kind} · ${openObjectives} open${overdueObjectives ? `, ${overdueObjectives} overdue` : ''}`,
+    detail: `${achieved} achieved, ${missed} missed of ${due.length} due this ${p.noun} · ${openObjectives} open${overdueObjectives ? `, ${overdueObjectives} overdue` : ''}`,
     status: judged ? status(achieved / judged, THRESHOLDS.objectives) : openObjectives ? 'watch' : 'none',
   };
 
   return { period: p, measures: [bookings, newQualified, coverage, winRate, progression, forecastCard, accounts] };
 }
 
-/** Everyone who directs BD work: the BD team, plus anyone named director on a bid. */
+/**
+ * The BD directors with a card of their own: active members of the BD team. Bids directed by anyone else still count
+ * toward the team's card.
+ */
 export function directors() {
   return db.prepare(`SELECT DISTINCT u.id, u.first_name, u.last_name, u.title FROM users u
-    WHERE u.active = 1 AND (u.id IN (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD')
-      OR u.id IN (SELECT bd_director_id FROM tickets WHERE bd_director_id IS NOT NULL AND archive_set_id IS NULL))
+    WHERE u.active = 1 AND u.id IN (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD')
     ORDER BY u.last_name, u.first_name`).all();
 }
 
@@ -186,4 +199,94 @@ export function directors() {
 function fmt(n) {
   const a = Math.abs(n || 0);
   return a >= 1e6 ? `${(n / 1e6).toFixed(a >= 1e7 ? 0 : 1)}M` : a >= 1e3 ? `${Math.round(n / 1e3)}K` : `${Math.round(n || 0)}`;
+}
+
+/**
+ * Change over time: the report card's seven measures week by week, for the team and each BD director. Each week's
+ * point is the trailing 13 weeks (a rolling quarter) ending that week, except pipeline coverage, which is the qualified
+ * pipeline as it stood that week against that quarter's target, and forecast reliability, which is the latest quarter
+ * finished by then. `weeks` is how far back the timeline goes. With `director`, that director's line plus the team's
+ * high, low and median among directors; without, the team's line.
+ */
+export function reportTrends({ weeks = 13, director = null } = {}) {
+  const today = localToday();
+  const day = (d, n) => new Date(Date.parse(d) + n * DAY).toISOString().slice(0, 10);
+  const ends = Array.from({ length: weeks }, (_, i) => day(today, -7 * (weeks - 1 - i)));
+  const all = bids({});
+  const allDeals = contracts({});
+  const hist = histories(all.map((t) => t.id));
+  const awardedOn = new Map(allDeals.filter((d) => d.ticket_id).map((d) => [d.ticket_id, d.awarded_on]));
+  const closedOn = (t) => awardedOn.get(t.id) || (t.done_at || '').slice(0, 10) || ((hist.get(t.id) || []).at(-1)?.changed_at || '').slice(0, 10);
+  const stateOn = (t, date) => {
+    let state = null;
+    for (const r of hist.get(t.id) || []) { if (r.changed_at.slice(0, 10) <= date) state = r; else break; }
+    return state;
+  };
+  const firstQualified = new Map(all.map((t) => [t.id, (hist.get(t.id) || []).find((r) => QUALIFIED_STAGES.includes(r.pipeline_status) || r.pipeline_status === 'Awarded')?.changed_at?.slice(0, 10)]));
+  const advances = new Map(all.map((t) => {
+    const rows = hist.get(t.id) || [];
+    return [t.id, rows.filter((r, i) => i > 0 && rank(r.pipeline_status) > rank(rows[i - 1].pipeline_status)).map((r) => r.changed_at.slice(0, 10))];
+  }));
+  const targetCache = new Map();
+  const quarterTarget = (date, who) => {
+    const k = `${quarterFor(date)}|${who}`;
+    if (!targetCache.has(k)) targetCache.set(k, targets(Number(date.slice(0, 4)), who).quarters[Number(quarterFor(date).slice(-1)) - 1] || null);
+    return targetCache.get(k);
+  };
+  const snaps = db.prepare('SELECT quarter, bd_director_id, weighted FROM forecast_snapshots').all();
+  const objectives = db.prepare('SELECT * FROM account_objectives').all();
+  const done = (o) => ['Achieved', 'Missed'].includes(o.status);
+
+  /** One scope's seven series (`who` = user id, or null for the team). */
+  function series(who) {
+    const list = who ? all.filter((t) => t.bd_director_id === who) : all;
+    const deals = who ? allDeals.filter((d) => d.bd_director_id === who) : allDeals;
+    const objs = who ? objectives.filter((o) => o.owner_id === who) : objectives;
+    const out = { bookings: [], newQualified: [], coverage: [], winRate: [], progression: [], forecast: [], accounts: [] };
+    for (const end of ends) {
+      const start = day(end, -90);
+      const within = (d) => d && d.slice(0, 10) >= start && d.slice(0, 10) <= end;
+      const target = quarterTarget(end, who);
+      const booked = sum(deals.filter((d) => within(d.awarded_on)), (d) => d.value);
+      out.bookings.push(target ? booked / target : null);
+      out.newQualified.push(sum(list.filter((t) => within(firstQualified.get(t.id))), (t) => t.value));
+      const pipeline = sum(list, (t) => { const st = stateOn(t, end); return st && QUALIFIED_STAGES.includes(st.pipeline_status) ? st.value : 0; });
+      out.coverage.push(target ? pipeline / target : null);
+      const decided = list.filter((t) => ['Awarded', 'Lost'].includes(t.pipeline_status) && within(closedOn(t)));
+      out.winRate.push(decided.length ? decided.filter((t) => t.pipeline_status === 'Awarded').length / decided.length : null);
+      out.progression.push(list.reduce((n, t) => n + advances.get(t.id).filter(within).length, 0));
+      // The latest quarter finished by this week that has a forecast.
+      const q = [...new Set(snaps.map((s) => s.quarter))].filter((x) => quarterRange(x).end < end).sort().at(-1);
+      const fc = q ? sum(snaps.filter((s) => s.quarter === q && (!who || s.bd_director_id === who)), (s) => s.weighted) : 0;
+      const { start: qs, end: qe } = q ? quarterRange(q) : {};
+      out.forecast.push(fc ? sum(deals.filter((d) => d.awarded_on >= qs && d.awarded_on <= qe), (d) => d.value) / fc : null);
+      const due = objs.filter((o) => within(o.target_date) || (o.completed_at && within(o.completed_at)));
+      const judged = due.filter((o) => done(o) || o.target_date <= end).length;
+      out.accounts.push(judged ? due.filter((o) => o.status === 'Achieved').length / judged : null);
+    }
+    return out;
+  }
+
+  const team = series(null);
+  const meta = reportCard(director, period('quarter')).measures.map(({ key, title, question, format }) => ({ key, title, question, format }));
+  if (!director) return { weeks: ends, measures: meta.map((m) => ({ ...m, values: team[m.key] })) };
+
+  const mine = series(director);
+  const others = directors().map((d) => series(d.id));
+  const median = (xs) => {
+    const s = xs.filter((v) => v != null).sort((a, b) => a - b);
+    if (!s.length) return null;
+    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+  };
+  const across = (key, f) => ends.map((_, i) => {
+    const xs = others.map((o) => o[key][i]).filter((v) => v != null);
+    return xs.length ? f(xs) : null;
+  });
+  return {
+    weeks: ends,
+    measures: meta.map((m) => ({
+      ...m, values: mine[m.key],
+      high: across(m.key, (xs) => Math.max(...xs)), low: across(m.key, (xs) => Math.min(...xs)), median: across(m.key, median),
+    })),
+  };
 }

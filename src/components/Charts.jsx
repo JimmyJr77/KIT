@@ -125,7 +125,8 @@ export function Legend({ items, line }) {
     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
       {items.map((s) => (
         <span key={s.key} className="flex items-center gap-1.5">
-          {line ? <span className="inline-block h-0.5 w-3.5 rounded" style={{ background: s.color }} /> : <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />}
+          {line && s.dash ? <span className="inline-block w-3.5 border-t-2 border-dashed" style={{ borderColor: s.color }} />
+            : line ? <span className="inline-block h-0.5 w-3.5 rounded" style={{ background: s.color }} /> : <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />}
           {s.label}
         </span>
       ))}
@@ -253,7 +254,7 @@ export function LineChart({ points, labels = points, series, format = compact, t
     const rest = shown.filter((s) => !keep.has(s.key));
     shown = shown.filter((s) => keep.has(s.key)).concat({ key: 'other', label: `Other (${rest.length})`, values: points.map((_, i) => rest.reduce((t, s) => t + s.values[i], 0)) });
   }
-  shown = shown.map((s, i) => ({ ...s, color: SERIES[i] }));
+  shown = shown.map((s, i) => ({ ...s, color: s.color || SERIES[i] })); // a series can bring its own color (and `dash`)
 
   const pad = { l: 52, r: 16, t: 10, b: 24 };
   const w = Math.max(width, 200);
@@ -296,7 +297,7 @@ export function LineChart({ points, labels = points, series, format = compact, t
           )}
           {/* A missing value (null) breaks the line rather than dropping it to zero. */}
           {shown.map((s) => (
-            <path key={s.key} d={s.values.map((v, i) => (v == null ? '' : `${i && s.values[i - 1] != null ? 'L' : 'M'}${x(i)},${y(v)}`)).join('')} fill="none" stroke={s.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+            <path key={s.key} d={s.values.map((v, i) => (v == null ? '' : `${i && s.values[i - 1] != null ? 'L' : 'M'}${x(i)},${y(v)}`)).join('')} fill="none" stroke={s.color} strokeWidth={s.width || 2} strokeDasharray={s.dash} strokeLinejoin="round" strokeLinecap="round" />
           ))}
           {shown.map((s) => s.values.map((v, i) => v != null && (s.values[i - 1] == null && s.values[i + 1] == null) && <circle key={`${s.key}${i}`} cx={x(i)} cy={y(v)} r="2.5" fill={s.color} />))}
           {hover != null && shown.map((s) => s.values[hover] != null && <circle key={s.key} cx={x(hover)} cy={y(s.values[hover])} r="4" fill={s.color} stroke="#fff" strokeWidth="2" />)}

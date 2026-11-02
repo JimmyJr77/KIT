@@ -5,6 +5,9 @@ import { useApi } from '../lib/data.js';
 import { shortDate, todayIso } from '../lib/format.js';
 import { locationLabel } from './LocationInput.jsx';
 import ReportCard from './ReportCard.jsx';
+import YearBasisToggle from './YearBasisToggle.jsx';
+import { useYearBasis } from '../lib/yearBasis.js';
+import PipelineByPerson from './PipelineByPerson.jsx';
 import { StatTile, Meter, ViewCard, ChartCard, DataTable, BarList, StackedColumns, LineChart, SERIES, compact, fullMoney, pct } from './Charts.jsx';
 
 const day = (iso) => shortDate(iso, { month: 'short', day: 'numeric' });
@@ -27,6 +30,8 @@ export default function BdDashboard({ director, team, territory, self = false, h
   if (director) qs.set('director', director);
   if (team) qs.set('team', team);
   if (territory) qs.set('territory', territory);
+  const [basis] = useYearBasis();
+  if (basis === 't4q') qs.set('basis', 't4q');
   const { data, error } = useApi(`/dashboard/bd?${qs}`);
   if (error) return <p className="text-sm text-red-600">{error.message || String(error)}</p>;
   if (!data) return <p className="text-sm text-slate-400">Loading…</p>;
@@ -52,11 +57,14 @@ export default function BdDashboard({ director, team, territory, self = false, h
   );
 }
 
-function SectionHead({ title, note }) {
+function SectionHead({ title, note, children }) {
   return (
-    <div className="mb-3">
-      <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-      {note && <p className="text-xs text-slate-500">{note}</p>}
+    <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+      <div>
+        <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+        {note && <p className="text-xs text-slate-500">{note}</p>}
+      </div>
+      {children}
     </div>
   );
 }
@@ -155,7 +163,7 @@ function ListCard({ icon: Icon, title, items, empty, link, aside }) {
 
 // ---- Top-level metrics
 
-/** Two figures in one tile: this quarter and this year, each against a target when there is one. */
+/** Two figures in one tile: this quarter and this year (or the trailing four quarters), each against a target when there is one. */
 function PairTile({ label, q, y, note }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -182,7 +190,10 @@ function TopMetrics({ top, people, territory }) {
   ];
   return (
     <section>
-      <SectionHead title="Top-level metrics" />
+      <SectionHead title="Top-level metrics"
+        note={top.booked.year.label.includes('–') ? 'Yearly figures cover the last four finished quarters.' : 'Yearly figures cover this calendar year to date.'}>
+        <YearBasisToggle />
+      </SectionHead>
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(12.5rem,1fr))]">
         <StatTile label="Qualified+ pipeline" value={compact(ql.value)} sub={`${plural(ql.count, 'open bid')}, Qualified onward · ${compact(ql.weighted)} PWIN-adjusted`} />
         <PairTile label="Booked (awarded)" q={top.booked.quarter} y={top.booked.year} note={territory ? 'Targets are set per BD director, not per territory' : null} />
@@ -218,14 +229,14 @@ function TopMetrics({ top, people, territory }) {
                 { key: 'marketing', label: 'Marketing', color: SERIES[1], values: exRows.map((r) => r.marketing) }]} />
           )} />
         {people ? (
-          <ViewCard title="Spend and results by person" subtitle={`This year: each person's actual travel and marketing spend, what they booked, and revenue on their contracts. Marketing tied to an event is split between the people who went.`}
+          <ViewCard title="Spend and results by person" subtitle={`${xp.year.label}: each person's actual travel and marketing spend, what they booked, and revenue on their contracts. Marketing tied to an event is split between the people who went.`}
             initial="table"
             table={{ columns: [{ key: 'name', label: 'Person' }, { key: 'travel', label: 'Travel', align: 'right', format: compact }, { key: 'marketing', label: 'Marketing', align: 'right', format: compact },
               { key: 'total', label: 'Total', align: 'right', format: compact }, { key: 'booked', label: 'Booked', align: 'right', format: compact },
               { key: 'revenue', label: 'Revenue', align: 'right', format: compact }], rows: people }}
             bar={<BarList rows={[...people].sort((a, b) => b.marketing - a.marketing).map((p) => ({ key: p.id, label: p.name, value: p.marketing, sub: `${compact(p.travel)} travel` }))} empty="No spend recorded." />} />
         ) : (
-          <ChartCard title="Where the money goes" subtitle="This year">
+          <ChartCard title="Where the money goes" subtitle={xp.year.label}>
             <DataTable columns={[{ key: 'label', label: '' }, { key: 'value', label: 'Amount', align: 'right', format: fullMoney }]}
               rows={[{ label: 'Travel (actual)', value: xp.year.travel }, { label: 'Trips (estimated)', value: xp.year.travelEstimated },
                 { label: 'Marketing', value: xp.year.marketing }, { label: 'Revenue billed', value: xp.year.revenue }]} />
@@ -303,6 +314,8 @@ function BdNumbers({ numbers: n, isTeam }) {
           timeline={<LineChart points={ql.trend.points} labels={ql.trend.points.map(trendLabel)} height={180}
             series={[{ key: 'q', label: 'Qualified+ pipeline', values: ql.trend.values }]} />} />
 
+        <PipelineByPerson className="lg:col-span-2" data={ql.byPerson} />
+
         <ViewCard className="lg:col-span-2" title="Qualified+ expected bookings by quarter"
           subtitle="By projected win quarter. Bids with a PWIN count at value × PWIN; bids without one count at full value and are shown apart."
           table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'Bids', align: 'right' }, { key: 'adjCount', label: 'With PWIN', align: 'right' },
@@ -324,7 +337,7 @@ function BdNumbers({ numbers: n, isTeam }) {
 
 // ---- Book-to-bill
 
-function BookToBill({ b2b }) {
+export function BookToBill({ b2b }) {
   const [info, setInfo] = useState(false);
   const q = b2b.quarters;
   const bl = b2b.backlog;

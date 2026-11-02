@@ -3,20 +3,28 @@ import { Printer, Presentation, Loader2 } from 'lucide-react';
 import { useApi } from '../lib/data.js';
 import { fullName, todayIso, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
-import { BarList, StackedColumns, DataTable, SERIES, compact, fullMoney, pct } from '../components/Charts.jsx';
-import { periods, formatValue, StatusChip, StalledByStage } from '../components/ReportCard.jsx';
+import { BarList, StackedColumns, DataTable, SERIES, compact, pct } from '../components/Charts.jsx';
+import { periods, periodQuery, isYearChoice, formatValue, StatusChip, StalledByStage } from '../components/ReportCard.jsx';
+import YearBasisToggle from '../components/YearBasisToggle.jsx';
+import { useYearBasis } from '../lib/yearBasis.js';
+import ReportTrends from './ReportTrends.jsx';
+import PipelineByPerson from '../components/PipelineByPerson.jsx';
+import { BookToBill } from '../components/BdDashboard.jsx';
 
-const ratio = (r) => (r == null ? '—' : `${r.toFixed(2)}×`);
 const shortQuarter = (q) => `Q${q.slice(-1)} '${q.slice(2, 4)}`;
 
 /**
  * The BD report: the report card for a period, and the pipeline, forecast, bookings, backlog and book-to-bill behind it,
  * for the team or one BD director. Prints cleanly (Print / Save as PDF) and downloads as an editable PowerPoint deck.
+ * Change over time shows the same measures week by week instead.
  */
 export default function Reports() {
   const users = useApi('/users').data?.users || [];
   const directors = users.filter((u) => u.teams?.some((t) => t.name === 'BD'));
-  const options = periods();
+  const [basis] = useYearBasis();
+  const options = periods(basis);
+  const [view, setView] = useState('report'); // report | trends
+  const [weeks, setWeeks] = useState(13);
   const [choice, setChoice] = useState('q');
   const [director, setDirector] = useState('');
   const [building, setBuilding] = useState(false);
@@ -24,7 +32,7 @@ export default function Reports() {
   const p = options.find((o) => o.key === choice);
 
   const bdQs = director ? `?director=${director}` : '';
-  const cardQs = new URLSearchParams({ kind: p.kind, label: p.value });
+  const cardQs = periodQuery(p);
   if (director) cardQs.set('director', director);
   const bd = useApi(`/financials/bd${bdQs}`).data;
   const rc = useApi(`/financials/report-card?${cardQs}`).data;
@@ -52,17 +60,44 @@ export default function Reports() {
       <div className="print:hidden">
         <PageHeader title="Reports" subtitle="The BD report: report card, pipeline, forecast, bookings and backlog. Print it or take it to PowerPoint.">
           <button type="button" className="btn" onClick={() => window.print()} disabled={!ready}><Printer size={15} /> Print / Save as PDF</button>
-          <button type="button" className="btn-primary" onClick={downloadDeck} disabled={!ready || building}>
+          <button type="button" className="btn-primary" onClick={downloadDeck} disabled={!ready || building || view === 'trends'}
+            title={view === 'trends' ? 'The PowerPoint covers the BD report' : undefined}>
             {building ? <Loader2 size={15} className="animate-spin" /> : <Presentation size={15} />} Download PowerPoint
           </button>
         </PageHeader>
         <div className="mt-4 flex flex-wrap items-end gap-3">
-          <div className="w-60">
-            <label className="label">Period</label>
-            <select className="input" value={choice} onChange={(e) => setChoice(e.target.value)}>
-              {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-            </select>
+          <div>
+            <label className="label">Report</label>
+            <div className="flex h-[38px] rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="radiogroup" aria-label="Report">
+              {[['report', 'BD report'], ['trends', 'Change over time']].map(([k, l]) => (
+                <button key={k} type="button" role="radio" aria-checked={view === k} onClick={() => setView(k)}
+                  className={`rounded px-3 ${view === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
+              ))}
+            </div>
           </div>
+          {view === 'report' ? (
+            <>
+              <div className="w-72">
+                <label className="label">Period</label>
+                <select className="input" value={choice} onChange={(e) => setChoice(e.target.value)}>
+                  {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+                </select>
+              </div>
+              {isYearChoice(choice) && (
+                <div>
+                  <label className="label">Year</label>
+                  <YearBasisToggle className="h-[38px] items-center text-sm" />
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="w-48">
+              <label className="label">Timeline</label>
+              <select className="input" value={weeks} onChange={(e) => setWeeks(Number(e.target.value))}>
+                {[13, 26, 52].map((n) => <option key={n} value={n}>Last {n} weeks</option>)}
+              </select>
+            </div>
+          )}
           <div className="w-56">
             <label className="label">For</label>
             <select className="input" value={director} onChange={(e) => setDirector(e.target.value)}>
@@ -74,7 +109,8 @@ export default function Reports() {
         </div>
       </div>
 
-      {!ready ? <p className="text-sm text-slate-400">Loading…</p> : <Report r={report} />}
+      {view === 'trends' ? <ReportTrends weeks={weeks} director={director} who={who} />
+        : !ready ? <p className="text-sm text-slate-400">Loading…</p> : <Report r={report} />}
     </div>
   );
 }
@@ -149,17 +185,10 @@ function Report({ r }) {
           <StackedColumns categories={bd.bookings.byQuarter.map((x) => shortQuarter(x.quarter))} height={130}
             series={[{ key: 'funded', label: 'Funded', color: SERIES[0], values: bd.bookings.byQuarter.map((x) => x.funded) }, { key: 'unfunded', label: 'Unfunded', color: SERIES[1], values: bd.bookings.byQuarter.map((x) => x.unfunded) }]} />
         </Section>
-        <Section title="Backlog and book-to-bill">
-          <DataTable columns={[{ key: 'k', label: '' }, { key: 'v', label: '', align: 'right' }]} rows={[
-            { k: 'Active contracts', v: bd.backlog.contracts },
-            { k: 'Funded backlog', v: fullMoney(bd.backlog.fundedBacklog) },
-            { k: 'Unfunded backlog', v: fullMoney(bd.backlog.unfundedBacklog) },
-            { k: 'Billed to date', v: fullMoney(bd.backlog.billed) },
-            { k: 'Book-to-bill, year to date', v: ratio(bd.bookToBill.ytd.ratio) },
-            { k: 'Book-to-bill, last 12 months', v: ratio(bd.bookToBill.ttm.ratio) },
-          ]} />
-        </Section>
       </div>
+
+      <PipelineByPerson data={bd.qualifiedByPerson} className="break-inside-avoid" />
+      <div className="break-inside-avoid"><BookToBill b2b={bd.bookToBill} /></div>
 
       {stalled.length > 0 && <StalledByStage measure={m.progression} showDirector />}
     </article>

@@ -10,8 +10,8 @@
 import { db, json } from './db.js';
 import { weekStartFor } from './routes/priorities.js';
 import {
-  bids, contracts, expected, byStage, qualifiedBy, bookingsByQuarter, backlog, bookToBill, targets, trends, quarters, quarterRange,
-  localToday, QUALIFIED_STAGES,
+  bids, contracts, expected, byStage, qualifiedBy, bookingsByQuarter, backlog, bookToBill, bookToBillSeries, fundedTtm, pipelineByPerson,
+  targets, quartersTarget, trailingQuarters, trends, quarters, quarterRange, localToday, QUALIFIED_STAGES,
 } from './financials.js';
 import { spendEntries, spendFor } from './marketingSpend.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
@@ -110,25 +110,9 @@ function expenses(s, entries, deals, start, end) {
   return { travel, travelEstimated: estimated, marketing, total, revenue, ratio: revenue ? total / revenue : null };
 }
 
-/** Book-to-bill per quarter, three ways: conventional (that quarter), trailing twelve months, and funded (obligations ÷ billed). */
-function bookToBillSeries(deals, qs) {
-  const funding = deals.flatMap((p) => p.fundings);
-  const fundedIn = (start, end) => sum(funding.filter((e) => e.entry_date >= start && e.entry_date <= end), (e) => e.amount);
-  return qs.map((q) => {
-    const { start, end } = quarterRange(q);
-    const ttmStart = quarterRange(quarters(1, -3, start)[0]).start;
-    const conv = bookToBill(deals, start, end);
-    const ttm = bookToBill(deals, ttmStart, end);
-    const funded = fundedIn(start, end);
-    return {
-      quarter: q, booked: conv.booked, billed: conv.billed, conventional: conv.ratio,
-      ttmBooked: ttm.booked, ttmBilled: ttm.billed, ttm: ttm.ratio,
-      funded, fundedRatio: conv.billed ? funded / conv.billed : null,
-    };
-  });
-}
 
-export function bdDashboard(s) {
+/** `basis` is how the yearly figures run: 'calendar' (this year to date) or 't4q' (the last four finished quarters). */
+export function bdDashboard(s, basis = 'calendar') {
   const today = localToday();
   const year = Number(today.slice(0, 4));
   const thisQ = quarterFor(today);
@@ -137,8 +121,12 @@ export function bdDashboard(s) {
   const qualified = list.filter((t) => QUALIFIED_STAGES.includes(t.pipeline_status));
   const weighted = (t) => (t.value || 0) * (t.pwin ?? 1);
   const t = targets(year, s.director);
-  const booked = (start) => sum(deals.filter((p) => p.awarded_on >= start && p.awarded_on <= today), (p) => p.value);
-  const billed = (start) => bookToBill(deals, start, today).billed;
+  const booked = (start, end = today) => sum(deals.filter((p) => p.awarded_on >= start && p.awarded_on <= end), (p) => p.value);
+  const billed = (start, end = today) => bookToBill(deals, start, end).billed;
+  // The yearly figures' span: this calendar year (to date, for money in), or the trailing four quarters.
+  const t4q = basis === 't4q' && trailingQuarters();
+  const yr = t4q ? { label: t4q.label, start: t4q.start, end: t4q.end, target: quartersTarget(t4q.quarters, s.director) }
+    : { label: String(year), start: `${year}-01-01`, end: today, target: t.total };
 
   // Expected bookings from the Qualified+ pipeline: dated by the end of this year's Q4, and everything (dated or not).
   const yearEnd = `${year}-12-31`;
@@ -162,9 +150,9 @@ export function bdDashboard(s) {
       qualified: { count: qualified.length, value: sum(qualified, (x) => x.value), weighted: sum(qualified, weighted) },
       booked: {
         quarter: { label: thisQ, value: booked(qr.start), target: t.quarters[Number(thisQ.slice(-1)) - 1] || null },
-        year: { label: String(year), value: booked(`${year}-01-01`), target: t.total || null },
+        year: { label: yr.label, value: booked(yr.start, yr.end), target: yr.target || null },
       },
-      revenue: { quarter: { label: thisQ, value: billed(qr.start) }, year: { label: String(year), value: billed(`${year}-01-01`) } },
+      revenue: { quarter: { label: thisQ, value: billed(qr.start) }, year: { label: yr.label, value: billed(yr.start, yr.end) } },
       expected: {
         through: `${year} Q4`,
         byQ4: { count: byQ4.length, weighted: sum(byQ4, weighted), value: sum(byQ4, (x) => x.value), withPwin: byQ4.filter((x) => x.pwin != null).length },
@@ -173,10 +161,11 @@ export function bdDashboard(s) {
         overdue: { count: overdue.length, weighted: sum(overdue, weighted) },
         all: { count: qualified.length, weighted: sum(qualified, weighted) },
       },
-      expenses: { quarter: { label: thisQ, ...expenses(s, entries, deals, qr.start, qr.end) }, year: { label: String(year), ...expenses(s, entries, deals, `${year}-01-01`, yearEnd) } },
+      expenses: { quarter: { label: thisQ, ...expenses(s, entries, deals, qr.start, qr.end) }, year: { label: yr.label, ...expenses(s, entries, deals, yr.start, t4q ? yr.end : yearEnd) } },
     },
-    // Per person in a team: what each spent and brought in this year.
-    people: s.kind === 'team' ? spendByPerson(s, entries, deals, `${year}-01-01`, yearEnd) : null,
+    basis: t4q ? 't4q' : 'calendar',
+    // Per person in a team: what each spent and brought in over the year (calendar or trailing).
+    people: s.kind === 'team' ? spendByPerson(s, entries, deals, yr.start, t4q ? yr.end : yearEnd) : null,
     numbers: {
       bookings: bookingsByQuarter(deals, 8),
       revenue: past.map((q) => ({ quarter: q, value: bookToBill(deals, quarterRange(q).start, quarterRange(q).end).billed })),
@@ -189,17 +178,14 @@ export function bdDashboard(s) {
         byTerritory: qualifiedBy(list, 'territory'),
         byDirector: s.kind === 'team' ? qualifiedBy(list, 'director') : null,
         trend: { points: tr.points, values: qualTrend },
+        // Week to week, each person's own line (one line for a person's dashboard).
+        byPerson: pipelineByPerson({ ids: s.director ? [s.director] : s.people, f: { territory: s.territory } }),
       },
       bookToBill: {
         quarters: bookToBillSeries(deals, past),
         ttm: bookToBill(deals, addDays(today, -365), today),
         quarter: bookToBill(deals, qr.start, today),
-        fundedTtm: (() => {
-          const start = addDays(today, -365);
-          const funded = sum(deals.flatMap((p) => p.fundings.filter((e) => e.entry_date >= start && e.entry_date <= today)), (e) => e.amount);
-          const b = bookToBill(deals, start, today).billed;
-          return { funded, billed: b, ratio: b ? funded / b : null };
-        })(),
+        fundedTtm: fundedTtm(deals, today),
         backlog: backlog(deals),
       },
     },

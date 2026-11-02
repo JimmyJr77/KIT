@@ -4,11 +4,12 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { PIPELINE_STATUSES } from './priorities.js';
 import {
-  bids, contracts, filtersFrom, byStage, expected, qualifiedBy, bookingsByQuarter, backlog, bookToBill, bookToBillByDirector,
+  bids, contracts, filtersFrom, byStage, expected, qualifiedBy, bookingsByQuarter, backlog, bookToBill, bookToBillByDirector, bookToBillSeries,
+  fundedTtm, pipelineByPerson,
   targets, trends, quarters, quarterRange, localToday, OPEN_STAGES, QUALIFIED_STAGES,
 } from '../financials.js';
 import { addDays, quarterFor } from '../../src/lib/travelCalc.js';
-import { reportCard, period, directors, THRESHOLDS } from '../reportCard.js';
+import { reportCard, period, directors, reportTrends, THRESHOLDS } from '../reportCard.js';
 import { spendEntries } from '../marketingSpend.js';
 
 const r = Router();
@@ -33,12 +34,19 @@ r.get('/bd', (req, res) => {
     expected: expected(list),
     qualifiedByTerritory: qualifiedBy(list, 'territory'),
     qualifiedByDirector: qualifiedBy(list, 'director'),
+    // Week to week: the director's own line, or each BD director's.
+    qualifiedByPerson: pipelineByPerson({ ids: f.director ? [f.director] : directors().map((d) => d.id), f: { territory: f.territory } }),
     bookings: { byQuarter: bookingsByQuarter(deals), ytd: ytd.booked, target: targets(year, f.director) },
     backlog: backlog(deals),
     bookToBill: {
       ytd, ttm: bookToBill(deals, ttmStart, today),
       byQuarter: quarters(4, -3).map((q) => ({ quarter: q, ...bookToBill(deals, quarterRange(q).start, quarterRange(q).end) })),
       byDirector: bookToBillByDirector(deals, ttmStart, today),
+      // The same three ways the dashboard shows them.
+      quarters: bookToBillSeries(deals, quarters(8, -7)),
+      quarter: bookToBill(deals, quarterRange(quarterFor(today)).start, today),
+      fundedTtm: fundedTtm(deals, today),
+      backlog: backlog(deals),
     },
   });
 });
@@ -89,14 +97,15 @@ r.get('/teams', (req, res) => {
 });
 
 /**
- * The BD report card. ?kind=quarter|year&label=2026 Q4|2026 (default: this quarter). With ?director=<id>, that
- * director's card; without, the team's card and each director's.
+ * The BD report card. ?kind=quarter|year&label=2026 Q4|2026 (default: this quarter), or ?kind=t4q&back=0|1 for the
+ * last four finished quarters (or the four before them). With ?director=<id>, that director's card; without, the
+ * team's card and each director's.
  */
 r.get('/report-card', (req, res) => {
-  const kind = req.query.kind === 'year' ? 'year' : 'quarter';
+  const kind = ['year', 't4q'].includes(req.query.kind) ? req.query.kind : 'quarter';
   const label = kind === 'year' ? (/^\d{4}$/.test(req.query.label || '') ? req.query.label : undefined)
-    : (/^\d{4} Q[1-4]$/.test(req.query.label || '') ? req.query.label : undefined);
-  const p = period(kind, label);
+    : kind === 'quarter' && /^\d{4} Q[1-4]$/.test(req.query.label || '') ? req.query.label : undefined;
+  const p = period(kind, label, kind === 't4q' ? Math.min(Math.max(Number(req.query.back) || 0, 0), 4) : 0);
   const director = Number(req.query.director) || null;
   if (director) return res.json({ card: reportCard(director, p), thresholds: THRESHOLDS });
   res.json({
@@ -104,6 +113,12 @@ r.get('/report-card', (req, res) => {
     directors: directors().map((d) => ({ director: d, card: reportCard(d.id, p) })),
     thresholds: THRESHOLDS,
   });
+});
+
+/** Change over time: ?weeks=13|26|52, ?director=<id>. See reportTrends. */
+r.get('/report-trends', (req, res) => {
+  const weeks = [13, 26, 52].includes(Number(req.query.weeks)) ? Number(req.query.weeks) : 13;
+  res.json(reportTrends({ weeks, director: Number(req.query.director) || null }));
 });
 
 export default r;

@@ -24,6 +24,14 @@ export function quarters(count, offset = 0, date = localToday()) {
   const start = y * 4 + (q - 1) + offset;
   return Array.from({ length: count }, (_, i) => `${Math.floor((start + i) / 4)} Q${((start + i) % 4) + 1}`);
 }
+/**
+ * Trailing four quarters: the last four finished quarters before the one containing `date` (`back` = 1 for the four
+ * before those), as an alternative to a calendar year.
+ */
+export function trailingQuarters(back = 0, date = localToday()) {
+  const qs = quarters(4, -4 * (back + 1), date);
+  return { quarters: qs, start: quarterRange(qs[0]).start, end: quarterRange(qs[3]).end, label: `${qs[0]} – ${qs[3]}` };
+}
 const sum = (rows, f) => rows.reduce((s, r) => s + (f(r) || 0), 0);
 
 /** Filters a BD query can carry: one director and/or one territory. */
@@ -177,6 +185,20 @@ export function targets(year, director = null) {
   return { year, quarters: [1, 2, 3, 4].map(quarter), total: yearTotal };
 }
 
+/** The booking target for some quarters ("2025 Q4", …), across years. Someone with only a yearly target counts a quarter of it each quarter. */
+export function quartersTarget(qs, director = null) {
+  const rows = db.prepare('SELECT * FROM booking_targets WHERE year IN (SELECT value FROM json_each(?))').all(JSON.stringify([...new Set(qs.map((q) => Number(q.slice(0, 4))))]))
+    .filter((t) => !director || t.user_id === director);
+  return sum(qs, (q) => {
+    const [y, n] = [Number(q.slice(0, 4)), Number(q.slice(-1))];
+    const mine = rows.filter((t) => t.year === y);
+    return sum([...new Set(mine.map((t) => t.user_id))], (id) => {
+      const own = mine.filter((t) => t.user_id === id);
+      return own.some((t) => t.quarter > 0) ? sum(own.filter((t) => t.quarter === n), (t) => t.amount) : sum(own.filter((t) => t.quarter === 0), (t) => t.amount) / 4;
+    });
+  });
+}
+
 /**
  * The pipeline as it stood at the end of each interval between `from` and `to`, from the ticket history.
  * by: stage (open stages) | director | territory (qualified pipeline). interval: week | month | quarter | year.
@@ -224,4 +246,52 @@ export function trends({ from, to, interval = 'month', by = 'stage', f = {} }) {
     });
   });
   return { points, interval, by, series: [...series.values()] };
+}
+
+/** Book-to-bill per quarter, three ways: conventional (that quarter), trailing twelve months, and funded (obligations ÷ billed). */
+export function bookToBillSeries(deals, qs) {
+  const funding = deals.flatMap((p) => p.fundings);
+  const fundedIn = (start, end) => sum(funding.filter((e) => e.entry_date >= start && e.entry_date <= end), (e) => e.amount);
+  return qs.map((q) => {
+    const { start, end } = quarterRange(q);
+    const ttmStart = quarterRange(quarters(1, -3, start)[0]).start;
+    const conv = bookToBill(deals, start, end);
+    const ttm = bookToBill(deals, ttmStart, end);
+    const funded = fundedIn(start, end);
+    return {
+      quarter: q, booked: conv.booked, billed: conv.billed, conventional: conv.ratio,
+      ttmBooked: ttm.booked, ttmBilled: ttm.billed, ttm: ttm.ratio,
+      funded, fundedRatio: conv.billed ? funded / conv.billed : null,
+    };
+  });
+}
+
+/** Funding obligated over the last twelve months ÷ revenue billed over them: the funded-backlog book-to-bill. */
+export function fundedTtm(deals, today = localToday()) {
+  const start = addDays(today, -365);
+  const funded = deals.flatMap((p) => p.fundings).filter((e) => e.entry_date >= start && e.entry_date <= today).reduce((t, e) => t + (e.amount || 0), 0);
+  const billed = bookToBill(deals, start, today).billed;
+  return { funded, billed, ratio: billed ? funded / billed : null };
+}
+
+/**
+ * Qualified pipeline week by week for each of these people (BD director ids), over the last `weeks` weeks: as it stood
+ * at each week's end, from the ticket history. People are listed largest pipeline first.
+ */
+export function pipelineByPerson({ ids = [], weeks = 13, f = {} } = {}) {
+  const to = localToday();
+  const t = trends({ from: addDays(to, -7 * weeks), to, interval: 'week', by: 'director', f });
+  // The last point is today; drop a week's end that falls within the last seven days so each step is about a week.
+  const n = t.points.length;
+  if (n > 2 && addDays(t.points[n - 2], 7) > to) {
+    t.points.splice(n - 2, 1);
+    t.series.forEach((x) => x.values.splice(n - 2, 1));
+  }
+  const names = new Map(db.prepare('SELECT id, first_name, last_name FROM users WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids))
+    .map((u) => [u.id, `${u.first_name} ${u.last_name}`]));
+  const people = ids.map((id) => {
+    const s = t.series.find((x) => x.key === `d${id}`);
+    return { id, name: names.get(id) || 'Someone', values: s ? s.values : t.points.map(() => 0) };
+  }).filter((p) => names.has(p.id)).sort((a, b) => b.values.at(-1) - a.values.at(-1));
+  return { points: t.points, people };
 }

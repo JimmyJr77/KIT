@@ -5,6 +5,8 @@ import { useApi } from '../lib/data.js';
 import { fullName, todayIso } from '../lib/format.js';
 import { compact } from './Charts.jsx';
 import SidePanel from './SidePanel.jsx';
+import YearBasisToggle from './YearBasisToggle.jsx';
+import { useYearBasis, trailingLabel } from '../lib/yearBasis.js';
 
 // Status is never color alone: each carries an icon and a word.
 export const STATUS = {
@@ -104,7 +106,7 @@ function ConfigDialog({ measures, thresholds, period, onClose }) {
             <div className="mb-1.5 font-semibold text-slate-800">Statuses</div>
             <p className="mb-2">Every measure gets one of four statuses, always shown with an icon and a word. Where each threshold sits is listed under each measure.</p>
             <div className="flex flex-wrap gap-2">{['good', 'watch', 'behind', 'none'].map((k) => <StatusChip key={k} status={k} />)}</div>
-            <p className="mt-2">Periods: this or last quarter, or this or last year. A period still running is judged against how much of it has passed. Pipeline figures (coverage, stalled bids) are as of today.</p>
+            <p className="mt-2">Periods: this or last quarter, or this or last year. A year can be the calendar year or the trailing four quarters (the last four finished quarters, or the four before those). A period still running is judged against how much of it has passed. Pipeline figures (coverage, stalled bids) are as of today.</p>
           </section>
           {measures.map((m, i) => {
             const e = explain(m.key, thresholds);
@@ -133,19 +135,35 @@ function ConfigDialog({ measures, thresholds, period, onClose }) {
   );
 }
 
-/** The periods a report card can cover. */
-export function periods() {
+/** The periods a report card can cover. With `basis` 't4q', the two years are trailing four quarters instead. */
+export function periods(basis = 'calendar') {
   const today = todayIso();
   const y = Number(today.slice(0, 4));
   const q = Math.ceil(Number(today.slice(5, 7)) / 3);
   const last = q === 1 ? `${y - 1} Q4` : `${y} Q${q - 1}`;
+  const years = basis === 't4q'
+    ? [
+      { key: 'y', label: `Last 4 quarters (${trailingLabel(today)})`, kind: 't4q', back: 0, value: trailingLabel(today) },
+      { key: 'ly', label: `4 quarters before (${trailingLabel(today, 1)})`, kind: 't4q', back: 1, value: trailingLabel(today, 1) },
+    ]
+    : [
+      { key: 'y', label: `This year (${y})`, kind: 'year', value: String(y) },
+      { key: 'ly', label: `Last year (${y - 1})`, kind: 'year', value: String(y - 1) },
+    ];
   return [
     { key: 'q', label: `This quarter (${y} Q${q})`, kind: 'quarter', value: `${y} Q${q}` },
     { key: 'lq', label: `Last quarter (${last})`, kind: 'quarter', value: last },
-    { key: 'y', label: `This year (${y})`, kind: 'year', value: String(y) },
-    { key: 'ly', label: `Last year (${y - 1})`, kind: 'year', value: String(y - 1) },
+    ...years,
   ];
 }
+
+/** The report card query for a period from periods(). */
+export function periodQuery(p) {
+  return new URLSearchParams(p.kind === 't4q' ? { kind: p.kind, back: p.back } : { kind: p.kind, label: p.value });
+}
+
+/** Whether a period choice covers a year, so the calendar / trailing toggle applies. */
+export const isYearChoice = (key) => key === 'y' || key === 'ly';
 
 export function StatusChip({ status, compactLabel }) {
   const s = STATUS[status] || STATUS.none;
@@ -161,10 +179,11 @@ export function StatusChip({ status, compactLabel }) {
  * `title` overrides the heading.
  */
 export default function ReportCard({ director, title }) {
-  const options = periods();
+  const [basis] = useYearBasis();
+  const options = periods(basis);
   const [choice, setChoice] = useState('q');
   const p = options.find((o) => o.key === choice);
-  const qs = new URLSearchParams({ kind: p.kind, label: p.value });
+  const qs = periodQuery(p);
   if (director) qs.set('director', director);
   const { data } = useApi(`/financials/report-card?${qs}`);
   const [info, setInfo] = useState(false);
@@ -179,7 +198,8 @@ export default function ReportCard({ director, title }) {
           aria-haspopup="dialog" title="How each measure is worked out, and its thresholds">
           <Info size={14} /> How it's configured
         </button>
-        <select className="input h-8 w-56 py-0 text-sm" value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Report card period">
+        {isYearChoice(choice) && <YearBasisToggle />}
+        <select className="input h-8 w-72 py-0 text-sm" value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Report card period">
           {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
         </select>
       </div>

@@ -13,12 +13,12 @@ const isDirector = (id) => !!db.prepare(`SELECT 1 FROM user_teams ut JOIN teams 
 /**
  * The BD dashboard for one person (?director=<id>, default you) or a team (?team=<id>), optionally narrowed to one
  * territory (?territory=<id>). isDirector says whether the money views apply: for a person, whether they're in BD; for
- * a team, whether it's BD.
+ * a team, whether it's BD. ?basis=t4q runs the yearly figures over the last four finished quarters instead of this year.
  */
 r.get('/bd', (req, res) => {
   const s = scopeFrom(req.query, req.user.id);
   if (!s) return res.status(404).json({ error: 'No such person or team' });
-  res.json({ ...bdDashboard(s), isDirector: s.director ? isDirector(s.director) : s.allBids });
+  res.json({ ...bdDashboard(s, req.query.basis === 't4q' ? 't4q' : 'calendar'), isDirector: s.director ? isDirector(s.director) : s.allBids });
 });
 
 export default r;
