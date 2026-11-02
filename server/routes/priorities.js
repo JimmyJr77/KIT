@@ -3,6 +3,7 @@ import { db, json, withTeams } from '../db.js';
 import { loadThreads, bidAssignment, NO_ASSIGNMENT } from './tickets.js';
 import { recordWork, loadWorkLog } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
+import { loadSupport } from './support.js';
 import { KIT_STAGES, listPipelines, allStatuses } from '../pipelines.js';
 import { nextPosition, openOrder, rankOf, reorderWithin, mirrorCards, setSubtasksFromChecklist, syncMilestone } from '../activities.js';
 
@@ -93,7 +94,10 @@ function allTeamsBoard(date) {
   const members = withTeams(db.prepare(`SELECT u.id, u.first_name, u.last_name, u.username, u.title
     FROM users u WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all());
   const weeks = Object.entries(teamWeeks).map(([id, week]) => [Number(id), week]);
-  return { team: { id: 'all', name: 'All' }, weekStart, currentWeekStart, teamWeeks, members, cards, work, threads: threadsFor(cards), planning: planningFor(weeks) };
+  return {
+    team: { id: 'all', name: 'All' }, weekStart, currentWeekStart, teamWeeks, members, cards, work, threads: threadsFor(cards),
+    support: loadSupport(members.map((m) => m.id), weekStart), planning: planningFor(weeks),
+  };
 }
 
 // ---- Planning lock
@@ -157,6 +161,7 @@ r.get('/', (req, res) => {
     cards,
     work: loadWorkLog(t.id, weekStart),
     threads: threadsFor(cards),
+    support: loadSupport(members.map((m) => m.id), weekStart),
     planning: planningFor([[t.id, weekStart]]),
   });
 });

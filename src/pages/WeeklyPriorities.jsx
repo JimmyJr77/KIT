@@ -15,7 +15,8 @@ import PriorityPanel from './PriorityPanel.jsx';
 import PriorityCard from './PriorityCard.jsx';
 import StrategicPriorities from '../components/StrategicPriorities.jsx';
 import CommentPanel from './CommentPanel.jsx';
-import { ViewSwitcher, TicketsView, TasksView, ThreadsView, WorkEntry } from './LaneViews.jsx';
+import SupportPanel from './SupportPanel.jsx';
+import { ViewSwitcher, TicketsView, TasksView, ThreadsView, SupportView, WorkEntry } from './LaneViews.jsx';
 
 // Prefer the card under the pointer, then the lane under the pointer, then the nearest target.
 const collision = (args) => {
@@ -45,6 +46,7 @@ export default function WeeklyPriorities() {
   const [orientation, setOrientation] = useState(readPref('kit.priorities.orientation', 'rows'));
   const [panel, setPanel] = useState(null); // { card } | { newFor: userId }
   const [thread, setThread] = useState(null); // { id } | { options } for a new question or comment
+  const [support, setSupport] = useState(null); // { id } | { options, member } to ask for support
   const [activeId, setActiveId] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -266,7 +268,9 @@ export default function WeeklyPriorities() {
                 onToggleTask={toggleTask} threads={threadsFor(m, lanes[m.id] || [])}
                 onOpenThread={(t) => setThread({ id: t.id })}
                 work={(board.work || []).filter((w) => w.user_id === m.id)} onOpenWork={openWork}
-                onNewThread={(lanes[m.id] || []).length ? () => setThread({ options: aboutOptions(lanes[m.id]), member: m }) : null} />
+                onNewThread={(lanes[m.id] || []).length ? () => setThread({ options: aboutOptions(lanes[m.id]), member: m }) : null}
+                support={(board.support || []).filter((n) => n.requester?.id === m.id)} onOpenSupport={(n) => setSupport({ id: n.id })}
+                onNewSupport={m.id === user.id && editable ? () => setSupport({ options: aboutOptions(lanes[m.id] || []), member: m }) : null} />
             ))}
           </div>
           <DragOverlay>{activeCard && <PriorityCard card={activeCard} usersById={usersById} rank={null} overlay />}</DragOverlay>
@@ -281,6 +285,11 @@ export default function WeeklyPriorities() {
       {thread && (
         <CommentPanel key={thread.id ?? 'new'} threadId={thread.id} options={thread.options} member={thread.member}
           onClose={() => setThread(null)} onPosted={(id) => { setThread({ id }); load(); }} onChanged={load} />
+      )}
+
+      {support && (
+        <SupportPanel key={support.id ?? 'new'} id={support.id} options={support.options} member={support.member}
+          onClose={() => setSupport(null)} onPosted={(id) => { setSupport({ id }); load(); }} onChanged={load} />
       )}
 
       {panel && board && (
@@ -363,7 +372,7 @@ function WeekStrip({ weekStart, current, onPick }) {
   );
 }
 
-function Lane({ member, asWork, work = [], onOpenWork, orientation, cardIds, cardsById, usersById, editable, draggable, onOpen, onNew, onToggleTask, threads, onOpenThread, onNewThread }) {
+function Lane({ member, asWork, work = [], onOpenWork, orientation, cardIds, cardsById, usersById, editable, draggable, onOpen, onNew, onToggleTask, threads, onOpenThread, onNewThread, support = [], onOpenSupport, onNewSupport }) {
   const [view, setViewState] = useState(() => readPref(`kit.priorities.view.${member.id}`, 'priorities'));
   const setView = (v) => { setViewState(v); writePref(`kit.priorities.view.${member.id}`, v); };
   const sortable = draggable && view === 'priorities';
@@ -384,7 +393,7 @@ function Lane({ member, asWork, work = [], onOpenWork, orientation, cardIds, car
     <div className={`rounded-xl border bg-white shadow-sm ${isOver ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'} ${rows ? 'flex' : `${view === 'tasks' ? 'w-80' : 'w-72'} shrink-0`}`}>
       {header}
       <div className={rows ? 'sticky left-52 z-10 flex self-stretch bg-white' : ''}>
-        <ViewSwitcher view={view} onChange={setView} rows={rows} counts={{ threads: threads.length }} />
+        <ViewSwitcher view={view} onChange={setView} rows={rows} counts={{ threads: threads.length, support: support.filter((n) => !n.closed_at).length }} />
       </div>
       {view === 'priorities' && (
         <SortableContext items={items} strategy={rows ? horizontalListSortingStrategy : verticalListSortingStrategy} disabled={!sortable}>
@@ -409,6 +418,7 @@ function Lane({ member, asWork, work = [], onOpenWork, orientation, cardIds, car
       {view === 'tickets' && <div className={body}><TicketsView cardIds={cardIds} cardsById={cardsById} usersById={usersById} rows={rows} onOpen={onOpen} /></div>}
       {view === 'tasks' && <div className={body}><TasksView cardIds={cardIds} cardsById={cardsById} rows={rows} editable={editable} onToggle={onToggleTask} onOpen={onOpen} /></div>}
       {view === 'threads' && <div className={body}><ThreadsView threads={threads} rows={rows} onOpenThread={onOpenThread} onNew={onNewThread} /></div>}
+      {view === 'support' && <div className={body}><SupportView requests={support} rows={rows} onOpen={onOpenSupport} onNew={onNewSupport} /></div>}
     </div>
   );
 }

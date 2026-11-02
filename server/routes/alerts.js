@@ -1,4 +1,4 @@
-// A user's alerts: @mentions, marketing support requests, travel requests to approve and their decisions, and being put on a won contract in Delivery. Ones about a priority come first,
+// A user's alerts: @mentions, support requests from Weekly Priorities and tickets made from yours, marketing support requests, travel requests to approve and their decisions, and being put on a won contract in Delivery. Ones about a priority come first,
 // then the rest, each newest first.
 import { Router } from 'express';
 import { db, json } from '../db.js';
@@ -9,7 +9,8 @@ r.get('/', (req, res) => {
   const rows = db.prepare(`SELECT a.*, u.first_name, u.last_name, t.opportunity_title AS ticket_title, t.ticket_type, c.title AS card_title,
       m.parent_id AS comment_parent_id, e.name AS event_name, e.date_from AS event_date_from, e.date_to AS event_date_to,
       q.status AS request_status, q.ticket_id AS request_ticket_id, q.title AS request_title, q.category AS request_category, q.due_date AS request_due_date, dp.name AS program_name, dp.organization AS program_organization,
-      tr.approval AS trip_approval, tr.date_from AS trip_date_from, tr.location_to AS trip_location_to, te.name AS trip_event_name
+      tr.approval AS trip_approval, tr.date_from AS trip_date_from, tr.location_to AS trip_location_to, te.name AS trip_event_name,
+      (SELECT COUNT(*) FROM support_need_tickets st WHERE st.need_id = a.support_id) AS support_tickets
     FROM alerts a LEFT JOIN users u ON u.id = a.actor_id LEFT JOIN tickets t ON t.id = a.ticket_id
     LEFT JOIN priority_cards c ON c.id = a.card_id LEFT JOIN ticket_comments m ON m.id = a.comment_id
     LEFT JOIN events e ON e.id = a.event_id LEFT JOIN event_support_requests q ON q.id = a.request_id
@@ -28,6 +29,7 @@ r.get('/', (req, res) => {
       program_id: a.program_id, program_name: a.program_name, program_organization: a.program_organization,
       trip_id: a.trip_id, trip_approval: a.trip_approval, trip_date_from: a.trip_date_from, trip_event_name: a.trip_event_name,
       trip_destination: a.trip_location_to ? json.parse(a.trip_location_to, {}) : null,
+      support_id: a.support_id, support_tickets: a.support_tickets,
     })),
   });
 });

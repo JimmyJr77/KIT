@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, ArrowRight, CheckCheck, StickyNote, Megaphone, Ticket, CalendarDays, Loader2 } from 'lucide-react';
+import { Bell, ArrowRight, CheckCheck, StickyNote, Megaphone, Ticket, CalendarDays, Loader2, Handshake } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { ago, fullName, fullStamp, ticketKind, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -8,6 +8,7 @@ import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import { MentionText } from '../components/MentionTextarea.jsx';
 import CommentPanel, { TicketSummary } from './CommentPanel.jsx';
+import SupportPanel from './SupportPanel.jsx';
 
 /** Tell the sidebar bell to recount unread alerts. */
 export const alertsChanged = () => window.dispatchEvent(new Event('kit:alerts'));
@@ -15,6 +16,8 @@ export const alertsChanged = () => window.dispatchEvent(new Event('kit:alerts'))
 const isSupport = (a) => a.kind === 'support_request' || a.kind === 'support_accepted';
 /** What a support request is about: its event, or its own title when asked for from the Marketing page. */
 const supportSubject = (a) => (a.event_id ? a.event_name : a.request_title || (a.request_id ? 'a request' : 'a deleted request'));
+/** Support asked for on Weekly Priorities: you were asked (support_need), or a ticket was made from yours (support_ticket). */
+const isAsk = (a) => a.kind === 'support_need' || a.kind === 'support_ticket';
 const isDelivery = (a) => a.kind === 'delivery_pm' || a.kind === 'delivery_team';
 const isTravel = (a) => a.kind === 'travel_request' || a.kind === 'travel_decision';
 /** What a travel request is for: its event, or where it goes. */
@@ -56,7 +59,7 @@ export default function Alerts() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Alerts" subtitle="@mentions, marketing support requests, travel requests, and contracts you’re put on in Delivery. Alerts about a priority come first, then the rest, newest first.">
+      <PageHeader title="Alerts" subtitle="@mentions, requests for your support, marketing support requests, travel requests, and contracts you’re put on in Delivery. Alerts about a priority come first, then the rest, newest first.">
         {unread > 0 && <button className="btn" onClick={readAll}><CheckCheck size={15} /> Mark all as read</button>}
       </PageHeader>
 
@@ -86,7 +89,9 @@ export default function Alerts() {
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
                   <span className={a.read ? 'text-slate-600' : 'text-slate-900'}>
                     <span className="font-semibold">{fullName(a.actor) || 'Someone'}</span>{' '}
-                    {a.kind === 'support_request' ? <>requested marketing support{a.event_id ? ' for' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>
+                    {a.kind === 'support_need' ? <>needs your support{a.support_id ? '' : ' (request since deleted)'}</>
+                      : a.kind === 'support_ticket' ? <>made a work ticket from your support request: <span className="font-semibold">{a.ticket_title || 'a deleted ticket'}</span></>
+                      : a.kind === 'support_request' ? <>requested marketing support{a.event_id ? ' for' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>
                       : a.kind === 'support_accepted' ? <>created a work ticket for your marketing support request{a.event_id ? ' on' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>
                         : a.kind === 'delivery_pm' ? <>made you Program Manager for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
                           : a.kind === 'delivery_team' ? <>added you to the delivery team for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
@@ -105,8 +110,25 @@ export default function Alerts() {
                   </p>
                 ) : isDelivery(a) ? (
                   <p className="mt-1 text-xs text-slate-500">{[a.program_organization, a.kind === 'delivery_team' && a.excerpt ? `Your role: ${a.excerpt}` : null].filter(Boolean).join(' · ')}</p>
-                ) : <p className="mt-1.5 line-clamp-3 text-sm whitespace-pre-wrap text-slate-700"><MentionText text={a.excerpt} /></p>}
+                ) : <p className="mt-1.5 line-clamp-3 text-sm whitespace-pre-wrap text-slate-700"><MentionText text={a.excerpt} withTeams={isAsk(a)} /></p>}
                 {isSupport(a) && <SupportActions alert={a} onDone={load} markRead={markRead} />}
+                {isAsk(a) && a.support_id && (
+                  <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <button type="button" onClick={(e) => { e.stopPropagation(); select(a); }}
+                      className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
+                      <Handshake size={12} /> Open request <ArrowRight size={12} />
+                    </button>
+                    {a.kind === 'support_ticket' && a.ticket_id && (
+                      <button type="button" onClick={(e) => { e.stopPropagation(); markRead(a); navigate(`/tickets?open=${a.ticket_id}`); }}
+                        className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
+                        <Ticket size={12} /> Open work ticket <ArrowRight size={12} />
+                      </button>
+                    )}
+                    {a.kind === 'support_need' && a.support_tickets > 0 && (
+                      <span className="text-[11px] text-emerald-700">{a.support_tickets === 1 ? 'A ticket was already made' : `${a.support_tickets} tickets already made`}</span>
+                    )}
+                  </div>
+                )}
                 {isTravel(a) && a.trip_id && (
                   <button type="button" onClick={(e) => { e.stopPropagation(); select(a); }}
                     className="mt-2 flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
@@ -119,7 +141,7 @@ export default function Alerts() {
                     Open in Delivery <ArrowRight size={12} />
                   </button>
                 )}
-                {!isSupport(a) && !isDelivery(a) && !isTravel(a) && a.ticket_id && (
+                {!isSupport(a) && !isAsk(a) && !isDelivery(a) && !isTravel(a) && a.ticket_id && (
                   <button type="button" onClick={(e) => { e.stopPropagation(); goTo(a); }}
                     className="mt-2 flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
                     Go to {a.note_id ? 'note' : 'comment'} <ArrowRight size={12} />
@@ -132,7 +154,10 @@ export default function Alerts() {
       </ul>
 
       {open && isSupport(open) && <SupportPane key={open.id} alert={open} onClose={() => setOpen(null)} onDone={load} markRead={markRead} />}
-      {open && !isSupport(open) && (open.comment_id
+      {open && isAsk(open) && open.support_id && (
+        <SupportPanel key={open.id} id={open.support_id} onClose={() => setOpen(null)} onChanged={load} />
+      )}
+      {open && !isSupport(open) && !isAsk(open) && (open.comment_id
         ? <CommentPanel key={open.id} threadId={open.thread_id} highlight={open.comment_id} onClose={() => setOpen(null)}
             footer={<GoButton alert={open} onGo={goTo} />} />
         : <NotePane key={open.id} alert={open} onClose={() => setOpen(null)} onGo={goTo} />)}

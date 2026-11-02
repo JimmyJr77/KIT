@@ -769,6 +769,30 @@ addColumn('alerts', 'program_id', 'INTEGER REFERENCES delivery_programs(id) ON D
 // Travel request alerts: a lead has one to approve (travel_request), or the traveler's was decided (travel_decision).
 addColumn('alerts', 'trip_id', 'INTEGER REFERENCES trips(id) ON DELETE CASCADE');
 
+db.exec(`
+-- Support someone needs with their week's work, asked from their lane on Weekly Priorities. Everyone @mentioned in it,
+-- one by one or as a whole team, is alerted. Anyone can turn it into a work ticket; someone who wants their own ticket
+-- can make another, so a request can have several. It stays on the board each week until its requester closes it.
+CREATE TABLE IF NOT EXISTS support_needs (
+  id INTEGER PRIMARY KEY,
+  body TEXT NOT NULL,
+  requested_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  card_id INTEGER REFERENCES priority_cards(id) ON DELETE SET NULL, -- the priority it's for, if any
+  closed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS support_needs_user ON support_needs(requested_by, created_at);
+CREATE TABLE IF NOT EXISTS support_need_tickets (
+  need_id INTEGER NOT NULL REFERENCES support_needs(id) ON DELETE CASCADE,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (need_id, ticket_id)
+);
+`);
+// Support alerts: you were asked for support (support_need), or a work ticket was made from your request (support_ticket).
+addColumn('alerts', 'support_id', 'INTEGER REFERENCES support_needs(id) ON DELETE CASCADE');
+
 // Bid tickets already Awarded before Delivery existed.
 db.exec(`INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value)
   SELECT id, opportunity_title, organization, account_type, value FROM tickets WHERE pipeline_status = 'Awarded' AND ticket_type = 'bid'`);

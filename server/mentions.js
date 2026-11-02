@@ -21,3 +21,26 @@ export function notifyMentions(actor, body, ref, previous = '') {
   mentionedUsers(body).filter((u) => !before.has(u.id))
     .forEach((u) => ins.run(u.id, actor.id, ref.ticket_id ?? null, ref.card_id ?? null, ref.comment_id ?? null, ref.note_id ?? null, String(body).slice(0, 400)));
 }
+
+/** Teams mentioned in `text` as "@Team Name" (case-insensitive, not followed by more of a word). */
+export function mentionedTeams(text) {
+  const t = String(text || '').toLowerCase();
+  if (!t.includes('@')) return [];
+  return db.prepare('SELECT id, name FROM teams').all().filter((tm) => {
+    const at = `@${tm.name}`.toLowerCase();
+    for (let i = t.indexOf(at); i >= 0; i = t.indexOf(at, i + 1)) if (!/[\w]/.test(t[i + at.length] || '')) return true;
+    return false;
+  });
+}
+
+/** Everyone `text` reaches: each "@First Last", and every active member of each "@Team". */
+export function mentionedPeople(text) {
+  const people = new Map(mentionedUsers(text).map((u) => [u.id, u]));
+  const teams = mentionedTeams(text);
+  if (teams.length) {
+    db.prepare(`SELECT DISTINCT u.id, u.first_name, u.last_name FROM users u JOIN user_teams ut ON ut.user_id = u.id
+      WHERE u.active = 1 AND ut.team_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(teams.map((tm) => tm.id)))
+      .forEach((u) => people.set(u.id, u));
+  }
+  return [...people.values()];
+}

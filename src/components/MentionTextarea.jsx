@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
+import { Users } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName } from '../lib/format.js';
 import Avatar from './Avatar.jsx';
@@ -16,25 +17,43 @@ function useMentionUsers() {
   return users;
 }
 
+// Teams, for boxes that can mention a whole team ("@Marketing").
+let teamCache = null;
+let teamPending = null;
+function useMentionTeams(on) {
+  const [teams, setTeams] = useState(teamCache || []);
+  useEffect(() => {
+    if (!on || teamCache) return;
+    teamPending ||= api.get('/teams').then((d) => (teamCache = d.teams));
+    teamPending.then(setTeams).catch(() => {});
+  }, [on]);
+  return on ? teams : [];
+}
+
 // "@" at the start or after a space, then a letter, then up to one more word (for a last name).
 const QUERY = /(^|\s)@([A-Za-z][\w.'-]*(?: [A-Za-z][\w.'-]*)?)$/;
 
 /**
- * A textarea that suggests people when you type "@" and a letter. Picking one inserts "@First Last".
+ * A textarea that suggests people when you type "@" and a letter. Picking one inserts "@First Last". With `withTeams`,
+ * teams are suggested too ("@Marketing" reaches everyone on it, where the server supports it).
  * Accepts the usual textarea props; `inputRef` reaches the textarea itself.
  */
-export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, className = '', ...rest }) {
+export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, withTeams = false, className = '', ...rest }) {
   const users = useMentionUsers();
+  const teams = useMentionTeams(withTeams);
   const own = useRef(null);
   const ref = inputRef || own;
   const [query, setQuery] = useState(null); // { text, start } where start is the "@" position
   const [active, setActive] = useState(0);
 
   const matches = query
-    ? users.filter((u) => {
-      const q = query.text.toLowerCase();
-      return fullName(u).toLowerCase().includes(q) || u.username?.toLowerCase().startsWith(q);
-    }).slice(0, 6)
+    ? [
+      ...teams.filter((t) => t.name.toLowerCase().startsWith(query.text.toLowerCase())).map((t) => ({ ...t, team: true })),
+      ...users.filter((u) => {
+        const q = query.text.toLowerCase();
+        return fullName(u).toLowerCase().includes(q) || u.username?.toLowerCase().startsWith(q);
+      }),
+    ].slice(0, 6)
     : [];
 
   const readQuery = (el) => {
@@ -46,7 +65,7 @@ export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, 
 
   const pick = (u) => {
     const el = ref.current;
-    const insert = `@${fullName(u)} `;
+    const insert = `@${u.team ? u.name : fullName(u)} `;
     const next = value.slice(0, query.start) + insert + value.slice(el.selectionStart);
     onChange({ target: { value: next } });
     setQuery(null);
@@ -74,12 +93,14 @@ export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, 
       {matches.length > 0 && (
         <ul role="listbox" className="absolute left-2 z-[60] mt-1 w-64 overflow-hidden rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-slate-200">
           {matches.map((u, i) => (
-            <li key={u.id} role="option" aria-selected={i === active}>
+            <li key={`${u.team ? 't' : 'u'}${u.id}`} role="option" aria-selected={i === active}>
               <button type="button" onMouseDown={(e) => { e.preventDefault(); pick(u); }} onMouseEnter={() => setActive(i)}
                 className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left ${i === active ? 'bg-brand-50' : ''}`}>
-                <Avatar user={u} size="xs" />
-                <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{fullName(u)}</span>
-                <span className="truncate text-[11px] text-slate-400">{u.team_name || u.title}</span>
+                {u.team
+                  ? <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-brand-100 text-brand-700"><Users size={11} /></span>
+                  : <Avatar user={u} size="xs" />}
+                <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{u.team ? u.name : fullName(u)}</span>
+                <span className="truncate text-[11px] text-slate-400">{u.team ? 'Whole team' : u.team_name || u.title}</span>
               </button>
             </li>
           ))}
@@ -89,11 +110,12 @@ export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, 
   );
 }
 
-/** Text with each "@First Last" mention highlighted. */
-export function MentionText({ text }) {
+/** Text with each "@First Last" mention highlighted, and each "@Team" with `withTeams`. */
+export function MentionText({ text, withTeams = false }) {
   const users = useMentionUsers();
+  const teams = useMentionTeams(withTeams);
   if (!text || !text.includes('@') || !users.length) return text;
-  const names = users.map((u) => fullName(u)).sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const names = [...users.map((u) => fullName(u)), ...teams.map((t) => t.name)].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const parts = text.split(new RegExp(`(@(?:${names.join('|')}))`, 'gi'));
   return parts.map((p, i) => (i % 2
     ? <span key={i} className="rounded bg-brand-50 px-0.5 font-medium text-brand-700">{p}</span>
