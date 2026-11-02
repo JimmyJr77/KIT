@@ -28,7 +28,8 @@ const team = (id) => db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
 // A priority leaves the board when it's archived, or when its ticket is (by hand, or with Archive all); restoring the
 // ticket brings it back.
 function loadCards(teamId, weekStart) {
-  const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.value, t.ticket_type
+  const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.value, t.ticket_type,
+      COALESCE((SELECT k.waiting_client FROM ticket_tasks k WHERE k.id = c.activity_id), 0) AS waiting_client
     FROM priority_cards c JOIN tickets t ON t.id = c.ticket_id
     WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL AND t.archived_at IS NULL ORDER BY c.id`).all(teamId, weekStart);
   const assignees = db.prepare(`SELECT a.* FROM card_assignees a JOIN priority_cards c ON c.id = a.card_id
@@ -192,7 +193,9 @@ export function ticketFields(t = {}) {
   };
 }
 
-/** A card's own fields go to its activity: title → subject, due date, completed → done, checklist → subtasks. */
+const setWaiting = (activityId, on) => db.prepare('UPDATE ticket_tasks SET waiting_client = ? WHERE id = ?').run(on ? 1 : 0, activityId);
+
+/** A card's own fields go to its activity: title → subject, due date, completed → done, checklist → subtasks, waiting on client. */
 function saveToActivity(activityId, b, user) {
   const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(activityId);
   const title = b.title?.trim() || k.text;
@@ -201,6 +204,7 @@ function saveToActivity(activityId, b, user) {
     position = CASE WHEN ? = done THEN position WHEN ? THEN position ELSE ? END WHERE id = ?`)
     .run(title, /^\d{4}-\d{2}-\d{2}$/.test(b.due_date || '') ? b.due_date : null, done ? 1 : 0, done ? 1 : 0, done ? 1 : 0, done ? 1 : 0, nextPosition(k.ticket_id), k.id);
   if (Array.isArray(b.checklist)) setSubtasksFromChecklist(k.id, b.checklist, user.id);
+  if ('waiting_client' in b) setWaiting(k.id, b.waiting_client);
   mirrorCards(k.id);
   syncMilestone(k.ticket_id);
 }
@@ -261,7 +265,10 @@ r.post('/cards', (req, res) => {
     const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, is_planned, created_by)
       VALUES (?, ?, ?, ?, ?, ?)`).run(ticketId, t.id, weekStart, activityId, isPlanned, req.user.id).lastInsertRowid;
     if (isNew) saveToActivity(activityId, b, req.user);
-    else mirrorCards(activityId);
+    else {
+      if ('waiting_client' in b) setWaiting(activityId, b.waiting_client);
+      mirrorCards(activityId);
+    }
     // Added after planning closed, it's measured from where it starts.
     if (!isPlanned) db.prepare('UPDATE priority_cards SET locked_rank = ? WHERE id = ?').run(rankOf(activityId), cardId);
     setAssignees(cardId, assignees, t.id, weekStart);

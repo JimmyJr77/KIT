@@ -1,4 +1,4 @@
-import { CheckSquare, ArrowUp, ArrowDown } from 'lucide-react';
+import { CheckSquare, ArrowUp, ArrowDown, Hourglass } from 'lucide-react';
 import { fullName, initials, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 
@@ -33,6 +33,11 @@ export default function PriorityCard({ card, rank, usersById, overlay }) {
       </div>
       <div className="h-5 truncate text-xs leading-5 text-slate-500" title={card.organization || undefined}>{card.organization}</div>
       <div className="mt-1 flex h-[2.875rem] flex-wrap content-start items-center gap-1.5 overflow-hidden text-xs">
+        {!!card.waiting_client && !card.completed && (
+          <span className={`${chip} flex items-center gap-1 bg-sky-100 font-medium text-sky-800`} title="Waiting on client: not counted against completion">
+            <Hourglass size={11} strokeWidth={2.5} /> Waiting on client
+          </span>
+        )}
         {card.pipeline_status && <span className={`${chip} bg-slate-100 text-slate-600`}>{card.pipeline_status}</span>}
         {card.value != null && <span className={`${chip} bg-emerald-50 text-emerald-700`}>{usd(card.value).replace('.00', '')}</span>}
         {card.due_date && <span className={`${chip} bg-slate-100 text-slate-600`}>Due {shortDate(card.due_date)}</span>}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Loader2, ArrowLeft, Phone, Users, SquareCheck, Clock, Mail, Utensils, Flag, Video, MapPin, ExternalLink, GripVertical, ListChecks, MessageSquare, CalendarRange } from 'lucide-react';
+import { Plus, Trash2, Loader2, ArrowLeft, Phone, Users, SquareCheck, Clock, Mail, Utensils, Flag, Video, MapPin, ExternalLink, GripVertical, ListChecks, MessageSquare, CalendarRange, Hourglass } from 'lucide-react';
 import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -19,13 +19,13 @@ const DURATIONS = [['', 'No duration'], ['00:15', '15 min'], ['00:30', '30 min']
 const today = () => new Date().toLocaleDateString('en-CA');
 
 const blank = (ticket) => ({
-  subject: '', activity_type: 'Meeting', due_date: today(), due_time: '', duration: '01:00', priority: '', flagged: false,
+  subject: '', activity_type: 'Meeting', due_date: today(), due_time: '', duration: '01:00', priority: '', flagged: false, waiting_client: false,
   assignee_id: '', ticket_id: ticket.id, location: '', video_call: '', participants: [], organization: ticket.organization || '',
   phone: '', email: '', goals: '', description: '', note: '', done: false,
 });
 const formOf = (a) => ({
   subject: a.subject, activity_type: a.activity_type, due_date: a.due_date || '', due_time: a.due_time || '', duration: a.duration || '',
-  priority: a.priority || '', flagged: a.flagged, assignee_id: a.assignee_id || '', ticket_id: a.ticket_id, location: a.location || '',
+  priority: a.priority || '', flagged: a.flagged, waiting_client: a.waiting_client, assignee_id: a.assignee_id || '', ticket_id: a.ticket_id, location: a.location || '',
   video_call: a.video_call || '', participants: a.participants.map((p) => p.id), organization: a.organization || '', phone: a.phone || '',
   email: a.email || '', goals: a.goals || '', description: a.description || '', note: a.note || '', done: a.done,
 });
@@ -130,6 +130,7 @@ function ActivityRow({ a, sortable, onToggle, onOpen }) {
           <Icon size={14} className="shrink-0 text-slate-500" aria-label={a.activity_type} />
           <span className={`truncate text-sm font-medium ${a.done ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{a.subject}</span>
           {a.flagged && <Flag size={12} className="shrink-0 fill-red-500 text-red-500" aria-label="Flagged" />}
+          {a.waiting_client && !a.done && <WaitingIcon size={12} />}
           {a.priority && <span className={`ml-auto shrink-0 rounded px-1.5 text-[10px] font-medium ring-1 ${PRIORITY_STYLE[a.priority]}`}>{a.priority}</span>}
         </span>
         <span className={`mt-0.5 block text-[11px] ${overdue(a) ? 'font-medium text-red-600' : 'text-slate-500'}`}>
@@ -151,6 +152,15 @@ function ActivityRow({ a, sortable, onToggle, onOpen }) {
         )}
       </button>
     </li>
+  );
+}
+
+/** Marks an activity, ticket or priority that's waiting on the client. */
+export function WaitingIcon({ size = 12, className = '' }) {
+  return (
+    <span title="Waiting on client" aria-label="Waiting on client" className={`inline-grid shrink-0 place-items-center rounded-full bg-sky-100 p-0.5 text-sky-700 ${className}`}>
+      <Hourglass size={size - 2} strokeWidth={2.5} />
+    </span>
   );
 }
 
@@ -256,10 +266,15 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
               {priorities.map((p) => <option key={p}>{p}</option>)}
             </select>
           ))}
-          <div className="flex items-end">
+          <div className="flex items-end gap-2">
             <button type="button" aria-pressed={form.flagged} onClick={() => setForm((f) => ({ ...f, flagged: !f.flagged }))}
-              className={`flex h-[38px] w-full items-center justify-center gap-1.5 rounded-md text-sm ring-1 transition ${form.flagged ? 'bg-red-50 text-red-700 ring-red-300' : 'bg-white text-slate-600 ring-slate-300 hover:text-slate-900'}`}>
+              className={`flex h-[38px] flex-1 items-center justify-center gap-1.5 rounded-md text-sm ring-1 transition ${form.flagged ? 'bg-red-50 text-red-700 ring-red-300' : 'bg-white text-slate-600 ring-slate-300 hover:text-slate-900'}`}>
               <Flag size={14} className={form.flagged ? 'fill-red-500 text-red-500' : ''} /> {form.flagged ? 'Flagged' : 'Flag'}
+            </button>
+            <button type="button" aria-pressed={form.waiting_client} onClick={() => setForm((f) => ({ ...f, waiting_client: !f.waiting_client }))}
+              title="We’re waiting on the client. Shown on the ticket and its priority card, and not counted against completion."
+              className={`flex h-[38px] flex-[2] items-center justify-center gap-1.5 rounded-md text-sm whitespace-nowrap ring-1 transition ${form.waiting_client ? 'bg-sky-50 text-sky-800 ring-sky-300' : 'bg-white text-slate-600 ring-slate-300 hover:text-slate-900'}`}>
+              <Hourglass size={14} className={form.waiting_client ? 'text-sky-600' : ''} /> Waiting on client
             </button>
           </div>
           {field('Assigned to', (

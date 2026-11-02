@@ -4,6 +4,7 @@ import { CircleCheck, TriangleAlert, CircleX, CircleMinus, ClipboardCheck, Info,
 import { useApi } from '../lib/data.js';
 import { fullName, todayIso } from '../lib/format.js';
 import { compact } from './Charts.jsx';
+import SidePanel from './SidePanel.jsx';
 
 // Status is never color alone: each carries an icon and a word.
 export const STATUS = {
@@ -185,7 +186,7 @@ export default function ReportCard({ director, title }) {
       {!data ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className={`space-y-4 ${data ? '' : 'opacity-50'}`}>
           <Measures card={data.card} />
-          <Stalled list={data.card.measures.find((m) => m.key === 'progression').stalled} showDirector={!director} />
+          <StalledByStage measure={data.card.measures.find((m) => m.key === 'progression')} showDirector={!director} />
           {data.directors && <DirectorTable rows={data.directors} />}
         </div>
       )}
@@ -221,21 +222,55 @@ function Measures({ card }) {
   );
 }
 
-function Stalled({ list, showDirector }) {
+/**
+ * Stalled pursuits as one card per stage, Qualified through Under Evaluation: how many and their value. Select a card to
+ * list its bids in a side panel; select a bid to open its ticket.
+ */
+export function StalledByStage({ measure, showDirector }) {
+  const [open, setOpen] = useState(null);
+  const list = measure?.stalled || [];
+  const stages = measure?.stalledStages || [...new Set(list.map((x) => x.stage))];
   if (!list.length) return null;
+  const shown = list.filter((x) => x.stage === open);
+  const total = (xs) => xs.reduce((s, x) => s + (x.value || 0), 0);
   return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4">
+    <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
       <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-amber-900"><TriangleAlert size={14} /> Stalled pursuits ({list.length})</h3>
-      <ul className="divide-y divide-amber-100 text-sm">
-        {list.map((x) => (
-          <li key={x.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-1.5">
-            <Link to={`/tickets?open=${x.id}`} className="font-medium text-slate-800 hover:underline">{x.title}</Link>
-            <span className="text-xs text-slate-600">
-              {[x.stage, compact(x.value), showDirector && x.director, `${x.days} days without a stage change`, x.overdue && 'past its projected win date'].filter(Boolean).join(' · ')}
-            </span>
-          </li>
-        ))}
-      </ul>
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {stages.map((stage) => {
+          const xs = list.filter((x) => x.stage === stage);
+          return (
+            <button key={stage} type="button" disabled={!xs.length} onClick={() => setOpen(stage)} title={xs.length ? `Show the ${xs.length} stalled in ${stage}` : undefined}
+              className="rounded-lg border border-amber-100 bg-white px-3 py-2 text-left transition hover:border-amber-400 disabled:cursor-default disabled:opacity-60 disabled:hover:border-amber-100">
+              <div className="text-xs font-medium text-slate-500">{stage}</div>
+              <div className="flex items-baseline gap-2">
+                <span className={`text-xl font-bold tabular-nums ${xs.length ? 'text-amber-900' : 'text-slate-300'}`}>{xs.length}</span>
+                {xs.length > 0 && <span className="text-xs font-medium text-slate-600 tabular-nums">{compact(total(xs))}</span>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {open && (
+        <SidePanel title={`Stalled in ${open}`} subtitle={`${shown.length} bid${shown.length === 1 ? '' : 's'} · ${compact(total(shown))} · no stage change in 45+ days, or past the projected win date`}
+          onClose={() => setOpen(null)}>
+          <ul className="space-y-2">
+            {shown.map((x) => (
+              <li key={x.id}>
+                <Link to={`/tickets?open=${x.id}`} className="block rounded-lg border border-slate-200 bg-white px-3 py-2 transition hover:border-brand-500 hover:bg-brand-50/40">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="font-medium text-slate-900">{x.title}</span>
+                    <span className="shrink-0 text-sm font-semibold text-slate-700 tabular-nums">{compact(x.value)}</span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-500">
+                    {[showDirector && x.director, `${x.days} days without a stage change`, x.overdue && 'past its projected win date'].filter(Boolean).join(' · ')}
+                  </div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </SidePanel>
+      )}
     </div>
   );
 }

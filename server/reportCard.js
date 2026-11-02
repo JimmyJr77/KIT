@@ -39,6 +39,8 @@ function histories(ids) {
   rows.forEach((r) => { if (!map.has(r.ticket_id)) map.set(r.ticket_id, []); map.get(r.ticket_id).push(r); });
   return map;
 }
+// Stalled pursuits are tracked from Qualified through Under Evaluation: prospecting is too early to judge, and awarded is done.
+export const STALL_STAGES = ['Qualified', 'Capture', 'Proposal', 'Under Evaluation'];
 const rank = (s) => ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation', 'Awarded'].indexOf(s);
 
 /** The report card for one director (`director` = user id) or the whole team (null), over period `p`. */
@@ -121,7 +123,7 @@ export function reportCard(director, p) {
     const rows = hist.get(tk.id) || [];
     return rows.some((r, i) => i > 0 && within(r.changed_at) && rank(r.pipeline_status) > rank(rows[i - 1].pipeline_status));
   });
-  const stalled = open.map((tk) => {
+  const stalled = open.filter((tk) => STALL_STAGES.includes(tk.pipeline_status)).map((tk) => {
     const rows = hist.get(tk.id) || [];
     // The last time its stage changed.
     let last = rows[0]?.changed_at || tk.created_at;
@@ -132,8 +134,8 @@ export function reportCard(director, p) {
   }).filter((x) => x.days >= THRESHOLDS.stalledDays || x.overdue).sort((a, b) => b.days - a.days);
   const progression = {
     key: 'progression', title: 'Pursuit progression', question: 'Are we improving our position to win?',
-    value: advanced.length, format: 'count', stalled,
-    detail: `${advanced.length} bid${advanced.length === 1 ? '' : 's'} moved forward a stage · ${stalled.length} of ${open.length} open stalled (${THRESHOLDS.stalledDays}+ days without a stage change, or past their win date)`,
+    value: advanced.length, format: 'count', stalled, stalledStages: STALL_STAGES,
+    detail: `${advanced.length} bid${advanced.length === 1 ? '' : 's'} moved forward a stage · ${stalled.length} qualified-to-evaluation stalled (${THRESHOLDS.stalledDays}+ days without a stage change, or past their win date)`,
     status: !open.length ? 'none' : status(1 - stalled.length / open.length, { good: 0.8, watch: 0.6 }),
   };
 

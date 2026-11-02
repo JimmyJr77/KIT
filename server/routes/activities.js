@@ -36,7 +36,7 @@ function withDetails(rows) {
   const ranks = new Map();
   [...new Set(rows.map((a) => a.ticket_id))].forEach((t) => openOrder(t).forEach((id, i) => ranks.set(id, i + 1)));
   return rows.map(({ text, ...a }) => ({
-    ...a, subject: text, activity_type: a.activity_type || 'Task', done: !!a.done, flagged: !!a.flagged, rank: ranks.get(a.id) ?? null,
+    ...a, subject: text, activity_type: a.activity_type || 'Task', done: !!a.done, flagged: !!a.flagged, waiting_client: !!a.waiting_client, rank: ranks.get(a.id) ?? null,
     participants: people.filter((p) => p.task_id === a.id).map(({ task_id, ...c }) => c),
     subtasks: subs.filter((s) => s.task_id === a.id).map((s) => ({ ...s, comment_count: count('subtask', s.id) })),
     comment_count: count('activity', a.id),
@@ -60,6 +60,7 @@ function clean(b, partial) {
   if (has('due_time')) out.due_time = /^\d{2}:\d{2}$/.test(b.due_time || '') ? b.due_time : null;
   if (has('duration')) out.duration = /^\d{1,2}:\d{2}$/.test(b.duration || '') && b.duration !== '00:00' ? b.duration : null;
   if (has('flagged')) out.flagged = b.flagged ? 1 : 0;
+  if (has('waiting_client')) out.waiting_client = b.waiting_client ? 1 : 0;
   if (has('assignee_id')) out.assignee_id = Number(b.assignee_id) || null;
   if (has('ticket_id')) {
     const t = db.prepare('SELECT id FROM tickets WHERE id = ?').get(Number(b.ticket_id));

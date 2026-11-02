@@ -72,7 +72,8 @@ function TodoHighlights({ todo, isTeam, self, who, teamLabel }) {
     <section>
       <SectionHead title="To-do highlights" />
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))]">
-        <StatTile label="Priorities closed this week" value={`${p.completed} of ${p.planned}`} sub={p.work ? `${p.work} more added after planning` : null}>
+        <StatTile label="Priorities closed this week" value={`${p.completed} of ${p.planned}`}
+          sub={[p.work && `${p.work} more added after planning`, p.waiting && `${p.waiting} waiting on client, not counted`].filter(Boolean).join(' · ') || null}>
           <Meter value={p.completed} target={p.planned || null} format={String} noun="planned" label="Share of this week's planned priorities completed" />
         </StatTile>
         <StatTile label="Open tasks" value={todo.activities.open}

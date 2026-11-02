@@ -1,4 +1,4 @@
-import { Play } from 'lucide-react';
+import { Play, Hourglass } from 'lucide-react';
 import { nextStepState } from '../lib/nextStep.js';
 
 const TONES = {
@@ -15,7 +15,13 @@ const ROTATE = { right: '', left: 'rotate-180', down: 'rotate-90' };
  */
 export default function NextStepBadge({ step, onOpen, className = '' }) {
   const s = nextStepState(step);
-  const title = step ? `Next step: ${step.subject} · ${s.label}` : 'No next step. Add an activity.';
+  const title = step ? `Next step: ${step.subject} · ${s.label}${step.waiting_client ? ' · Waiting on client' : ''}` : 'No next step. Add an activity.';
+  // The next step is waiting on the client: a small hourglass rides on the badge's top-left.
+  const waiting = step?.waiting_client ? (
+    <span className="absolute -top-2 -left-2 grid h-4 w-4 place-items-center rounded-full bg-sky-100 text-sky-700 ring-2 ring-white" aria-hidden="true">
+      <Hourglass size={9} strokeWidth={3} />
+    </span>
+  ) : null;
   if (s.arrow === 'none') {
     return (
       <button type="button" title={title} aria-label={title}
@@ -36,6 +42,7 @@ export default function NextStepBadge({ step, onOpen, className = '' }) {
       onClick={(e) => { e.stopPropagation(); onOpen?.(step); }}
       className={`grid h-6 w-6 shrink-0 place-items-center rounded-full shadow-sm ring-2 transition hover:scale-110 ${TONES[s.tone]} ${s.flash ? 'animate-blink' : ''} ${className}`}>
       <Play size={11} className={`fill-current ${s.arrow === 'right' ? 'translate-x-px' : ''} ${ROTATE[s.arrow]}`} strokeWidth={0} />
+      {waiting}
     </button>
   );
 }

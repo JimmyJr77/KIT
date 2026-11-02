@@ -1,11 +1,10 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { Printer, Presentation, Loader2 } from 'lucide-react';
 import { useApi } from '../lib/data.js';
 import { fullName, todayIso, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import { BarList, StackedColumns, DataTable, SERIES, compact, fullMoney, pct } from '../components/Charts.jsx';
-import { periods, formatValue, StatusChip } from '../components/ReportCard.jsx';
+import { periods, formatValue, StatusChip, StalledByStage } from '../components/ReportCard.jsx';
 
 const ratio = (r) => (r == null ? '—' : `${r.toFixed(2)}×`);
 const shortQuarter = (q) => `Q${q.slice(-1)} '${q.slice(2, 4)}`;
@@ -162,13 +161,7 @@ function Report({ r }) {
         </Section>
       </div>
 
-      {stalled.length > 0 && (
-        <Section title={`Stalled pursuits (${stalled.length})`}>
-          <DataTable columns={[{ key: 'title', label: 'Bid' }, { key: 'stage', label: 'Stage' }, { key: 'director', label: 'BD director' },
-            { key: 'value', label: 'Value', align: 'right', format: compact }, { key: 'days', label: 'Days since stage change', align: 'right' }]}
-            rows={stalled.map((x) => ({ ...x, title: <Link to={`/tickets?open=${x.id}`} className="hover:underline">{x.title}</Link>, director: x.director || '—' }))} />
-        </Section>
-      )}
+      {stalled.length > 0 && <StalledByStage measure={m.progression} showDirector />}
     </article>
   );
 }

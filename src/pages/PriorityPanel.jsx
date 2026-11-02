@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Search, Ticket, ArrowLeft, Archive } from 'lucide-react';
+import { X, Plus, Trash2, Search, Ticket, ArrowLeft, Archive, Hourglass } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, ticketKind } from '../lib/format.js';
@@ -29,6 +29,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
     due_date: card?.due_date || '',
     checklist: card?.checklist || [],
     completed: !!card?.completed,
+    waiting_client: !!card?.waiting_client,
     assignees: card ? card.assignees.map((a) => a.user_id) : [defaultAssignee || user.id],
   });
   const [newItem, setNewItem] = useState('');
@@ -217,9 +218,16 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
               <MultiSelect options={users.map((u) => ({ value: u.id, label: fullName(u), sub: u.team_name }))} value={form.assignees} onChange={(v) => set('assignees', v)} />
             )}
           </Field>
-          <Field label="Due date">
-            <input type="date" className="input" value={form.due_date} onChange={(e) => set('due_date', e.target.value)} disabled={ro} />
-          </Field>
+          <div className="grid grid-cols-2 items-end gap-3">
+            <Field label="Due date">
+              <input type="date" className="input" value={form.due_date} onChange={(e) => set('due_date', e.target.value)} disabled={ro} />
+            </Field>
+            <button type="button" aria-pressed={form.waiting_client} disabled={ro} onClick={() => set('waiting_client', !form.waiting_client)}
+              title="We’re waiting on the client. Shown on the card and its ticket, and not counted against completion."
+              className={`flex h-[38px] items-center justify-center gap-1.5 rounded-md text-sm ring-1 transition ${form.waiting_client ? 'bg-sky-50 text-sky-800 ring-sky-300' : 'bg-white text-slate-600 ring-slate-300 hover:text-slate-900'}`}>
+              <Hourglass size={14} className={form.waiting_client ? 'text-sky-600' : ''} /> Waiting on client
+            </button>
+          </div>
           <Field label={`Subtasks${form.checklist.length ? ` (${form.checklist.filter((c) => c.done).length}/${form.checklist.length})` : ''}`}>
             <ul className="space-y-1.5">
               {form.checklist.map((item, i) => (

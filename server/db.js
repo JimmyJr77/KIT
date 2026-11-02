@@ -877,6 +877,8 @@ addColumn('ticket_tasks', 'phone', 'TEXT');
 addColumn('ticket_tasks', 'email', 'TEXT');
 addColumn('ticket_tasks', 'goals', 'TEXT');
 addColumn('ticket_tasks', 'flagged', 'INTEGER NOT NULL DEFAULT 0');
+// The ball is in the client's court: shown on the ticket and its priority card, and left out of completion rates.
+addColumn('ticket_tasks', 'waiting_client', 'INTEGER NOT NULL DEFAULT 0');
 db.exec(`
 -- The people (contacts) taking part in an activity: Pipedrive's participants.
 CREATE TABLE IF NOT EXISTS task_participants (

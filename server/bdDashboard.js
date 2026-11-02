@@ -51,11 +51,14 @@ function todo(s) {
   const many = s.kind === 'team';
   // Each team's current week, and the scope's cards in it (a card two people share counts once).
   const cards = db.prepare('SELECT id, checkin_dow FROM teams').all().flatMap((t) => db.prepare(`SELECT DISTINCT c.*, t.opportunity_title,
+      COALESCE((SELECT k.waiting_client FROM ticket_tasks k WHERE k.id = c.activity_id), 0) AS waiting_client,
       (SELECT GROUP_CONCAT(u.first_name || ' ' || u.last_name, ', ') FROM card_assignees a2 JOIN users u ON u.id = a2.user_id WHERE a2.card_id = c.id) AS who
     FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id JOIN tickets t ON t.id = c.ticket_id
     WHERE c.team_id = ? AND c.week_start = ? AND a.user_id IN (SELECT value FROM json_each(?)) AND c.archived_at IS NULL AND t.archived_at IS NULL`)
     .all(t.id, weekStartFor(today, t.checkin_dow), people));
-  const planned = cards.filter((c) => c.is_planned);
+  // A planned priority that's still open because we're waiting on the client doesn't count against completion.
+  const waiting = cards.filter((c) => c.is_planned && !c.completed && c.waiting_client);
+  const planned = cards.filter((c) => c.is_planned && !waiting.includes(c));
   const activities = db.prepare(`SELECT k.id, k.text, k.due_date, k.ticket_id, t.opportunity_title, u.first_name || ' ' || u.last_name AS who
     FROM ticket_tasks k JOIN tickets t ON t.id = k.ticket_id LEFT JOIN users u ON u.id = k.assignee_id
     WHERE k.done = 0 AND k.assignee_id IN (SELECT value FROM json_each(?)) AND t.archived_at IS NULL`).all(people);
@@ -77,8 +80,8 @@ function todo(s) {
 
   return {
     priorities: {
-      planned: planned.length, completed: planned.filter((c) => c.completed).length, work: cards.length - planned.length,
-      open: cards.filter((c) => !c.completed).map((c) => ({ id: c.id, ticket_id: c.ticket_id, title: c.title, ticket: c.opportunity_title, due_date: c.due_date, who: many ? c.who : null })),
+      planned: planned.length, completed: planned.filter((c) => c.completed).length, work: cards.filter((c) => !c.is_planned).length, waiting: waiting.length,
+      open: cards.filter((c) => !c.completed).map((c) => ({ id: c.id, ticket_id: c.ticket_id, title: c.title, ticket: c.opportunity_title, due_date: c.due_date, who: many ? c.who : null, waiting_client: !!c.waiting_client })),
     },
     activities: {
       open: activities.length, overdue: activities.filter((a) => a.due_date && a.due_date < today).length,

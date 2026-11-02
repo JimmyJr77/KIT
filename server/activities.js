@@ -82,5 +82,5 @@ export function syncMilestone(ticketId) {
 }
 
 /** SQL for a ticket's next step as JSON (or null), for ticket lists. `t` is the tickets alias. */
-export const NEXT_STEP_SQL = `(SELECT json_object('id', k.id, 'subject', k.text, 'due_date', k.due_date, 'due_time', k.due_time, 'created_at', k.created_at)
+export const NEXT_STEP_SQL = `(SELECT json_object('id', k.id, 'subject', k.text, 'due_date', k.due_date, 'due_time', k.due_time, 'created_at', k.created_at, 'waiting_client', k.waiting_client)
   FROM ticket_tasks k WHERE k.ticket_id = t.id AND k.done = 0 ORDER BY k.position, k.id LIMIT 1)`;
