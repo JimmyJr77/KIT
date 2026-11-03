@@ -145,15 +145,27 @@ const sentSummary = (sent) => Object.entries(sent || {}).map(([k, n]) => {
   return Array.isArray(w) ? plural(n, w[0], w[1]) : plural(n, w);
 }).join(' · ');
 
-function Switch({ on, onChange, label, hint }) {
+const MODES = [
+  { key: 'off', label: 'Off', title: 'Never sent' },
+  { key: 'manual', label: 'Manual', title: 'Sent when you send from here' },
+  { key: 'auto', label: 'Auto', title: 'Sent on its own a minute or so after it changes, and when you send from here. Deletions only go when you send.' },
+];
+
+/** Off, Manual or Auto for one kind of change. */
+function ModeChoice({ mode, onChange, label, hint, disabled }) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 text-sm text-slate-700">
-      <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)}
-        className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${on ? 'bg-brand-600' : 'bg-slate-300'}`}>
-        <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${on ? 'translate-x-4' : ''}`} />
-      </button>
+    <div className="flex items-start justify-between gap-3 text-sm text-slate-700">
       <span><span className="font-medium">{label}</span><span className="block text-xs text-slate-500">{hint}</span></span>
-    </label>
+      <div role="radiogroup" aria-label={label} className="flex shrink-0 overflow-hidden rounded-md ring-1 ring-slate-200">
+        {MODES.map((m) => (
+          <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} title={m.title} disabled={disabled}
+            onClick={() => mode !== m.key && onChange(m.key)}
+            className={`px-2 py-1 text-xs font-medium ${mode === m.key ? (m.key === 'auto' ? 'bg-brand-600 text-white' : m.key === 'manual' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-600') : 'bg-white text-slate-500 hover:bg-slate-50'}`}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -245,12 +257,13 @@ function Preview({ p }) {
 }
 
 /**
- * Admins: KIT → Pipedrive, only when sent from here. Pick what goes and which deals, preview it, then send. Each field
- * is checked against Pipedrive first: one changed there since the last pull is left alone and listed as a conflict.
+ * Admins: KIT → Pipedrive. Each kind is Off, Manual (goes when sent from here, after a preview) or Auto (also goes on its
+ * own, except deletions). Each field is checked against Pipedrive first: one changed there since the last pull is left
+ * alone and listed as a conflict.
  */
 export function PipedriveSend({ status }) {
   const deals = useApi('/pipedrive/deals');
-  const [kinds, setKinds] = useState([]);
+  const [modes, setModes] = useState(null);
   const [which, setWhich] = useState('all'); // 'all', a pipeline id, or 'chosen'
   const [chosen, setChosen] = useState([]);
   const [p, setP] = useState(null);
@@ -258,6 +271,27 @@ export function PipedriveSend({ status }) {
   const [error, setError] = useState('');
   const s = status.data;
   const last = s?.lastSend;
+  const auto = s?.auto;
+  useEffect(() => { if (s?.modes && !modes) setModes(s.modes); }, [s]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kinds = useMemo(() => KINDS.map((k) => k.key).filter((k) => modes && modes[k] !== 'off'), [modes]);
+  const autoKinds = KINDS.filter((k) => modes?.[k.key] === 'auto');
+  // While anything is on Auto, check every 30 seconds so its latest run shows.
+  useEffect(() => {
+    if (!autoKinds.length || s?.running) return undefined;
+    const t = setTimeout(() => status.reload(), 30000);
+    return () => clearTimeout(t);
+  }, [s, autoKinds.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const choose = async (changes) => {
+    const turningOn = KINDS.filter((k) => changes[k.key] === 'auto' && modes[k.key] !== 'auto');
+    if (turningOn.length && !confirm(`Send ${turningOn.map((k) => k.label.toLowerCase()).join(', ')} to Pipedrive automatically? `
+      + 'Changes made in KIT from now on will update your real Pipedrive deals on their own, about a minute later. Deletions still wait for you to send.')) return;
+    setError('');
+    const before = modes;
+    setModes({ ...modes, ...changes });
+    try { setModes((await api.put('/pipedrive/send/modes', changes)).modes); } catch (e) { setModes(before); setError(e.message); }
+  };
+  const all = (mode) => choose(Object.fromEntries(KINDS.map((k) => [k.key, mode])));
 
   const body = useMemo(() => ({
     kinds, ...(which === 'chosen' ? { ticket_ids: chosen } : which !== 'all' ? { pipeline_id: Number(which) } : {}),
@@ -279,26 +313,53 @@ export function PipedriveSend({ status }) {
   return (
     <div className="space-y-4">
       <p className="text-xs text-slate-500">
-        KIT never sends anything to Pipedrive on its own. Changes made in KIT wait here until you send them. Before each field goes, KIT
-        checks Pipedrive: if someone changed it there since the last pull, it&apos;s left alone and listed as a conflict, and the next pull
-        brings Pipedrive&apos;s version.
+        Choose what goes to Pipedrive. <b>Manual</b> changes wait here until you send them. <b>Auto</b> changes go on their own about a minute
+        after they&apos;re made in KIT, and with your sends too. Deletions only ever go when you send. Before each field goes, KIT checks
+        Pipedrive: if someone changed it there since the last pull, it&apos;s left alone and listed as a conflict, and the next pull brings
+        Pipedrive&apos;s version.
       </p>
       {s?.configured && !s.sending && (
         <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
-          Sending is off on this server, so testing here never changes your real deals. You can still preview. It&apos;s on in production
-          (or with PIPEDRIVE_PUSH=1).
+          Sending is off on this server, so testing here never changes your real deals, by hand or automatically. You can still preview.
+          It&apos;s on in production (or with PIPEDRIVE_PUSH=1).
         </p>
       )}
-      <div className="grid gap-3 sm:grid-cols-2">
-        {KINDS.map((k) => (
-          <Switch key={k.key} on={kinds.includes(k.key)} label={k.label} hint={k.hint}
-            onChange={(on) => setKinds((ks) => (on ? [...ks, k.key] : ks.filter((x) => x !== k.key)))} />
-        ))}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn text-xs" onClick={() => setKinds(KINDS.map((k) => k.key))}>Turn all on</button>
-        <button type="button" className="btn text-xs" onClick={() => setKinds([])}>Turn all off</button>
-      </div>
+      {!modes ? <p className="text-sm text-slate-400">Loading…</p> : (
+        <>
+          <div className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
+            {KINDS.map((k) => (
+              <ModeChoice key={k.key} mode={modes[k.key]} label={k.label} hint={k.hint} onChange={(m) => choose({ [k.key]: m })} />
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn text-xs" onClick={() => all('manual')}>All manual</button>
+            <button type="button" className="btn text-xs" onClick={() => all('off')}>All off</button>
+          </div>
+        </>
+      )}
+      {autoKinds.length > 0 && (
+        <Result ok={!auto?.last || (auto.last.ok && !auto.last.result?.errors?.length)}>
+          <div className="flex flex-wrap items-center gap-x-1.5 font-medium">
+            <RefreshCw size={14} /> Auto: {autoKinds.map((k) => k.label.toLowerCase()).join(', ')}
+            {!s?.sending && <span className="font-normal">· not on this server</span>}
+          </div>
+          <div className="mt-0.5 space-y-1 text-xs">
+            {auto?.last ? (
+              <div>
+                Last {when(auto.last.at)}: {auto.last.ok ? sentSummary(auto.last.result.sent) || 'nothing needed sending' : `failed (${auto.last.error}). Trying again in 15 minutes.`}
+              </div>
+            ) : <div>Nothing sent automatically yet.</div>}
+            {auto?.last?.ok && auto.last.result.conflicts.length > 0 && (
+              <div>Changed in Pipedrive since the last pull, so not sent: {auto.last.result.conflicts.map((c) => `${c.title} (${c.field})`).join('; ')}</div>
+            )}
+            {auto?.last?.ok && auto.last.result.skipped.length > 0 && <div>Skipped: {auto.last.result.skipped.join('; ')}</div>}
+            {auto?.last?.ok && auto.last.result.errors.length > 0 && <div className="text-red-700">Failed: {auto.last.result.errors.join('; ')}</div>}
+            {auto?.waiting > 0 && (
+              <div>{plural(auto.waiting, 'deal')} didn&apos;t fully go. Auto tries again when {auto.waiting === 1 ? 'it changes' : 'they change'} in KIT or Pipedrive, or send by hand.</div>
+            )}
+          </div>
+        </Result>
+      )}
       <div className="grid gap-2 sm:grid-cols-[14rem_1fr] sm:items-start">
         <div>
           <label className="label" htmlFor="send-which">Which deals</label>

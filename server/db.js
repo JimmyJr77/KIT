@@ -952,6 +952,9 @@ addColumn('ticket_files', 'email_id', 'INTEGER REFERENCES ticket_emails(id) ON D
 // What Pipedrive held at the last pull, for the fields KIT and Pipedrive share (JSON). A field whose KIT value differs is
 // a KIT change waiting to be sent; one whose Pipedrive value differs was changed in Pipedrive since.
 addColumn('tickets', 'pipedrive_snapshot', 'TEXT');
+// Each deal's followers and people as they were last sent to Pipedrive, so auto-send knows when they've changed.
+addColumn('tickets', 'pipedrive_followers_sent', 'TEXT');
+addColumn('tickets', 'pipedrive_people_sent', 'TEXT');
 addColumn('ticket_tasks', 'pipedrive_snapshot', 'TEXT');
 addColumn('pipedrive_deletes', 'deal_id', 'INTEGER'); // the deal it was on, so a send to some deals only takes theirs
 

@@ -1,10 +1,10 @@
 // Pipedrive for everyone: pull deals into KIT (admins everything, team leads their teams' deals, members their own),
-// and for admins only, send chosen KIT changes to Pipedrive.
+// and for admins only, send chosen KIT changes to Pipedrive, by hand or (for kinds set to Auto) on their own.
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAdmin } from '../auth.js';
 import { startPull, lastPull, syncStatus } from '../services/pipedrive.js';
-import { startSend, lastSend, preview, linkedTickets, SEND_KINDS } from '../services/pipedriveSend.js';
+import { startSend, lastSend, preview, linkedTickets, sendModes, setSendModes, autoStatus, SEND_KINDS } from '../services/pipedriveSend.js';
 import { liveStatus, turnOn, turnOff } from '../services/pipedriveLive.js';
 
 const r = Router();
@@ -22,7 +22,7 @@ r.get('/', (req, res) => {
   const admin = req.user.role === 'admin';
   res.json({
     ...syncStatus(), pulls: pulls(req.user), mine: lastPull(`pipedrive_last_pull_${req.user.id}`),
-    ...(admin ? { last: lastPull('pipedrive_last_sync'), lastSend: lastSend() } : {}),
+    ...(admin ? { last: lastPull('pipedrive_last_sync'), lastSend: lastSend(), modes: sendModes(), auto: autoStatus() } : {}),
   });
 });
 
@@ -47,6 +47,9 @@ const scopeOf = (b) => ({ ...(b?.pipeline_id ? { pipeline_id: Number(b.pipeline_
 r.get('/deals', requireAdmin, (req, res) => {
   res.json({ tickets: linkedTickets(), pipelines: db.prepare('SELECT id, name FROM pipelines WHERE pipedrive_id IS NOT NULL ORDER BY position, name').all() });
 });
+
+/** Body: { kind: 'off' | 'manual' | 'auto', ... }. Manual and Auto kinds go with a send; Auto kinds also go on their own. */
+r.put('/send/modes', requireAdmin, (req, res) => res.json({ modes: setSendModes(req.body || {}) }));
 
 /** Body: { kinds: [...], pipeline_id?, ticket_ids? }. What a send would do; nothing is sent or read from Pipedrive. */
 r.post('/send/preview', requireAdmin, (req, res) => res.json(preview(kindsOf(req.body), scopeOf(req.body))));

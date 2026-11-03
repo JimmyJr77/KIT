@@ -22,6 +22,7 @@ import pipedriveRoutes from './routes/pipedrive.js';
 import labelRoutes from './routes/labels.js';
 import { schedulePipedriveSync } from './services/pipedrive.js';
 import { handleWebhook } from './services/pipedriveLive.js';
+import { scheduleAutoSend } from './services/pipedriveSend.js';
 import travelRoutes from './routes/travel.js';
 import gsaRoutes from './routes/gsa.js';
 import priorityRoutes from './routes/priorities.js';
@@ -103,6 +104,7 @@ try {
 }
 
 schedulePipedriveSync();
+scheduleAutoSend();
 
 const port = Number(process.env.PORT) || 3001;
 app.listen(port, () => console.log(`KIT API listening on http://localhost:${port}`));

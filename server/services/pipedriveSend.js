@@ -1,5 +1,7 @@
-// KIT → Pipedrive, only when an admin sends it. The admin picks what goes (deal fields, tags, notes, activities, files,
-// products, followers, people) and which deals; a preview shows exactly that before anything is sent.
+// KIT → Pipedrive. An admin sets each kind of change (deal fields, tags, notes, activities, files, products, followers,
+// people) to Off, Manual or Auto. Manual and Auto kinds go when an admin sends, after a preview of exactly that. Auto
+// kinds also go on their own a minute or so after they change, on every Pipedrive deal, except deletions: those only
+// ever go with an admin's send.
 //
 // What counts as a change: a shared field whose KIT value differs from what Pipedrive held at the last pull (the
 // snapshot), and anything made or deleted in KIT that Pipedrive doesn't have. Before sending a field, the deal (or
@@ -9,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db, json, setSetting, getSetting } from '../db.js';
 import {
-  call, all, idOf, runJob, sendingAllowed, dealView, activityView, kitChanges, snapshotOf, same,
+  call, all, idOf, runJob, sendingAllowed, syncStatus, dealView, activityView, kitChanges, snapshotOf, same,
   DEAL_TRACKED, TASK_TRACKED, ACTIVITY_TYPES,
 } from './pipedrive.js';
 
@@ -24,6 +26,32 @@ export const FIELD_LABELS = {
   location: 'Location', note: 'Note', done: 'Done',
 };
 const LIST_MAX = 200;
+
+// ---- Off, Manual or Auto, per kind
+
+const MODES = ['off', 'manual', 'auto'];
+/** Each kind's mode; a kind never set is off. */
+export function sendModes() {
+  const saved = json.parse(getSetting('pipedrive_send_modes'), {});
+  return Object.fromEntries(SEND_KINDS.map((k) => [k, MODES.includes(saved[k]) ? saved[k] : 'off']));
+}
+/** `changes`: { kind: mode }, for some kinds. Returns every kind's mode. */
+export function setSendModes(changes = {}) {
+  const next = sendModes();
+  Object.entries(changes).forEach(([k, m]) => { if (SEND_KINDS.includes(k) && MODES.includes(m)) next[k] = m; });
+  setSetting('pipedrive_send_modes', json.str(next));
+  return next;
+}
+
+// Followers and people have no record of what was last sent, so each deal keeps a signature of its followers and of its
+// people as they were at the last send. Auto-send looks only at deals whose signature has changed since.
+const SIGS = {
+  followers: { column: 'pipedrive_followers_sent', sql: `COALESCE((SELECT group_concat(user_id) FROM (SELECT user_id FROM ticket_followers
+    WHERE ticket_id = t.id ORDER BY user_id)), '')` },
+  contacts: { column: 'pipedrive_people_sent', sql: `COALESCE((SELECT group_concat(x) FROM (SELECT contact_id || CASE WHEN is_primary THEN '*' ELSE '' END AS x
+    FROM ticket_contacts WHERE ticket_id = t.id ORDER BY contact_id)), '')` },
+};
+const markSent = (kind, ticketId) => db.prepare(`UPDATE tickets AS t SET ${SIGS[kind].column} = ${SIGS[kind].sql} WHERE t.id = ?`).run(ticketId);
 
 // ---- Which deals
 
@@ -70,12 +98,15 @@ const FILE_SQL = `SELECT f.*, t.pipedrive_id AS deal_id, t.opportunity_title AS 
   JOIN tickets t ON t.id = f.ticket_id LEFT JOIN users u ON u.id = f.uploaded_by
   WHERE t.id IN (SELECT value FROM json_each(@ids)) AND f.email_id IS NULL AND f.pipedrive_id IS NULL AND f.pipedrive_note_id IS NULL`;
 
-function plan(kinds, scope) {
+/** With `auto`, deletions are left for an admin's send, and followers and people only on deals where they changed. */
+function plan(kinds, scope, { auto = false } = {}) {
   const tickets = ticketsIn(scope);
   const ids = json.str(tickets.map((t) => t.id));
   const dealIds = new Set(tickets.map((t) => t.pipedrive_id));
-  const deletes = (kind) => db.prepare('SELECT * FROM pipedrive_deletes WHERE kind = ?').all(kind)
-    .filter((d) => (d.deal_id ? dealIds.has(d.deal_id) : everyDeal(scope)));
+  const deletes = (kind) => (auto ? [] : db.prepare('SELECT * FROM pipedrive_deletes WHERE kind = ?').all(kind)
+    .filter((d) => (d.deal_id ? dealIds.has(d.deal_id) : everyDeal(scope))));
+  const changed = (kind) => new Set(db.prepare(`SELECT t.id FROM tickets t WHERE t.id IN (SELECT value FROM json_each(@ids))
+    AND t.${SIGS[kind].column} IS NOT ${SIGS[kind].sql}`).all({ ids }).map((x) => x.id));
   const out = { tickets: tickets.length };
   const on = (k) => kinds.includes(k);
 
@@ -114,19 +145,22 @@ function plan(kinds, scope) {
       .map((p) => ({ id: p.id, ticket_id: p.ticket_id, title: p.title, text: `${p.name} × ${p.quantity}` }));
   }
   if (on('followers')) {
-    out.followers = tickets.map((t) => ({
+    const these = auto ? changed('followers') : null;
+    out.followers = tickets.filter((t) => !these || these.has(t.id)).map((t) => ({
       ticket_id: t.id, title: t.opportunity_title,
       people: db.prepare(`SELECT u.id, u.first_name, u.last_name, u.pipedrive_id FROM ticket_followers f JOIN users u ON u.id = f.user_id WHERE f.ticket_id = ?`).all(t.id),
     })).filter((x) => x.people.length).map((x) => ({ ...x, names: x.people.map(name), missing: x.people.filter((u) => !u.pipedrive_id).map(name) }));
   }
   if (on('contacts')) {
+    const these = auto ? changed('contacts') : null;
     const linked = db.prepare(`SELECT tc.ticket_id, tc.is_primary, c.* FROM ticket_contacts tc JOIN contacts c ON c.id = tc.contact_id
-      WHERE tc.ticket_id IN (SELECT value FROM json_each(@ids))`).all({ ids });
+      WHERE tc.ticket_id IN (SELECT value FROM json_each(@ids))`).all({ ids }).filter((c) => !these || these.has(c.ticket_id));
     const newPeople = new Map(linked.filter((c) => !c.pipedrive_id).map((c) => [c.id, c]));
     out.contacts = {
       add: [...newPeople.values()].map((c) => ({ id: c.id, text: [c.first_name, c.last_name].filter(Boolean).join(' '), organization: c.organization })),
-      tickets: [...new Set(linked.map((c) => c.ticket_id))].length,
+      ids: [...new Set(linked.map((c) => c.ticket_id))],
     };
+    out.contacts.tickets = out.contacts.ids.length;
   }
   return { out, tickets };
 }
@@ -134,6 +168,7 @@ function plan(kinds, scope) {
 /** What a send would do, for the preview. Lists are cut at LIST_MAX; counts are whole. */
 export function preview(kinds, scope) {
   const { out } = plan(kinds, scope);
+  delete out.contacts?.ids;
   const cut = (list) => (Array.isArray(list) ? { count: list.length, items: list.slice(0, LIST_MAX) } : list);
   return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v && !Array.isArray(v) && typeof v === 'object'
     ? Object.fromEntries(Object.entries(v).map(([k2, v2]) => [k2, cut(v2)])) : cut(v)]));
@@ -168,21 +203,85 @@ export function startSend(kinds, scope, by) {
   if (!sendingAllowed()) throw new Error('Sending to Pipedrive is off on this server (it’s on in production, or with PIPEDRIVE_PUSH=1).');
   const chosen = kinds.filter((k) => SEND_KINDS.includes(k));
   if (!chosen.length) throw new Error('Choose at least one thing to send.');
-  runJob('send to Pipedrive', (phase) => send(chosen, scope, phase), (result, e) => setSetting('pipedrive_last_send', json.str({
-    at: new Date().toISOString(), by: by.name, kinds: chosen, ok: !e, ...(e ? { error: e.message } : { result }),
+  runJob('send to Pipedrive', (phase) => send(plan(chosen, scope), phase), (result, e) => setSetting('pipedrive_last_send', json.str({
+    at: new Date().toISOString(), by: by.name, kinds: chosen, ok: !e, ...(e ? { error: e.message } : { result: forLog(result) }),
   })));
 }
 export const lastSend = () => json.parse(getSetting('pipedrive_last_send'), null);
+const forLog = ({ troubled, ...result }) => result; // eslint-disable-line no-unused-vars
 
-async function send(kinds, scope, phase) {
-  const { out, tickets } = plan(kinds, scope);
+// ---- Auto-send
+
+const AUTO_EVERY = 60 * 1000; // look for changes this often
+const AUTO_BACK_OFF = 15 * 60 * 1000; // after a run that failed outright (Pipedrive down, a bad key)
+const parked = new Map(); // what didn't fully go → how it looked then; left be until it changes
+let resumeAt = 0;
+
+/** A plan's items by deal (ticket id), or by person ("p" and contact id) for new people. */
+function byKey(out) {
+  const m = new Map();
+  const put = (key, kind, item) => m.set(key, [...(m.get(key) || []), [kind, item]]);
+  ['deals', 'labels', 'products'].forEach((k) => (out[k] || []).forEach((x) => put(x.ticket_id, k, x)));
+  ['notes', 'activities', 'files'].forEach((k) => [...(out[k]?.add || []), ...(out[k]?.edit || [])].forEach((x) => put(x.ticket_id, k, x)));
+  (out.followers || []).forEach((x) => put(x.ticket_id, 'followers', x.people.map((u) => u.id)));
+  (out.contacts?.ids || []).forEach((id) => put(id, 'contacts', id));
+  (out.contacts?.add || []).forEach((c) => put(`p${c.id}`, 'contacts', c));
+  return new Map([...m].map(([k, items]) => [k, json.str(items)]));
+}
+/** The plan without these keys. */
+function without(out, gone) {
+  const keep = (x) => !gone.has(x.ticket_id);
+  ['deals', 'labels', 'products', 'followers'].forEach((k) => { if (out[k]) out[k] = out[k].filter(keep); });
+  ['notes', 'activities', 'files'].forEach((k) => { if (out[k]) ['add', 'edit'].forEach((x) => { if (out[k][x]) out[k][x] = out[k][x].filter(keep); }); });
+  if (out.contacts) {
+    out.contacts.ids = out.contacts.ids.filter((id) => !gone.has(id));
+    out.contacts.add = out.contacts.add.filter((c) => !gone.has(`p${c.id}`));
+  }
+  return out;
+}
+
+/** Send the Auto kinds' changes, if there are any and Pipedrive is free. Never deletions. */
+export function autoSend() {
+  const kinds = Object.entries(sendModes()).filter(([, m]) => m === 'auto').map(([k]) => k);
+  if (!kinds.length || !sendingAllowed() || syncStatus().running || Date.now() < resumeAt) return;
+  // A deal never sent (just linked, or Auto just turned on) starts from its followers and people as they are now.
+  kinds.filter((k) => SIGS[k]).forEach((k) => db.prepare(`UPDATE tickets AS t SET ${SIGS[k].column} = ${SIGS[k].sql}
+    WHERE t.pipedrive_id IS NOT NULL AND t.${SIGS[k].column} IS NULL`).run());
+  const planned = plan(kinds, {}, { auto: true });
+  const now = byKey(planned.out);
+  for (const [key, was] of parked) if (now.get(key) !== was) parked.delete(key);
+  if (![...now.keys()].some((key) => !parked.has(key))) return;
+  without(planned.out, new Set(parked.keys()));
+  runJob('auto-send to Pipedrive', (phase) => send(planned, phase), (result, e) => {
+    if (e) resumeAt = Date.now() + AUTO_BACK_OFF;
+    else result.troubled.forEach((key) => { if (now.has(key)) parked.set(key, now.get(key)); });
+    setSetting('pipedrive_last_auto', json.str({ at: new Date().toISOString(), kinds, ok: !e, ...(e ? { error: e.message } : { result: forLog(result) }) }));
+  });
+}
+
+/** Auto-send's last run, and how many deals (or people) are waiting because they didn't fully go. */
+export const autoStatus = () => ({ last: json.parse(getSetting('pipedrive_last_auto'), null), waiting: parked.size });
+
+export function scheduleAutoSend() {
+  setInterval(() => {
+    try { autoSend(); } catch (e) { console.error('Pipedrive auto-send:', e.message); }
+  }, AUTO_EVERY).unref();
+}
+
+/**
+ * Send what `plan` found. Alongside what was sent, conflicts, skips and errors, `troubled` names what didn't fully go
+ * (a deal's ticket id, or "p" and a person's contact id), so auto-send can leave it be until it changes.
+ */
+async function send({ out, tickets }, phase) {
   const sent = {};
   const count = (k, n = 1) => { sent[k] = (sent[k] || 0) + n; };
   const conflicts = [];
   const skipped = [];
   const errors = [];
-  const attempt = async (what, fn) => {
-    try { await fn(); } catch (e) { if (errors.length < LIST_MAX) errors.push(`${what}: ${e.message}`); }
+  const troubled = new Set();
+  const skip = (key, text) => { skipped.push(text); troubled.add(key); };
+  const attempt = async (what, fn, key) => {
+    try { await fn(); } catch (e) { if (errors.length < LIST_MAX) errors.push(`${what}: ${e.message}`); if (key != null) troubled.add(key); }
   };
   const ticketById = new Map(tickets.map((t) => [t.id, t]));
 
@@ -205,7 +304,7 @@ async function send(kinds, scope, phase) {
         const body = {};
         const sentFields = [];
         for (const f of d.fields) {
-          if (!same(now[f], snap[f])) { conflicts.push({ ticket_id: t.id, title: t.opportunity_title, field: FIELD_LABELS[f] }); continue; }
+          if (!same(now[f], snap[f])) { conflicts.push({ ticket_id: t.id, title: t.opportunity_title, field: FIELD_LABELS[f] }); troubled.add(t.id); continue; }
           const v = t[f];
           if (f === 'opportunity_title') body.title = v;
           else if (f === 'value') body.value = v ?? 0;
@@ -217,19 +316,19 @@ async function send(kinds, scope, phase) {
             else if (v === 'Lost') { body.status = 'lost'; if (t.lost_reason) body.lost_reason = t.lost_reason; }
             else {
               const stage = db.prepare('SELECT pipedrive_id FROM pipeline_stages WHERE pipeline_id = ? AND name = ? AND pipedrive_id IS NOT NULL').get(t.pipeline_id, v);
-              if (!stage) { skipped.push(`${t.opportunity_title}: Pipedrive has no "${v}" stage in this pipeline`); continue; }
+              if (!stage) { skip(t.id, `${t.opportunity_title}: Pipedrive has no "${v}" stage in this pipeline`); continue; }
               body.stage_id = stage.pipedrive_id;
               body.status = 'open';
             }
           } else if (f === 'bd_director_id') {
             const owner = pdUser(v);
-            if (!owner) { skipped.push(`${t.opportunity_title}: ${shown(f, v)} has no Pipedrive user, so the owner wasn't changed`); continue; }
+            if (!owner) { skip(t.id, `${t.opportunity_title}: ${shown(f, v)} has no Pipedrive user, so the owner wasn't changed`); continue; }
             body.owner_id = owner;
           } else if (f === 'territory_id') {
-            if (!accountField) { skipped.push(`${t.opportunity_title}: Pipedrive has no Account field`); continue; }
+            if (!accountField) { skip(t.id, `${t.opportunity_title}: Pipedrive has no Account field`); continue; }
             const option = v ? db.prepare('SELECT pipedrive_id FROM territories WHERE id = ?').get(v)?.pipedrive_id
               : accountField.options?.find((o) => o.label === 'N/A')?.id ?? null;
-            if (v && !option) { skipped.push(`${t.opportunity_title}: territory ${shown(f, v)} isn't an Account option in Pipedrive`); continue; }
+            if (v && !option) { skip(t.id, `${t.opportunity_title}: territory ${shown(f, v)} isn't an Account option in Pipedrive`); continue; }
             body.custom_fields = { [accountField.key]: option };
           }
           sentFields.push(f);
@@ -239,7 +338,7 @@ async function send(kinds, scope, phase) {
         const next = { ...snap, ...Object.fromEntries(sentFields.map((f) => [f, t[f] ?? null])) };
         db.prepare('UPDATE tickets SET pipedrive_snapshot = ? WHERE id = ?').run(snapshotOf(next, DEAL_TRACKED), t.id);
         count('deals');
-      });
+      }, t.id);
     }
   }
 
@@ -252,7 +351,7 @@ async function send(kinds, scope, phase) {
       await call(`deals/${t.pipedrive_id}`, {}, { method: 'PATCH', body: { label_ids: ids }, v2: true });
       db.prepare('UPDATE tickets SET labels_pending = 0 WHERE id = ?').run(t.id);
       count('labels');
-    });
+    }, t.id);
   }
 
   // Deletions first, so nothing deleted in KIT is touched below.
@@ -272,7 +371,8 @@ async function send(kinds, scope, phase) {
   // Notes: KIT's say who wrote them; notes from Pipedrive keep their own wording.
   if (out.notes) {
     phase('Sending notes');
-    const notes = db.prepare(NOTE_SQL).all({ ids: json.str(tickets.map((t) => t.id)) });
+    const chosen = new Set([...out.notes.add, ...out.notes.edit].map((m) => m.id));
+    const notes = db.prepare(NOTE_SQL).all({ ids: json.str(tickets.map((t) => t.id)) }).filter((m) => chosen.has(m.id));
     for (const m of notes) {
       await attempt(`Note on ${m.title}`, async () => {
         const fields = { content: `${m.kind === 'comment' ? byLine(m) : ''}${paragraphs(m.body)}`, pinned_to_deal_flag: m.pinned ? 1 : 0 };
@@ -285,7 +385,7 @@ async function send(kinds, scope, phase) {
           count('notesAdded');
         }
         db.prepare('UPDATE ticket_comments SET pipedrive_pending = 0 WHERE id = ?').run(m.id);
-      });
+      }, m.ticket_id);
     }
   }
 
@@ -317,7 +417,7 @@ async function send(kinds, scope, phase) {
         const view = activityView(data, owner);
         db.prepare('UPDATE ticket_tasks SET pipedrive_id = ?, pipedrive_snapshot = ? WHERE id = ?').run(data.id, snapshotOf(view, TASK_TRACKED), k.id);
         count('activitiesAdded');
-      });
+      }, a.ticket_id);
     }
     for (const [i, a] of out.activities.edit.entries()) {
       phase(`Sending activities (${out.activities.add.length + i + 1} of ${out.activities.add.length + out.activities.edit.length})`);
@@ -329,6 +429,7 @@ async function send(kinds, scope, phase) {
         const ok = a.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
           conflicts.push({ ticket_id: a.ticket_id, title: `${a.title} · ${a.text}`, field: FIELD_LABELS[f] });
+          troubled.add(a.ticket_id);
           return false;
         });
         if (!ok.length) return;
@@ -336,14 +437,15 @@ async function send(kinds, scope, phase) {
         const next = { ...snap, ...Object.fromEntries(ok.map((f) => [f, k[f] ?? null])) };
         db.prepare('UPDATE ticket_tasks SET pipedrive_snapshot = ? WHERE id = ?').run(snapshotOf(next, TASK_TRACKED), k.id);
         count('activitiesUpdated');
-      });
+      }, a.ticket_id);
     }
   }
 
   // Files: an upload goes as a file; a link goes as a note with the link.
   if (out.files) {
     phase('Sending files');
-    for (const f of db.prepare(FILE_SQL).all({ ids: json.str(tickets.map((t) => t.id)) })) {
+    const chosen = new Set(out.files.add.map((f) => f.id));
+    for (const f of db.prepare(FILE_SQL).all({ ids: json.str(tickets.map((t) => t.id)) }).filter((x) => chosen.has(x.id))) {
       await attempt(`File ${f.original_name}`, async () => {
         if (f.url) {
           const content = `${byLine(f)}<p>Linked document: <a href="${escapeHtml(f.url)}">${escapeHtml(f.original_name)}</a></p>`;
@@ -357,7 +459,7 @@ async function send(kinds, scope, phase) {
           db.prepare('UPDATE ticket_files SET pipedrive_id = ? WHERE id = ?').run(data.id, f.id);
         }
         count('filesAdded');
-      });
+      }, f.ticket_id);
     }
   }
 
@@ -368,14 +470,14 @@ async function send(kinds, scope, phase) {
     for (const item of out.products) {
       const p = db.prepare('SELECT * FROM ticket_products WHERE id = ?').get(item.id);
       const productId = catalog.get(String(p.name).toLowerCase());
-      if (!productId) { skipped.push(`${item.title}: "${p.name}" isn't in Pipedrive's product catalog`); continue; }
+      if (!productId) { skip(p.ticket_id, `${item.title}: "${p.name}" isn't in Pipedrive's product catalog`); continue; }
       await attempt(`Product ${p.name}`, async () => {
         const { data } = await call(`deals/${ticketById.get(p.ticket_id).pipedrive_id}/products`, {}, { method: 'POST', body: {
           product_id: productId, item_price: p.item_price, quantity: p.quantity, discount: p.discount, discount_type: 'percentage', comments: p.comments || '',
         } });
         db.prepare('UPDATE ticket_products SET pipedrive_id = ? WHERE id = ?').run(data.id, p.id);
         count('products');
-      });
+      }, p.ticket_id);
     }
   }
 
@@ -385,14 +487,15 @@ async function send(kinds, scope, phase) {
     const t = ticketById.get(x.ticket_id);
     if (x.missing.length) skipped.push(`${t.opportunity_title}: ${x.missing.join(', ')} ${x.missing.length === 1 ? 'has' : 'have'} no Pipedrive user`);
     const want = x.people.filter((u) => u.pipedrive_id);
-    if (!want.length) continue;
+    if (!want.length) { markSent('followers', t.id); continue; }
     await attempt(`Followers on ${t.opportunity_title}`, async () => {
       const following = new Set((await all(`deals/${t.pipedrive_id}/followers`)).map((f) => f.user_id));
       for (const u of want.filter((w) => !following.has(w.pipedrive_id))) {
         await call(`deals/${t.pipedrive_id}/followers`, {}, { method: 'POST', body: { user_id: u.pipedrive_id } });
         count('followers');
       }
-    });
+      markSent('followers', t.id);
+    }, t.id);
   }
 
   // People: new contacts become Pipedrive persons; each ticket's people become the deal's participants, and its
@@ -400,7 +503,7 @@ async function send(kinds, scope, phase) {
   if (out.contacts) {
     phase('Sending people');
     const linked = db.prepare(`SELECT tc.ticket_id, tc.is_primary, c.* FROM ticket_contacts tc JOIN contacts c ON c.id = tc.contact_id
-      WHERE tc.ticket_id IN (SELECT value FROM json_each(?))`).all(json.str(tickets.map((t) => t.id)));
+      WHERE tc.ticket_id IN (SELECT value FROM json_each(?))`).all(json.str(out.contacts.ids));
     for (const c of out.contacts.add) {
       const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(c.id);
       await attempt(`Person ${c.text}`, async () => {
@@ -411,7 +514,7 @@ async function send(kinds, scope, phase) {
         } });
         db.prepare('UPDATE contacts SET pipedrive_id = ? WHERE id = ?').run(data.id, row.id);
         count('peopleAdded');
-      });
+      }, `p${c.id}`);
     }
     const byTicket = new Map();
     linked.forEach((c) => byTicket.set(c.ticket_id, [...(byTicket.get(c.ticket_id) || []), c]));
@@ -419,6 +522,7 @@ async function send(kinds, scope, phase) {
       const t = ticketById.get(ticketId);
       await attempt(`People on ${t.opportunity_title}`, async () => {
         const pdIds = people.map((c) => ({ ...c, pd: db.prepare('SELECT pipedrive_id FROM contacts WHERE id = ?').get(c.id).pipedrive_id })).filter((c) => c.pd);
+        if (pdIds.length < people.length) troubled.add(t.id); // someone isn't in Pipedrive yet
         if (!pdIds.length) return;
         const { data: deal } = await call(`deals/${t.pipedrive_id}`);
         const on = new Set([idOf(deal.person_id), ...(await all(`deals/${t.pipedrive_id}/participants`)).map((p) => idOf(p.person_id))].filter(Boolean));
@@ -432,9 +536,10 @@ async function send(kinds, scope, phase) {
           await call(`deals/${t.pipedrive_id}/participants`, {}, { method: 'POST', body: { person_id: c.pd } });
           count('participantsAdded');
         }
-      });
+        if (pdIds.length === people.length) markSent('contacts', t.id);
+      }, t.id);
     }
   }
 
-  return { sent, conflicts: conflicts.slice(0, LIST_MAX), skipped: skipped.slice(0, LIST_MAX), errors };
+  return { sent, conflicts: conflicts.slice(0, LIST_MAX), skipped: skipped.slice(0, LIST_MAX), errors, troubled: [...troubled] };
 }
