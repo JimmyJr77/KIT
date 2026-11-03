@@ -38,9 +38,23 @@ export const mcpStatus = () => ({
 
 // ---------------------------------------------------------------- Airfare
 
+// Estimates assume a normal business trip: full-service airlines, flights leaving between 10am and 8pm local time.
+// Budget and ultra-low-cost carriers (IATA codes) are left out, as are red-eyes, early-morning departures and overnight layovers.
+export const BUDGET_AIRLINES = [
+  'NK', 'F9', 'G4', 'SY', 'XP', 'MX', 'WN', 'F8', 'Y4', 'VB', // North America
+  'FR', 'RK', 'U2', 'EC', 'DS', 'W6', 'W4', 'W9', 'VY', 'V7', 'HV', 'TO', 'DY', 'D8', 'EW', 'PC', 'LS', 'BY', // Europe
+  'AK', 'FD', 'D7', 'QZ', 'TR', 'JQ', '3K', 'GK', '5J', '6E', 'SG', 'IX', 'VJ', 'MM', 'ZG', '7C', 'LJ', 'TW', // Asia-Pacific
+  'G9', 'FZ', 'XY', 'J9', 'JA', 'H2', 'G3', // Middle East, Latin America
+];
+const BUDGET = new Set(BUDGET_AIRLINES);
+export const FLIGHT_HOURS = { from: 10, to: 20 };
+const hm = (iso) => Number(iso.slice(11, 13)) + Number(iso.slice(14, 16)) / 60;
+const isDaytime = (iso) => !!iso && hm(iso) >= FLIGHT_HOURS.from && hm(iso) <= FLIGHT_HOURS.to;
+const FLIGHT_RULE = 'full-service airlines, departing 10am–8pm';
+
 export function flightQuery({ tripType = 'round-trip', origin, destination, departDate, returnDate }) {
   const rt = tripType !== 'one-way';
-  return `Find a ${rt ? 'round-trip' : 'one-way'} flight from ${origin} to ${destination} departing on ${longDate(departDate)}${rt && returnDate ? ` and returning on ${longDate(returnDate)}` : ''}.`;
+  return `Find a ${rt ? 'round-trip' : 'one-way'} flight from ${origin} to ${destination} departing on ${longDate(departDate)}${rt && returnDate ? ` and returning on ${longDate(returnDate)}` : ''}, on full-service (not budget) airlines, departing between 10am and 8pm local time each way.`;
 }
 
 const FLIGHT_SCHEMA = {
@@ -75,13 +89,27 @@ export function kiwiArgs({ tripType = 'round-trip', origin, destination, originP
     cabinClass: 'M',
     currency: 'USD',
     locale: 'en',
+    // Full-service airlines and daytime departures only, both ways, on one ticket with no overnight layovers.
+    exclude_airlines: BUDGET_AIRLINES.join(','),
+    dtime_from: FLIGHT_HOURS.from,
+    dtime_to: FLIGHT_HOURS.to,
+    ...(tripType !== 'one-way' && returnDate ? { ret_dtime_from: FLIGHT_HOURS.from, ret_dtime_to: FLIGHT_HOURS.to } : {}),
+    allow_overnight_stopovers: false,
+    allow_self_transfer: false,
   };
 }
 
-/** Lowest fare, the middle-50% price band, airlines, and non-stop vs layover, per the Airfare prompt. */
+const legsOf = (i) => [i.outbound, i.inbound].filter(Boolean);
+
+/**
+ * Priced itineraries, cheapest first, keeping only those where every flight is on a full-service airline and each
+ * leg (out and back) departs 10:00–20:00 local time. Kiwi applies the same filters; this enforces them exactly
+ * (its hour filter lets 20:59 through).
+ */
 const kiwiItineraries = ({ text, structured }) =>
   ((structured?.itineraries ? structured : JSON.parse(text)).itineraries || [])
     .filter((i) => Number.isFinite(i.price))
+    .filter((i) => legsOf(i).length && legsOf(i).every((l) => isDaytime(l.departureTime) && (l.segments || []).every((s) => !BUDGET.has(s.carrier))))
     .sort((a, b) => a.price - b.price);
 
 /**
@@ -91,7 +119,7 @@ const kiwiItineraries = ({ text, structured }) =>
  */
 export function summarizeKiwi(result, tripType, nonstopResult) {
   const its = kiwiItineraries(result);
-  if (!its.length) throw new Error('No flights found for this route and dates');
+  if (!its.length) throw new Error(`No flights found for this route and dates (${FLIGHT_RULE})`);
   const legs = (i) => [i.outbound, i.inbound].filter(Boolean);
   const isNonstop = (i) => legs(i).every((l) => l.stops === 0);
   const prices = its.map((i) => i.price);
@@ -111,7 +139,8 @@ export function summarizeKiwi(result, tripType, nonstopResult) {
     nonstopPrice: nonstop?.price ?? null,
     bookingUrl: cheapest.bookingUrl,
     resultsCount: its.length,
-    summary: `Lowest ${tripType === 'one-way' ? 'one-way' : 'round-trip'} economy fare ${money(cheapest.price)} (${itinerary}: ${route})` +
+    rule: FLIGHT_RULE,
+    summary: `Lowest ${tripType === 'one-way' ? 'one-way' : 'round-trip'} economy fare on ${FLIGHT_RULE}: ${money(cheapest.price)} (${itinerary}: ${route})` +
       `${noCarryOn ? ', carry-on bag not included' : ''}. ` +
       (nonstop ? `Cheapest non-stop: ${money(nonstop.price)}.` : 'No non-stop fares found on Kiwi.com (it does not sell every airline).'),
   };
@@ -157,7 +186,7 @@ export async function estimateFlight(input) {
         FLIGHT_SCHEMA,
         { system: AIRFARE_PROMPT },
       );
-      return { ...base, source: 'mcp', ...est };
+      return { ...base, source: 'mcp', rule: FLIGHT_RULE, ...est };
     } catch (e) {
       return {
         ...base,
@@ -172,7 +201,8 @@ export async function estimateFlight(input) {
 
 function placeholderFlight({ tripType, intl }) {
   const rt = tripType !== 'one-way';
-  const p = (intl ? 1200 : 450) * (rt ? 1 : 0.6);
+  // Typical full-service daytime economy fares, a little above the cheapest budget fares.
+  const p = (intl ? 1300 : 550) * (rt ? 1 : 0.6);
   return {
     source: 'placeholder',
     lowestPrice: Math.round(p),
@@ -180,6 +210,7 @@ function placeholderFlight({ tripType, intl }) {
     averageHigh: Math.round(p * 1.4),
     airlines: [],
     itinerary: 'unknown',
+    rule: FLIGHT_RULE,
     summary: 'Placeholder estimate — configure AIRFARE_MCP_URL for live fares.',
   };
 }

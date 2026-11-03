@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Plane, TrainFront, Car, CarFront, Hotel, Utensils, Plus, Trash2, RefreshCw, Info, CalendarDays, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { PURPOSES, quarterFor, tripCosts, lodgingSegmentCost, mieCost, usd, nightsBetween } from '../lib/travelCalc.js';
+import { PURPOSES, quarterFor, tripCosts, lodgingSegmentCost, mieCost, usd, nightsBetween, DEFAULT_HOTEL_TAX_PCT, FEE_PER } from '../lib/travelCalc.js';
 import UserCombobox from '../components/UserCombobox.jsx';
 import LocationInput, { EMPTY_LOCATION, locationKey, locationLabel } from '../components/LocationInput.jsx';
 
@@ -47,7 +47,7 @@ export function newTrip(userId, mileageRate, from) {
     train: '',
     pov: { enabled: false, miles: '', roundTrip: true, rate: mileageRate },
     car: { enabled: false, mode: 'estimated', vehicleClass: 'Economy / Compact', location: '', pickupDate: '', pickupTime: '10:00', dropoffDate: '', dropoffTime: '10:00', datesCustom: false, estimate: null, bookedAmount: '' },
-    lodging: [{ id: uid(), hotelName: '', location: { ...EMPTY_LOCATION }, locationCustom: false, checkIn: '', checkOut: '', datesCustom: false, rates: null, ratesKey: '', overrideRate: '' }],
+    lodging: [{ id: uid(), hotelName: '', location: { ...EMPTY_LOCATION }, locationCustom: false, checkIn: '', checkOut: '', datesCustom: false, rates: null, ratesKey: '', overrideRate: '', taxPct: '', fees: [] }],
     mie: { rates: null, ratesKey: '', overrideRate: '' },
     events: [],
   };
@@ -350,6 +350,9 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
               ))}
               <Row k="Travel subtotal" v={costs.travel} />
               <Row k="Lodging" v={costs.lodging} />
+              <Row k="Room" v={costs.lodgingRoom} muted />
+              <Row k="Hotel taxes & fees" v={costs.lodgingTaxes} muted />
+              {costs.lodgingFees > 0 && <Row k="Custom hotel fees" v={costs.lodgingFees} muted />}
               <Row k="M&IE" v={costs.mie} />
               <Row k="Event fees" v={costs.events} />
             </dl>
@@ -480,9 +483,56 @@ function LodgingSegment({ seg, index, canRemove, onChange, onRemove }) {
           <Money label="Override nightly" value={seg.overrideRate} onChange={(overrideRate) => onChange({ overrideRate })} />
         </div>
       </div>
+      <HotelFees seg={seg} cost={c} onChange={onChange} />
       {seg.checkIn && seg.checkOut && nightsBetween(seg.checkIn, seg.checkOut) === 0 && (
         <p className="mt-2 text-xs text-amber-600">Check-out must be after check-in.</p>
       )}
+    </div>
+  );
+}
+
+/**
+ * What the hotel adds to the room rate: taxes and fees at a default rate (or the hotel's own), plus custom fees such as
+ * resort or parking fees. Kept per hotel, since rates and fees differ by city and by hotel.
+ */
+function HotelFees({ seg, cost, onChange }) {
+  const fees = seg.fees || [];
+  const update = (id, p) => onChange({ fees: fees.map((f) => (f.id === id ? { ...f, ...p } : f)) });
+  return (
+    <div className="mt-3 space-y-2 border-t border-slate-100 pt-3 text-sm">
+      <div className="flex items-center justify-between text-slate-600">
+        <span>Room · {cost.nights} night{cost.nights === 1 ? '' : 's'}</span><span>{usd(cost.room)}</span>
+      </div>
+      <div className="flex items-center justify-between gap-3 text-slate-600">
+        <span className="flex items-center gap-2">
+          Taxes & fees at
+          <span className="relative">
+            <input type="number" min="0" max="100" step="0.1" inputMode="decimal" className="input w-28 py-1 pr-7" aria-label="Hotel tax and fee rate"
+              placeholder={String(DEFAULT_HOTEL_TAX_PCT)} value={seg.taxPct ?? ''} onChange={(e) => onChange({ taxPct: e.target.value })} />
+            <span className="absolute top-1.5 right-2 text-slate-400">%</span>
+          </span>
+          {(seg.taxPct ?? '') === '' && <span className="text-xs text-slate-400">default</span>}
+        </span>
+        <span>{usd(cost.taxes)}</span>
+      </div>
+      {fees.map((f, i) => (
+        <div key={f.id} className="flex flex-wrap items-center gap-2">
+          <input className="input min-w-40 flex-1 py-1" placeholder="Fee (resort, parking, …)" aria-label="Fee name" value={f.label} onChange={(e) => update(f.id, { label: e.target.value })} />
+          <div className="relative w-24">
+            <span className="absolute top-1.5 left-3 text-slate-400">$</span>
+            <input type="number" min="0" step="0.01" inputMode="decimal" className="input py-1 pl-6" aria-label="Fee amount" value={f.amount ?? ''} onChange={(e) => update(f.id, { amount: e.target.value })} />
+          </div>
+          <select className="input w-32 py-1" aria-label="Fee charged" value={f.per} onChange={(e) => update(f.id, { per: e.target.value })}>
+            {FEE_PER.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+          </select>
+          <span className="ml-auto text-right text-slate-600">{usd(cost.fees[i]?.total)}</span>
+          <button type="button" className="text-slate-400 hover:text-red-600" onClick={() => onChange({ fees: fees.filter((x) => x.id !== f.id) })}
+            aria-label={`Remove ${f.label || 'this fee'}`}><Trash2 size={15} /></button>
+        </div>
+      ))}
+      <button type="button" className="text-sm text-brand-600 hover:underline" onClick={() => onChange({ fees: [...fees, { id: uid(), label: '', amount: '', per: 'night' }] })}>
+        <Plus size={13} className="mr-1 inline" />Add hotel fee
+      </button>
     </div>
   );
 }

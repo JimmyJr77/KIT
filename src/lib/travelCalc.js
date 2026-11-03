@@ -42,11 +42,32 @@ export function lodgingRateOn(seasons = [], iso) {
 
 const num = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
 
+/**
+ * Hotel taxes and fees assumed on top of the nightly rate (GSA lodging rates exclude them). US hotel
+ * occupancy and sales taxes plus fees typically run 13–18%; a hotel can set its own rate instead.
+ */
+export const DEFAULT_HOTEL_TAX_PCT = 15;
+
+/** Extra hotel fees someone can add to a stay: resort, parking, … charged per night or once per stay. */
+export const FEE_PER = [['night', 'per night'], ['stay', 'per stay']];
+
+/**
+ * A hotel stay: the room (nightly rate × nights), taxes and fees on the room at `taxPct`
+ * (default DEFAULT_HOTEL_TAX_PCT), and any custom fees.
+ */
 export function lodgingSegmentCost(seg = {}) {
   const nights = eachDate(seg.checkIn, seg.checkOut ? addDays(seg.checkOut, -1) : null);
   const override = num(seg.overrideRate);
   const perNight = nights.map((d) => ({ date: d, rate: override ?? lodgingRateOn(seg.rates?.seasons, d) }));
-  return { nights: perNight.length, perNight, total: perNight.reduce((s, n) => s + n.rate, 0) };
+  const room = perNight.reduce((s, n) => s + n.rate, 0);
+  const taxPct = num(seg.taxPct) ?? DEFAULT_HOTEL_TAX_PCT;
+  const taxes = Math.round(room * taxPct) / 100;
+  const fees = (seg.fees || []).map((f) => {
+    const amount = num(f.amount) ?? 0;
+    return { ...f, total: f.per === 'stay' ? amount : amount * perNight.length };
+  });
+  const feesTotal = fees.reduce((s, f) => s + f.total, 0);
+  return { nights: perNight.length, perNight, room, taxPct, taxes, fees, feesTotal, total: room + taxes + feesTotal };
 }
 
 /**
@@ -98,6 +119,9 @@ export function tripCosts(trip = {}) {
     pov: povCost(trip.pov),
     car: carCost(trip.car),
     lodging: lodging.reduce((s, l) => s + l.total, 0),
+    lodgingRoom: lodging.reduce((s, l) => s + l.room, 0),
+    lodgingTaxes: lodging.reduce((s, l) => s + l.taxes, 0),
+    lodgingFees: lodging.reduce((s, l) => s + l.feesTotal, 0),
     mie: mieCost(trip).total,
     events: (trip.events || []).reduce((s, e) => s + (num(e.fee) ?? 0), 0), // registration and other event fees
   };
