@@ -36,7 +36,7 @@ export default function BookingTargetsPanel() {
           {[-1, 0, 1, 2].map((d) => new Date().getFullYear() + d).map((y) => <option key={y} value={y}>{y}</option>)}
         </select>
       </div>
-      <p className="text-xs text-slate-500">What each BD director is expected to book (win) per quarter. Leave the year blank to use the sum of the quarters.</p>
+      <p className="text-xs text-slate-500">What each person on the BD team is expected to book (win) per quarter. Targets apply to the BD team only. Leave the year blank to use the sum of the quarters.</p>
       {error && <p className="text-sm text-red-600">{error}</p>}
       <div className="overflow-x-auto rounded-lg border border-slate-200">
         <table className="w-full min-w-[40rem] text-sm">

@@ -173,9 +173,14 @@ export function bookToBillByDirector(list, start, end) {
   }).filter((r) => r.booked || r.billed).sort((a, b) => b.booked - a.booked);
 }
 
+// Booking targets apply to the BD team only: a target counts while its person is on BD (someone who leaves BD keeps
+// theirs, unused, in case they come back).
+const BD_TARGETS = `SELECT * FROM booking_targets WHERE user_id IN
+  (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD')`;
+
 /** Booking targets for a year: per director (quarter 1–4, and the year, which is the sum of quarters when not set). */
 export function targets(year, director = null) {
-  const rows = db.prepare('SELECT * FROM booking_targets WHERE year = ?').all(year).filter((t) => !director || t.user_id === director);
+  const rows = db.prepare(`${BD_TARGETS} AND year = ?`).all(year).filter((t) => !director || t.user_id === director);
   const ids = [...new Set(rows.map((t) => t.user_id))];
   const quarter = (q) => sum(rows.filter((t) => t.quarter === q), (t) => t.amount);
   const yearTotal = sum(ids, (id) => {
@@ -187,7 +192,7 @@ export function targets(year, director = null) {
 
 /** The booking target for some quarters ("2025 Q4", …), across years. Someone with only a yearly target counts a quarter of it each quarter. */
 export function quartersTarget(qs, director = null) {
-  const rows = db.prepare('SELECT * FROM booking_targets WHERE year IN (SELECT value FROM json_each(?))').all(JSON.stringify([...new Set(qs.map((q) => Number(q.slice(0, 4))))]))
+  const rows = db.prepare(`${BD_TARGETS} AND year IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(qs.map((q) => Number(q.slice(0, 4))))]))
     .filter((t) => !director || t.user_id === director);
   return sum(qs, (q) => {
     const [y, n] = [Number(q.slice(0, 4)), Number(q.slice(-1))];
