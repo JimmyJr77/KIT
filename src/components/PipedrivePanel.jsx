@@ -146,12 +146,12 @@ const sentSummary = (sent) => Object.entries(sent || {}).map(([k, n]) => {
 }).join(' · ');
 
 const MODES = [
-  { key: 'off', label: 'Off', title: 'Never sent' },
-  { key: 'manual', label: 'Manual', title: 'Sent when you send from here' },
-  { key: 'auto', label: 'Auto', title: 'Sent on its own a minute or so after it changes, and when you send from here. Deletions only go when you send.' },
+  { key: 'off', label: 'Do not send', title: 'Never sent to Pipedrive' },
+  { key: 'manual', label: 'On push', title: 'Sent when you push from here, after a preview' },
+  { key: 'auto', label: 'Auto sync', title: 'Sent on its own a minute or so after it changes, and when you push from here. Deletions only go when you push.' },
 ];
 
-/** Off, Manual or Auto for one kind of change. */
+/** Do not send, On push or Auto sync for one kind of change. */
 function ModeChoice({ mode, onChange, label, hint, disabled }) {
   return (
     <div className="flex items-start justify-between gap-3 text-sm text-slate-700">
@@ -160,7 +160,7 @@ function ModeChoice({ mode, onChange, label, hint, disabled }) {
         {MODES.map((m) => (
           <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} title={m.title} disabled={disabled}
             onClick={() => mode !== m.key && onChange(m.key)}
-            className={`px-2 py-1 text-xs font-medium ${mode === m.key ? (m.key === 'auto' ? 'bg-brand-600 text-white' : m.key === 'manual' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-600') : 'bg-white text-slate-500 hover:bg-slate-50'}`}>
+            className={`whitespace-nowrap px-2 py-1 text-xs font-medium ${mode === m.key ? (m.key === 'auto' ? 'bg-brand-600 text-white' : m.key === 'manual' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-600') : 'bg-white text-slate-500 hover:bg-slate-50'}`}>
             {m.label}
           </button>
         ))}
@@ -263,7 +263,9 @@ function Preview({ p }) {
  */
 export function PipedriveSend({ status }) {
   const deals = useApi('/pipedrive/deals');
-  const [modes, setModes] = useState(null);
+  const [modes, setModes] = useState(null); // as saved
+  const [draft, setDraft] = useState(null); // as chosen here, until saved
+  const [saving, setSaving] = useState(false);
   const [which, setWhich] = useState('all'); // 'all', a pipeline id, or 'chosen'
   const [chosen, setChosen] = useState([]);
   const [p, setP] = useState(null);
@@ -272,7 +274,7 @@ export function PipedriveSend({ status }) {
   const s = status.data;
   const last = s?.lastSend;
   const auto = s?.auto;
-  useEffect(() => { if (s?.modes && !modes) setModes(s.modes); }, [s]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (s?.modes && !modes) { setModes(s.modes); setDraft(s.modes); } }, [s]); // eslint-disable-line react-hooks/exhaustive-deps
   const kinds = useMemo(() => KINDS.map((k) => k.key).filter((k) => modes && modes[k] !== 'off'), [modes]);
   const autoKinds = KINDS.filter((k) => modes?.[k.key] === 'auto');
   // While anything is on Auto, check every 30 seconds so its latest run shows.
@@ -282,16 +284,19 @@ export function PipedriveSend({ status }) {
     return () => clearTimeout(t);
   }, [s, autoKinds.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const choose = async (changes) => {
-    const turningOn = KINDS.filter((k) => changes[k.key] === 'auto' && modes[k.key] !== 'auto');
-    if (turningOn.length && !confirm(`Send ${turningOn.map((k) => k.label.toLowerCase()).join(', ')} to Pipedrive automatically? `
-      + 'Changes made in KIT from now on will update your real Pipedrive deals on their own, about a minute later. Deletions still wait for you to send.')) return;
-    setError('');
-    const before = modes;
-    setModes({ ...modes, ...changes });
-    try { setModes((await api.put('/pipedrive/send/modes', changes)).modes); } catch (e) { setModes(before); setError(e.message); }
+  const changed = KINDS.filter((k) => modes && draft && draft[k.key] !== modes[k.key]);
+  const pick = (changes) => setDraft({ ...draft, ...changes });
+  const all = (mode) => pick(Object.fromEntries(KINDS.map((k) => [k.key, mode])));
+  const save = async () => {
+    const turningOn = changed.filter((k) => draft[k.key] === 'auto');
+    if (turningOn.length && !confirm(`Auto sync ${turningOn.map((k) => k.label.toLowerCase()).join(', ')} to Pipedrive? `
+      + 'Changes made in KIT from now on will update your real Pipedrive deals on their own, about a minute later. Deletions still wait for you to push.')) return;
+    setError(''); setSaving(true);
+    try {
+      const saved = (await api.put('/pipedrive/send/modes', Object.fromEntries(changed.map((k) => [k.key, draft[k.key]])))).modes;
+      setModes(saved); setDraft(saved); status.reload();
+    } catch (e) { setError(e.message); } finally { setSaving(false); }
   };
-  const all = (mode) => choose(Object.fromEntries(KINDS.map((k) => [k.key, mode])));
 
   const body = useMemo(() => ({
     kinds, ...(which === 'chosen' ? { ticket_ids: chosen } : which !== 'all' ? { pipeline_id: Number(which) } : {}),
@@ -313,8 +318,8 @@ export function PipedriveSend({ status }) {
   return (
     <div className="space-y-4">
       <p className="text-xs text-slate-500">
-        Choose what goes to Pipedrive. <b>Manual</b> changes wait here until you send them. <b>Auto</b> changes go on their own about a minute
-        after they&apos;re made in KIT, and with your sends too. Deletions only ever go when you send. Before each field goes, KIT checks
+        Choose what goes to Pipedrive. <b>On push</b> changes wait here until you push them. <b>Auto sync</b> changes go on their own about a minute
+        after they&apos;re made in KIT, and with your pushes too. Deletions only ever go when you push. Before each field goes, KIT checks
         Pipedrive: if someone changed it there since the last pull, it&apos;s left alone and listed as a conflict, and the next pull brings
         Pipedrive&apos;s version.
       </p>
@@ -328,19 +333,29 @@ export function PipedriveSend({ status }) {
         <>
           <div className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
             {KINDS.map((k) => (
-              <ModeChoice key={k.key} mode={modes[k.key]} label={k.label} hint={k.hint} onChange={(m) => choose({ [k.key]: m })} />
+              <ModeChoice key={k.key} mode={draft[k.key]} label={k.label} hint={k.hint} disabled={saving}
+                onChange={(m) => pick({ [k.key]: m })} />
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" className="btn text-xs" onClick={() => all('manual')}>All manual</button>
-            <button type="button" className="btn text-xs" onClick={() => all('off')}>All off</button>
+            <button type="button" className="btn text-xs" onClick={() => all('manual')}>All on push</button>
+            <button type="button" className="btn text-xs" onClick={() => all('off')}>Send nothing</button>
+            {changed.length > 0 && (
+              <>
+                <span className="ml-auto text-xs text-amber-700">{plural(changed.length, 'unsaved change')}</span>
+                <button type="button" className="btn text-xs" onClick={() => setDraft(modes)} disabled={saving}>Discard</button>
+                <button type="button" className="btn-primary text-xs" onClick={save} disabled={saving}>
+                  {saving && <Loader2 size={13} className="animate-spin" />} Save changes
+                </button>
+              </>
+            )}
           </div>
         </>
       )}
       {autoKinds.length > 0 && (
         <Result ok={!auto?.last || (auto.last.ok && !auto.last.result?.errors?.length)}>
           <div className="flex flex-wrap items-center gap-x-1.5 font-medium">
-            <RefreshCw size={14} /> Auto: {autoKinds.map((k) => k.label.toLowerCase()).join(', ')}
+            <RefreshCw size={14} /> Auto sync: {autoKinds.map((k) => k.label.toLowerCase()).join(', ')}
             {!s?.sending && <span className="font-normal">· not on this server</span>}
           </div>
           <div className="mt-0.5 space-y-1 text-xs">
@@ -355,7 +370,7 @@ export function PipedriveSend({ status }) {
             {auto?.last?.ok && auto.last.result.skipped.length > 0 && <div>Skipped: {auto.last.result.skipped.join('; ')}</div>}
             {auto?.last?.ok && auto.last.result.errors.length > 0 && <div className="text-red-700">Failed: {auto.last.result.errors.join('; ')}</div>}
             {auto?.waiting > 0 && (
-              <div>{plural(auto.waiting, 'deal')} didn&apos;t fully go. Auto tries again when {auto.waiting === 1 ? 'it changes' : 'they change'} in KIT or Pipedrive, or send by hand.</div>
+              <div>{plural(auto.waiting, 'deal')} didn&apos;t fully go. Auto sync tries again when {auto.waiting === 1 ? 'it changes' : 'they change'} in KIT or Pipedrive, or send by hand.</div>
             )}
           </div>
         </Result>
@@ -383,7 +398,7 @@ export function PipedriveSend({ status }) {
         </button>
         <button type="button" className="btn-primary" onClick={send} disabled={!p || !s?.sending || s?.running}
           title={!p ? 'Preview first' : !s?.sending ? 'Sending is off on this server' : undefined}>
-          <Send size={15} /> Send to Pipedrive
+          <Send size={15} /> Push to Pipedrive
         </button>
         {s?.running && <span className="text-sm text-slate-500">Pipedrive is busy ({s.label}): {s.phase}…</span>}
       </div>
