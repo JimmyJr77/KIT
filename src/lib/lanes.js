@@ -1,9 +1,9 @@
 // Swim lanes on the Tickets page.
 //   Work tickets stay in whichever lane people put them (To-do to start).
-//   Bid tickets move on their own, unless locked:
+//   Pipeline tickets move on their own, unless locked:
 //     no activity since it was created → To-do; activity within 7 days → In work;
 //     7–14 days quiet → Stale / waiting; 14+ days quiet → back to To-do.
-//   A bid that's Awarded or Lost is Done, locked or not.
+//   A pipeline ticket that's Awarded or Lost is Done, locked or not.
 //   Done tickets archive 14 days after reaching Done. Any ticket can be archived by hand, from any lane.
 
 export const LANES = [

@@ -109,7 +109,7 @@ export default function Tickets() {
           ))}
         </div>
         <div className="flex h-[38px] gap-0.5 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="group" aria-label="Ticket types">
-          {[['bid', 'Bid tickets'], ['work', 'Work tickets']].map(([k, l]) => {
+          {[['bid', 'Pipeline tickets'], ['work', 'Work tickets']].map(([k, l]) => {
             const on = types.includes(k);
             return (
               <button key={k} type="button" aria-pressed={on} onClick={() => toggleType(k)} title={`${on ? 'Hide' : 'Show'} ${l.toLowerCase()}`} aria-label={l}
@@ -138,7 +138,7 @@ export default function Tickets() {
       {tickets && !live.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <Package size={28} className="mx-auto mb-2 text-slate-300" />
-          {!types.length ? 'Turn on bid or work tickets to see them.' : q ? 'No tickets match your search.' : types.length === 1 ? `No ${types[0]} tickets here.` : scope === 'mine'
+          {!types.length ? 'Turn on pipeline or work tickets to see them.' : q ? 'No tickets match your search.' : types.length === 1 ? `No ${types[0] === 'bid' ? 'pipeline' : types[0]} tickets here.` : scope === 'mine'
             ? `No master tickets yet, ${user.first_name}. They appear here once you create a priority or are assigned to one.`
             : 'No master tickets yet.'}
         </div>
@@ -221,7 +221,7 @@ function Stat({ icon: Icon, n, label, plural, accent }) {
   );
 }
 
-/** A ticket with a badge in its lower right: a green dollar for bid tickets, a yellow lightning bolt for work tickets. */
+/** A ticket with a badge in its lower right: a green dollar for pipeline tickets, a yellow lightning bolt for work tickets. */
 function TicketTypeIcon({ kind, dim }) {
   const bid = kind === 'bid';
   const Badge = bid ? DollarSign : Zap;

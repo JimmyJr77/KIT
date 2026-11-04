@@ -4,6 +4,8 @@ import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { PURPOSES, quarterFor, tripCosts, lodgingSegmentCost, mieCost, usd, nightsBetween, DEFAULT_HOTEL_TAX_PCT, FEE_PER } from '../lib/travelCalc.js';
 import UserCombobox from '../components/UserCombobox.jsx';
+import Money from '../components/Money.jsx';
+import { LockButton, EstimateLockPanel } from '../components/EstimateLock.jsx';
 import LocationInput, { EMPTY_LOCATION, locationKey, locationLabel } from '../components/LocationInput.jsx';
 
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -69,6 +71,7 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
   const [trip, setTrip] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [locking, setLocking] = useState(false);
   const costs = useMemo(() => tripCosts(trip), [trip]);
 
   const patch = (p) => setTrip((t) => ({ ...t, ...p }));
@@ -358,8 +361,12 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
             </dl>
             <div className="flex items-center justify-between border-t border-slate-200 pt-3">
               <span className="font-semibold">Total</span>
-              <span className="text-xl font-bold text-brand-700">{usd(costs.total)}</span>
+              <span className="flex items-center gap-2">
+                <span className="text-xl font-bold text-brand-700">{usd(trip.locked_estimate ? trip.locked_estimate.total : costs.total)}</span>
+                {trip.id && <LockButton locked={!!trip.locked_estimate} onClick={() => setLocking(true)} />}
+              </span>
             </div>
+            {trip.locked_estimate && <p className="text-xs text-slate-500">Locked. The details on this trip add up to {usd(costs.total)}.</p>}
             {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
             <button className="btn-primary w-full" onClick={save} disabled={saving}>
               {saving ? 'Submitting…' : trip.id ? 'Save travel request' : 'Submit travel request'}
@@ -371,6 +378,12 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
           {trip.id && <Approval trip={trip} onDecided={(t) => setTrip((x) => ({ ...x, ...pickApproval(t) }))} />}
         </aside>
       </div>
+      {locking && (
+        <EstimateLockPanel trip={trip} onClose={() => setLocking(false)} onSaved={(t) => {
+          setLocking(false);
+          setTrip((x) => ({ ...x, ...pickApproval(t), locked_estimate: t.locked_estimate, total_estimate: t.total_estimate }));
+        }} />
+      )}
     </div>
   );
 }
@@ -656,18 +669,6 @@ function Toggle({ checked, onChange, label }) {
 
 function DateField({ label, value, onChange }) {
   return <div><label className="label">{label}</label><input type="date" className="input" value={value || ''} onChange={(e) => onChange(e.target.value)} /></div>;
-}
-
-function Money({ label, value, onChange }) {
-  return (
-    <div>
-      <label className="label">{label}</label>
-      <div className="relative">
-        <span className="absolute top-2 left-3 text-sm text-slate-400">$</span>
-        <input type="number" min="0" step="0.01" inputMode="decimal" className="input pl-6" value={value ?? ''} onChange={(e) => onChange(e.target.value)} />
-      </div>
-    </div>
-  );
 }
 
 function ResetDates({ show, onClick }) {

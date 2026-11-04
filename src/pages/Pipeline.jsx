@@ -10,7 +10,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
-import NewTicketPanel from './NewTicketPanel.jsx';
+import NewTicketPanel, { PIPELINE_CLOSED_HINT } from './NewTicketPanel.jsx';
 import PwinSettings from './PwinSettings.jsx';
 import { LabelList, TagFilter, byTags } from '../components/Labels.jsx';
 import { PipelineViewToggle } from './LostTickets.jsx';
@@ -18,7 +18,7 @@ import NextStepBadge from '../components/NextStepBadge.jsx';
 
 const NO_STAGE = '__none__';
 const money = (n) => usd(n).replace('.00', '');
-// Closed-out stages are set apart from the active pipeline. Lost bids aren't on the board: the Lost view lists them.
+// Closed-out stages are set apart from the active pipeline. Lost pipeline tickets aren't on the board: the Lost view lists them.
 const CLOSED = new Set(['Awarded', 'Lost']);
 
 /** Master tickets as a board, one column per pipeline stage. Drag a ticket to move it to another stage. */
@@ -77,12 +77,12 @@ export default function Pipeline() {
   }, []);
 
   const load = () => {
-    const p = new URLSearchParams({ scope, q, kind: 'bid' }); // only bid tickets move through the pipeline
+    const p = new URLSearchParams({ scope, q, kind: 'bid' }); // only pipeline tickets move through the pipeline
     const owners = filters.filter((f) => f.startsWith('o:')).map((f) => f.slice(2));
     const terrs = filters.filter((f) => f.startsWith('t:')).map((f) => f.slice(2));
     if (owners.length) p.set('owners', owners.join(','));
     if (terrs.length) p.set('territories', terrs.join(','));
-    // Archived bids (closed more than 14 days ago, or archived by hand) live in the Archive, not on the board.
+    // Archived pipeline tickets (closed more than 14 days ago, or archived by hand) live in the Archive, not on the board.
     return api.get(`/tickets?${p}`).then((d) => setTickets(d.tickets.filter((t) => !t.archived)));
   };
   useEffect(() => {
@@ -98,10 +98,10 @@ export default function Pipeline() {
     ...(territories.data?.territories || []).map((t) => ({ value: `t:${t.id}`, label: t.name, group: 'Territories' })),
   ], [users.data, territories.data]);
 
-  // One board per pipeline: KIT's own, plus one for each Pipedrive pipeline. KIT's own shows only when it has bids or
+  // One board per pipeline: KIT's own, plus one for each Pipedrive pipeline. KIT's own shows only when it has pipeline tickets or
   // is the only one.
   const keyOf = (id) => (id == null ? 'kit' : String(id));
-  // What the board shows: everything but lost bids, narrowed to the chosen tags.
+  // What the board shows: everything but lost pipeline tickets, narrowed to the chosen tags.
   const shown = useMemo(() => (tickets || []).filter((t) => t.pipeline_status !== 'Lost').filter(byTags(tags)), [tickets, tags]);
   const pipelines = useMemo(() => {
     const list = meta.data?.pipelines || [];
@@ -146,7 +146,7 @@ export default function Pipeline() {
   return (
     <div className="flex h-full flex-col">
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
-        <PageHeader title="BD Pipeline" subtitle="Bid tickets by pipeline stage. Drag a ticket to move it.">
+        <PageHeader title="BD Pipeline" subtitle="Pipeline tickets by stage. Drag a ticket to move it.">
           <div className="w-80 text-left">
             <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or territory…" />
           </div>
@@ -160,7 +160,8 @@ export default function Pipeline() {
           <button type="button" className="btn h-9 py-0" onClick={() => setSettingsOpen(true)}><Settings size={15} /> Settings</button>
         </PageHeader>
         <div className="flex flex-wrap items-center gap-4">
-          <button type="button" onClick={() => setCreating(true)} title="New ticket" aria-label="New ticket"
+          <button type="button" onClick={() => setCreating(true)} disabled={!!meta.data?.pipelineTicketsClosed} aria-label="New ticket"
+            title={meta.data?.pipelineTicketsClosed ? PIPELINE_CLOSED_HINT : 'New ticket'}
             className="btn-primary h-[38px] w-[38px] shrink-0 p-0"><Plus size={18} /></button>
           <div className="relative w-full max-w-md">
             <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />

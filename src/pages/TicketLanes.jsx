@@ -12,15 +12,15 @@ import NextStepBadge from '../components/NextStepBadge.jsx';
 
 const money = (n) => usd(n).replace('.00', '');
 const HINT = {
-  todo: 'New tickets, and bids quiet for 14+ days',
-  in_work: 'Bids with activity in the last 7 days',
-  stale: 'Bids quiet for 7–14 days',
+  todo: 'New tickets, and PL tickets quiet for 14+ days',
+  in_work: 'PL tickets with activity in the last 7 days',
+  stale: 'PL tickets quiet for 7–14 days',
   done: `Won, lost, or finished. Archives after 14 days.`,
 };
 
 /**
  * Tickets as swim lanes: To-do, In work, Stale / waiting, Done. Drag a card to move it. Work tickets only move
- * when dragged; bid tickets move on their own unless locked (dragging one locks it where it lands).
+ * when dragged; pipeline tickets move on their own unless locked (dragging one locks it where it lands).
  */
 export default function TicketLanes({ tickets, onOpen, onOpenStep, onChanged }) {
   const [board, setBoard] = useState(tickets);
@@ -124,7 +124,7 @@ function LaneCard({ ticket: t, now, overlay, onOpenStep, onLock, onArchive }) {
       <NextStepBadge step={t.next_step} onOpen={() => onOpenStep?.(t)} className="absolute top-1/2 right-2.5 -translate-y-1/2" />
       <div className="flex items-start justify-between gap-2">
         <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
-        <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${isBid ? 'bg-brand-50 text-brand-700' : 'bg-slate-200 text-slate-700'}`}>{isBid ? 'Bid' : 'Work'}</span>
+        <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${isBid ? 'bg-brand-50 text-brand-700' : 'bg-slate-200 text-slate-700'}`}>{isBid ? 'PL' : 'Work'}</span>
       </div>
       <div className="mt-0.5 h-4 truncate text-xs text-slate-500">{[t.organization, t.pipeline_status].filter(Boolean).join(' · ')}</div>
       <LabelList labels={t.labels} className="mt-1.5" />

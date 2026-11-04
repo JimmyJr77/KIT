@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullName } from '../lib/format.js';
 
-/** People who can direct a bid: everyone on the BD team, plus whoever the ticket already names. */
+/** People who can direct a pipeline ticket: everyone on the BD team, plus whoever the ticket already names. */
 function useDirectors(currentId) {
   const users = useApi('/users');
   const all = users.data?.users || [];
@@ -45,7 +45,7 @@ export function AssignmentFields({ value, onChange }) {
   );
 }
 
-/** At the top of a bid ticket: who directs it, which territory it's in, and when it's expected to be won. Each change saves right away. */
+/** At the top of a pipeline ticket: who directs it, which territory it's in, and when it's expected to be won. Each change saves right away. */
 export function AssignmentBar({ ticket, onChanged }) {
   const directors = useDirectors(ticket.bd_director_id);
   const territories = useApi('/territories').data?.territories || [];

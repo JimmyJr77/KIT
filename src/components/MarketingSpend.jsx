@@ -20,12 +20,12 @@ function rangeDates(range, custom) {
 }
 
 const BREAKDOWNS = [
-  ['byAccount', 'By account', 'Account'], ['byTerritory', 'By territory', 'Territory'], ['byTicket', 'By bid ticket', 'Bid ticket'],
+  ['byAccount', 'By account', 'Account'], ['byTerritory', 'By territory', 'Territory'], ['byTicket', 'By pipeline ticket', 'Pipeline ticket'],
   ['byPerson', 'By person', 'Person'], ['byEvent', 'By event', 'Event'], ['byCategory', 'By category', 'Category'],
 ];
 
 /**
- * Marketing spend: what was spent and who or what it was for (an account, territory, bid ticket, person or event, as
+ * Marketing spend: what was spent and who or what it was for (an account, territory, pipeline ticket, person or event, as
  * specific as it's known), with totals each way. The Marketing team and admins add and edit entries; everyone can see them.
  * `entries` false leaves out the list of entries (for the Company dashboard).
  */
@@ -61,8 +61,8 @@ export default function MarketingSpend({ entries: showEntries = true }) {
         <>
           <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))]">
             <StatTile label="Marketing spend" value={compact(s.total)} sub={`${s.entries} entr${s.entries === 1 ? 'y' : 'ies'}`} />
-            <StatTile label="Tied to a person" value={compact(attributed)} sub="Directly, through a bid ticket, or split across an event's attendees" />
-            <StatTile label="Tied to a bid ticket" value={compact(s.byTicket.filter((x) => x.key).reduce((t, x) => t + x.value, 0))} />
+            <StatTile label="Tied to a person" value={compact(attributed)} sub="Directly, through a pipeline ticket, or split across an event's attendees" />
+            <StatTile label="Tied to a pipeline ticket" value={compact(s.byTicket.filter((x) => x.key).reduce((t, x) => t + x.value, 0))} />
             <StatTile label="Company-wide" value={compact(s.byPerson.find((p) => !p.key)?.value || 0)} sub="Not tied to anyone" />
           </div>
           <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
@@ -112,7 +112,7 @@ function EntryList({ entries, canManage, onEdit }) {
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-600">
                   {e.event_name && <div>Event: {e.event_name}</div>}
-                  {e.ticket_title && <div>Bid: {e.ticket_title}</div>}
+                  {e.ticket_title && <div>Pipeline ticket: {e.ticket_title}</div>}
                   <div className="text-slate-500">{e.shares.length ? `${e.split ? 'Split: ' : ''}${e.shares.map((x) => x.name).join(', ')}` : 'Company-wide'}</div>
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-600">{[e.account, e.resolved_territory].filter(Boolean).join(' · ') || '—'}</td>
@@ -142,7 +142,7 @@ function SpendForm({ entry, categories, onClose, onSaved }) {
   const tickets = useApi('/tickets?scope=all&kind=bid').data?.tickets || [];
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const ticket = tickets.find((t) => t.id === Number(f.ticket_id));
-  const matches = useMemo(() => (ticketQ ? tickets.filter((t) => `${t.opportunity_title} ${t.organization || ''}`.toLowerCase().includes(ticketQ.toLowerCase())).slice(0, 50) : []), [tickets, ticketQ]);
+  const matches = useMemo(() => (ticketQ ? tickets.filter((t) => !t.archived_at && `${t.opportunity_title} ${t.organization || ''}`.toLowerCase().includes(ticketQ.toLowerCase())).slice(0, 50) : []), [tickets, ticketQ]);
   const people = [...users].filter((u) => u.active !== 0).sort((a, b) => fullName(a).localeCompare(fullName(b)));
 
   const submit = (e) => {
@@ -191,7 +191,7 @@ function SpendForm({ entry, categories, onClose, onSaved }) {
               {events.map((ev) => <option key={ev.id} value={ev.id}>{ev.name} · {longDate(ev.date_from)}</option>)}
             </select>
           </Field>
-          <Field label="Bid ticket">
+          <Field label="Pipeline ticket">
             {ticket ? (
               <div className="flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm">
                 <span className="min-w-0 flex-1 truncate">{ticket.opportunity_title}{ticket.organization ? ` · ${ticket.organization}` : ''}</span>
@@ -199,7 +199,7 @@ function SpendForm({ entry, categories, onClose, onSaved }) {
               </div>
             ) : (
               <div>
-                <input className="input" placeholder="Search bid tickets" value={ticketQ} onChange={(e) => setTicketQ(e.target.value)} />
+                <input className="input" placeholder="Search pipeline tickets" value={ticketQ} onChange={(e) => setTicketQ(e.target.value)} />
                 {matches.length > 0 && (
                   <ul className="mt-1 max-h-48 overflow-y-auto rounded-md border border-slate-200">
                     {matches.map((t) => (
@@ -216,14 +216,14 @@ function SpendForm({ entry, categories, onClose, onSaved }) {
           </Field>
           <Field label="Person (e.g. the BD director)">
             <select className="input" value={f.user_id} onChange={set('user_id')}>
-              <option value="">{ticket ? "The bid's BD director" : f.event_id ? 'Split between who attends' : 'Nobody'}</option>
+              <option value="">{ticket ? "The pipeline ticket's BD director" : f.event_id ? 'Split between who attends' : 'Nobody'}</option>
               {people.map((u) => <option key={u.id} value={u.id}>{fullName(u)}</option>)}
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Territory">
               <select className="input" value={f.territory_id} onChange={set('territory_id')}>
-                <option value="">{ticket ? "The bid's" : '—'}</option>
+                <option value="">{ticket ? "The pipeline ticket's" : '—'}</option>
                 {territories.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             </Field>

@@ -1,4 +1,4 @@
-// The Activity section on bid and work tickets. As in Pipedrive, an activity is a call, meeting, lunch and so on, with a
+// The Activity section on pipeline and work tickets. As in Pipedrive, an activity is a call, meeting, lunch and so on, with a
 // date, the people taking part, and a checkbox for when it's done. A ticket's activities are its priorities, in order:
 // the top open one is its next step. Each can have subtasks, and comments that show in the ticket's history. Priority
 // cards on the Weekly Priorities board are activities placed in someone's week (see server/activities.js).

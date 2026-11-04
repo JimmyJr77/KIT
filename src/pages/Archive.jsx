@@ -8,10 +8,10 @@ import PageHeader from '../components/PageHeader.jsx';
 import { archiveAll as archiveAllPrompt, contents, plural } from '../components/ArchiveAllPanel.jsx';
 
 const money = (n) => (n == null ? '' : usd(n).replace('.00', ''));
-const TABS = [['bid', 'Bid tickets'], ['work', 'Work tickets'], ['cards', 'Priority cards'], ['datasets', 'Datasets']];
+const TABS = [['bid', 'Pipeline tickets'], ['work', 'Work tickets'], ['cards', 'Priority cards'], ['datasets', 'Datasets']];
 
 /**
- * Everything taken off the boards: bid tickets, work tickets and priority cards. Select some or all to restore them,
+ * Everything taken off the boards: pipeline tickets, work tickets and priority cards. Select some or all to restore them,
  * or (admins) delete them for good. Admins can also archive everything at once as a dataset, then load a dataset back
  * or delete it.
  */
@@ -55,7 +55,9 @@ export default function Archive() {
   const remove = () => {
     const cards = tab === 'cards' ? 0 : picked.reduce((s, r) => s + r.card_count, 0);
     const files = tab === 'cards' ? 0 : picked.reduce((s, r) => s + r.file_count, 0);
-    const extra = [cards && `${cards} priority card${cards === 1 ? '' : 's'}`, files && `${files} document${files === 1 ? '' : 's'}`].filter(Boolean);
+    const contracts = tab === 'cards' ? 0 : picked.reduce((s, r) => s + (r.contract_count || 0), 0);
+    const extra = [cards && `${cards} priority card${cards === 1 ? '' : 's'}`, files && `${files} document${files === 1 ? '' : 's'}`,
+      contracts && `${contracts} won contract${contracts === 1 ? '' : 's'} with its funding and billing`].filter(Boolean);
     const text = `Permanently delete ${picked.length} ${noun(picked.length)}?${extra.length ? ` This also deletes ${extra.join(' and ')} on ${picked.length === 1 ? 'it' : 'them'}, plus comments, tasks and history.` : ''}\n\nThis can't be undone.`;
     if (!confirm(text)) return;
     run(() => api.post('/archive/delete', body()), (r) => `Deleted ${r.deleted.tickets ? `${r.deleted.tickets} ticket${r.deleted.tickets === 1 ? '' : 's'} and ` : ''}${r.deleted.cards} priority card${r.deleted.cards === 1 ? '' : 's'} for good.`);
@@ -71,7 +73,7 @@ export default function Archive() {
     run(() => api.post(`/archive/datasets/${d.id}/load`), () => `Loaded “${d.name}” back onto the boards.`);
   };
   const deleteSet = (d) => {
-    if (!confirm(`Permanently delete “${d.name}”? This deletes its ${contents(d)}${d.files ? ` and ${plural(d.files, 'document')}` : ''}, plus their comments, tasks, activities and history.\n\nThis can't be undone.`)) return;
+    if (!confirm(`Permanently delete “${d.name}”? This deletes its ${contents(d)}${d.files ? ` and ${plural(d.files, 'document')}` : ''}, plus their comments, tasks, activities, history and won contracts.\n\nThis can't be undone.`)) return;
     run(() => api.del(`/archive/datasets/${d.id}`), () => `Deleted “${d.name}” for good.`);
   };
 

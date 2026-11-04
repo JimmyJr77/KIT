@@ -5,9 +5,9 @@ import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 
 export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-const KINDS = [['bid', 'bid ticket'], ['work', 'work ticket'], ['cards', 'priority card'], ['contacts', 'contact'], ['events', 'event'],
+const KINDS = [['bid', 'pipeline ticket'], ['work', 'work ticket'], ['cards', 'priority card'], ['contacts', 'contact'], ['events', 'event'],
   ['trips', 'trip'], ['contracts', 'contract'], ['targets', 'booking target'], ['objectives', 'account objective']];
-/** "3 bid tickets, 1 work ticket and 12 priority cards", leaving out what's zero. */
+/** "3 pipeline tickets, 1 work ticket and 12 priority cards", leaving out what's zero. */
 export const contents = (d) => {
   const parts = KINDS.filter(([k]) => d[k]).map(([k, word]) => plural(d[k], word));
   return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] || 'nothing';

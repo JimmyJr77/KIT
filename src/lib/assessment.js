@@ -1,4 +1,4 @@
-// The win assessment on a bid ticket: eight criteria, each with prompts to fill in and a 1–5 score.
+// The win assessment on a pipeline ticket: eight criteria, each with prompts to fill in and a 1–5 score.
 // Stored on the ticket as { [criterion key]: { score, answers: { [prompt key]: text } } }.
 // Each criterion also carries its default PWIN weight, the reason for it, and whether it's a must-have;
 // teams can change weights and must-haves in BD Pipeline › Settings.

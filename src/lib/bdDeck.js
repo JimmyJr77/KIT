@@ -76,7 +76,7 @@ export function buildDeck(pptx, r) {
   const g = page(pptx, 'At a glance', null, r);
   const tiles = [
     [`Booked, ${r.period}`, money(m.bookings.amount), m.bookings.target ? `${value(m.bookings)} of ${money(m.bookings.target)} target` : 'No target set'],
-    ['Qualified pipeline', money(bd.qualified.value), `${bd.qualified.count} bids, Qualified onward`],
+    ['Qualified pipeline', money(bd.qualified.value), `${bd.qualified.count} PL tickets, Qualified onward`],
     ['Expected, next 4 quarters', money(q.reduce((s, x) => s + x.weighted, 0)), `PWIN-weighted · ${money(bd.expected.undetermined.value)} undetermined`],
     ['Backlog', money(bd.backlog.total), `${money(bd.backlog.fundedBacklog)} funded · ${money(bd.backlog.unfundedBacklog)} unfunded`],
   ];
@@ -117,12 +117,12 @@ export function buildDeck(pptx, r) {
   }
 
   // 5. Pipeline by stage
-  const ps = page(pptx, 'Pipeline by stage', 'Every bid, open and closed, by value', r);
+  const ps = page(pptx, 'Pipeline by stage', 'Every pipeline ticket, open and closed, by value', r);
   ps.addChart(pptx.ChartType.bar, [{ name: 'Value', labels: bd.stages.map((s) => `${s.stage} (${s.count})`), values: bd.stages.map((s) => s.value) }],
     { ...chartBase, x: 0.5, y: 1.6, w: 12.3, h: 5.2, barDir: 'bar', chartColors: [SERIES[0]], showValue: true, showLegend: false, catAxisOrientation: 'maxMin', barGapWidthPct: 60 });
 
   // 6. Projected bookings by quarter
-  const ex = page(pptx, 'Projected bookings by quarter', 'Open bids by projected win date. With a PWIN: value × PWIN. Without one: full value, shown apart.', r);
+  const ex = page(pptx, 'Projected bookings by quarter', 'Open pipeline tickets by projected win date. With a PWIN: value × PWIN. Without one: full value, shown apart.', r);
   ex.addChart(pptx.ChartType.bar, [
     { name: 'PWIN-adjusted (value × PWIN)', labels: q.map((x) => x.quarter), values: q.map((x) => x.adjusted.weighted) },
     { name: 'No PWIN yet (full value)', labels: q.map((x) => x.quarter), values: q.map((x) => x.unadjusted.value) },
@@ -133,13 +133,13 @@ export function buildDeck(pptx, r) {
     { x: 9.1, y: 2.15, w: 3.7, colW: [1.7, 2.0], border: { type: 'solid', pt: 0.5, color: LINE } });
 
   // 7. Qualified pipeline by territory and director
-  const qp = page(pptx, 'Qualified pipeline', 'Open bids, Qualified onward', r);
+  const qp = page(pptx, 'Qualified pipeline', 'Open pipeline tickets, Qualified onward', r);
   [['By territory', bd.qualifiedByTerritory, 0.5], ['By BD director', bd.qualifiedByDirector, 6.85]].forEach(([title, rows, x]) => {
     qp.addText(title, { x, y: 1.55, w: 5.9, h: 0.4, fontFace: FONT, fontSize: 14, bold: true, color: INK });
     if (rows.length) {
       qp.addChart(pptx.ChartType.bar, [{ name: 'Value', labels: rows.map((g2) => g2.name), values: rows.map((g2) => g2.value) }],
         { ...chartBase, x, y: 2.0, w: 5.9, h: 4.8, barDir: 'bar', chartColors: [SERIES[0]], showValue: true, showLegend: false, catAxisOrientation: 'maxMin', barGapWidthPct: 60 });
-    } else qp.addText('No qualified bids.', { x, y: 2.1, w: 5.9, h: 0.4, fontFace: FONT, fontSize: 12, color: MUTED });
+    } else qp.addText('No qualified pipeline tickets.', { x, y: 2.1, w: 5.9, h: 0.4, fontFace: FONT, fontSize: 12, color: MUTED });
   });
 
   // 8. Bookings funded and unfunded
@@ -173,9 +173,9 @@ export function buildDeck(pptx, r) {
   // 10. Stalled pursuits
   const stalled = m.progression.stalled;
   if (stalled.length) {
-    const st = page(pptx, `Stalled pursuits (${stalled.length})`, 'Open bids with no stage change in 45+ days, or past their projected win date', r);
+    const st = page(pptx, `Stalled pursuits (${stalled.length})`, 'Open pipeline tickets with no stage change in 45+ days, or past their projected win date', r);
     st.addTable([
-      [head('Bid'), head('Stage'), head('BD director'), head('Value', 'right'), head('Days since stage change', 'right')],
+      [head('PL ticket'), head('Stage'), head('BD director'), head('Value', 'right'), head('Days since stage change', 'right')],
       ...stalled.map((x) => [cell(x.title), cell(x.stage), cell(x.director || '—'), cell(money(x.value), { align: 'right' }), cell(`${x.days}${x.overdue ? ' · past win date' : ''}`, { align: 'right' })]),
     ], { ...TABLE, colW: [4.8, 1.6, 2.4, 1.5, 2.0] });
   }

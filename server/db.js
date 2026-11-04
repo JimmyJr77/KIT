@@ -344,14 +344,17 @@ addColumn('users', 'travel_from', 'TEXT');
 addColumn('users', 'travel_from_asked', 'INTEGER NOT NULL DEFAULT 0');
 // A trip's event fees: [{ id, event_id, name, fee }]. A trip planned from an event starts with that event's fee.
 addColumn('trips', 'events', "TEXT NOT NULL DEFAULT '[]'");
+// A trip's locked estimate: { costs: { airfare, train, pov, car, lodging, mie, events }, override, total }. While set,
+// total_estimate holds its total, and neither re-pricing nor edits to the trip change it. NULL when unlocked.
+addColumn('trips', 'locked_estimate', 'TEXT');
 // Swim lanes on the Tickets page (todo | in_work | stale | done). Work tickets keep the lane people put them in;
-// bid tickets move on their own from their activity unless lane_locked holds them where they are.
+// pipeline tickets move on their own from their activity unless lane_locked holds them where they are.
 addColumn('tickets', 'lane', 'TEXT');
 addColumn('tickets', 'lane_locked', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('tickets', 'done_at', 'TEXT');      // when it reached Done; it archives 14 days later
 addColumn('tickets', 'archived_at', 'TEXT');  // archived early by hand
 db.exec(`
--- A bid that's won or lost is done: it moves to Done, unlocked. Reopening it brings it back.
+-- A pipeline ticket that's won or lost is done: it moves to Done, unlocked. Reopening it brings it back.
 CREATE TRIGGER IF NOT EXISTS tickets_lane_on_close AFTER UPDATE OF pipeline_status ON tickets
 WHEN NEW.ticket_type = 'bid' AND NEW.pipeline_status IN ('Awarded', 'Lost')
   AND (OLD.pipeline_status IS NULL OR OLD.pipeline_status NOT IN ('Awarded', 'Lost'))
@@ -370,7 +373,7 @@ BEGIN
   UPDATE tickets SET done_at = datetime('now') WHERE id = NEW.id;
 END;
 `);
-// Bids already closed before lanes existed are done as of their last update.
+// Pipeline tickets already closed before lanes existed are done as of their last update.
 db.exec(`UPDATE tickets SET done_at = updated_at WHERE ticket_type = 'bid' AND pipeline_status IN ('Awarded', 'Lost') AND done_at IS NULL`);
 
 // A work ticket made from an event's marketing support request links back to the event.
@@ -406,7 +409,7 @@ CREATE TABLE IF NOT EXISTS ticket_steps (
 );
 CREATE INDEX IF NOT EXISTS ticket_steps_ticket ON ticket_steps(ticket_id);
 
--- Process flow on a bid ticket: RFI, RFP, gate reviews, ROM, proposal and so on, in the order they happen.
+-- Process flow on a pipeline ticket: RFI, RFP, gate reviews, ROM, proposal and so on, in the order they happen.
 -- reviews is JSON keyed by review area (technical, pricing, strategy, support): { people: [user ids], notes }.
 CREATE TABLE IF NOT EXISTS ticket_process_steps (
   id INTEGER PRIMARY KEY,
@@ -471,7 +474,7 @@ CREATE TABLE IF NOT EXISTS user_territories (
   PRIMARY KEY (user_id, territory_id)
 );
 `);
-// Each bid ticket belongs to one BD director and one territory.
+// Each pipeline ticket belongs to one BD director and one territory.
 addColumn('tickets', 'bd_director_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 addColumn('tickets', 'territory_id', 'INTEGER REFERENCES territories(id) ON DELETE SET NULL');
 // Territories are the options of Pipedrive's "Account" deal field, named as Pipedrive names them (the sync keeps them so).
@@ -484,7 +487,7 @@ if (!hadTerritories) {
   const add = db.prepare('INSERT INTO territories (name, position) VALUES (?, ?)');
   ['Army', 'Navy/USMC', 'USAF/USSF', 'DoD 4th Estate', 'DHS/DOJ', 'Intel', 'FedCiv (Other)']
     .forEach((name, i) => add.run(name, i));
-  // Existing bid tickets: territory from their account type, BD director from whoever created them if they're on BD.
+  // Existing pipeline tickets: territory from their account type, BD director from whoever created them if they're on BD.
   db.exec(`
     UPDATE tickets SET territory_id = (SELECT id FROM territories WHERE name = CASE tickets.account_type
       WHEN 'Army' THEN 'Army' WHEN 'Air Force' THEN 'USAF/USSF' WHEN 'Navy / Marine' THEN 'Navy/USMC' END)
@@ -516,15 +519,15 @@ addColumn('priority_cards', 'archive_set_id', 'INTEGER REFERENCES archive_sets(i
 
 // ---- BD financials: when wins are expected, how the pipeline moves, money on won contracts, goals, and account plans.
 
-// When a bid is expected to be won, or flagged as not yet known (the "undetermined" pool).
+// When a pipeline ticket is expected to be won, or flagged as not yet known (the "undetermined" pool).
 addColumn('tickets', 'projected_win_date', 'TEXT'); // YYYY-MM-DD
 addColumn('tickets', 'win_date_undetermined', 'INTEGER NOT NULL DEFAULT 0');
 
-// One row each time a bid ticket's stage, value, director, territory or projected win date changes, so the pipeline
+// One row each time a pipeline ticket's stage, value, director, territory or projected win date changes, so the pipeline
 // can be shown as it stood on any past date (latest row on or before that date). Triggers catch every way of editing.
 const hadHistory = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ticket_history'").get();
 
-// Why a bid was lost, as Pipedrive records it (a lost deal's lost reason).
+// Why a pipeline ticket was lost, as Pipedrive records it (a lost deal's lost reason).
 addColumn('tickets', 'lost_reason', 'TEXT');
 
 // Stages named as Pipedrive names them: Identified → Prospecting, Submitted → Under Evaluation, and No Bid → Lost (with
@@ -571,7 +574,7 @@ BEGIN
   VALUES (NEW.id, NEW.pipeline_status, NEW.value, NEW.bd_director_id, NEW.territory_id, NEW.projected_win_date, NEW.win_date_undetermined);
 END;
 `);
-// History starts now. Bids that already exist get one starting row, dated when they were created, with today's values.
+// History starts now. Pipeline tickets that already exist get one starting row, dated when they were created, with today's values.
 if (!hadHistory) {
   db.exec(`INSERT INTO ticket_history (ticket_id, pipeline_status, value, bd_director_id, territory_id, projected_win_date, win_date_undetermined, changed_at)
     SELECT id, pipeline_status, value, bd_director_id, territory_id, projected_win_date, win_date_undetermined, created_at FROM tickets WHERE ticket_type = 'bid'`);
@@ -618,7 +621,7 @@ CREATE TABLE IF NOT EXISTS account_objectives (
   completed_at TEXT
 );
 
--- What each open bid was forecast to bring in, captured at the start of the quarter it was expected to close in,
+-- What each open pipeline ticket was forecast to bring in, captured at the start of the quarter it was expected to close in,
 -- so actual bookings can be checked against the forecast (forecast reliability).
 CREATE TABLE IF NOT EXISTS forecast_snapshots (
   id INTEGER PRIMARY KEY,
@@ -630,7 +633,7 @@ CREATE TABLE IF NOT EXISTS forecast_snapshots (
   territory_id INTEGER,
   pipeline_status TEXT,
   value REAL,
-  pwin REAL, -- 0-1, or NULL when the bid had no assessment
+  pwin REAL, -- 0-1, or NULL when the pipeline ticket had no assessment
   weighted REAL -- value × pwin, or the full value without one
 );
 CREATE INDEX IF NOT EXISTS forecast_snapshots_quarter ON forecast_snapshots(quarter);
@@ -725,10 +728,10 @@ for (const [from, to] of [['ops_programs', 'delivery_programs'], ['ops_program_t
 db.exec('DROP TRIGGER IF EXISTS ops_on_award_insert; DROP TRIGGER IF EXISTS ops_on_award_update;');
 
 db.exec(`
--- Delivery: won contracts. When a bid ticket reaches Awarded, it's copied here to be staffed and delivered.
+-- Delivery: won contracts. When a pipeline ticket reaches Awarded, it's copied here to be staffed and delivered.
 CREATE TABLE IF NOT EXISTS delivery_programs (
   id INTEGER PRIMARY KEY,
-  ticket_id INTEGER UNIQUE REFERENCES tickets(id) ON DELETE SET NULL, -- the bid ticket it was won from
+  ticket_id INTEGER UNIQUE REFERENCES tickets(id) ON DELETE SET NULL, -- the pipeline ticket it was won from
   name TEXT NOT NULL,
   organization TEXT,
   account_type TEXT,
@@ -750,7 +753,7 @@ CREATE TABLE IF NOT EXISTS delivery_team (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Copy a bid ticket into Delivery the moment it's Awarded, however that happens.
+-- Copy a pipeline ticket into Delivery the moment it's Awarded, however that happens.
 CREATE TRIGGER IF NOT EXISTS delivery_on_award_insert AFTER INSERT ON tickets
 WHEN NEW.pipeline_status = 'Awarded' AND NEW.ticket_type = 'bid'
 BEGIN
@@ -793,7 +796,7 @@ CREATE TABLE IF NOT EXISTS support_need_tickets (
 // Support alerts: you were asked for support (support_need), or a work ticket was made from your request (support_ticket).
 addColumn('alerts', 'support_id', 'INTEGER REFERENCES support_needs(id) ON DELETE CASCADE');
 
-// Bid tickets already Awarded before Delivery existed.
+// Pipeline tickets already Awarded before Delivery existed.
 db.exec(`INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value)
   SELECT id, opportunity_title, organization, account_type, value FROM tickets WHERE pipeline_status = 'Awarded' AND ticket_type = 'bid'`);
 
@@ -804,7 +807,7 @@ db.transaction(() => {
   db.prepare(`UPDATE priority_cards SET notes = NULL WHERE notes IS NOT NULL`).run();
 })();
 
-// ---- Pipedrive: a home on bid tickets for everything a Pipedrive deal holds, so deals can be brought over whole.
+// ---- Pipedrive: a home on pipeline tickets for everything a Pipedrive deal holds, so deals can be brought over whole.
 // pipedrive_id on each row is the Pipedrive record it came from, so a sync can match it again instead of duplicating it.
 addColumn('tickets', 'pipedrive_id', 'INTEGER');
 addColumn('tickets', 'currency', 'TEXT');        // ISO code; null means USD
@@ -873,8 +876,9 @@ db.exec(`INSERT OR IGNORE INTO labels (name) SELECT DISTINCT j.value FROM ticket
   WHERE t.labels IS NOT NULL AND json_valid(t.labels) AND TRIM(j.value) != ''`);
 db.exec(`
 -- Pipedrive notes, files and activities deleted in KIT: never imported again, and deleted in Pipedrive when an admin sends.
+-- Deals whose ticket was deleted in KIT are here too, but only so a pull skips them: a send never deletes a deal.
 CREATE TABLE IF NOT EXISTS pipedrive_deletes (
-  kind TEXT NOT NULL, -- note | file | activity
+  kind TEXT NOT NULL, -- note | file | activity | deal
   pipedrive_id INTEGER NOT NULL,
   PRIMARY KEY (kind, pipedrive_id)
 );
@@ -892,7 +896,7 @@ addColumn('ticket_tasks', 'assignee_id', 'INTEGER REFERENCES users(id) ON DELETE
 addColumn('ticket_tasks', 'location', 'TEXT');
 addColumn('ticket_tasks', 'note', 'TEXT');
 addColumn('ticket_tasks', 'pipedrive_id', 'INTEGER');
-// The rest of a Pipedrive activity's fields, plus a few of KIT's own, for the Activity section on a bid ticket.
+// The rest of a Pipedrive activity's fields, plus a few of KIT's own, for the Activity section on a pipeline ticket.
 addColumn('ticket_tasks', 'video_call', 'TEXT');   // a meeting link
 addColumn('ticket_tasks', 'description', 'TEXT');
 addColumn('ticket_tasks', 'priority', 'TEXT');     // High | Medium | Low
@@ -981,7 +985,7 @@ migrateToActivities();
 
 db.exec(`
 -- Marketing spend: money spent on marketing, as specific as it's known. Any of the links can be empty: an entry can be
--- for an event, a bid ticket, a person (usually a BD director), a territory or an account (organization), or just generic.
+-- for an event, a pipeline ticket, a person (usually a BD director), a territory or an account (organization), or just generic.
 CREATE TABLE IF NOT EXISTS marketing_spend (
   id INTEGER PRIMARY KEY,
   spent_on TEXT NOT NULL,   -- YYYY-MM-DD
@@ -1001,7 +1005,7 @@ CREATE TABLE IF NOT EXISTS marketing_spend (
 );
 CREATE INDEX IF NOT EXISTS marketing_spend_date ON marketing_spend(spent_on);
 
--- Each person's priority accounts, in tiers (Tier 1, Tier 2, …: tiers, not a ranking), the bid tickets that matter at
+-- Each person's priority accounts, in tiers (Tier 1, Tier 2, …: tiers, not a ranking), the pipeline tickets that matter at
 -- each account, and their own ordered list of priority tickets picked from those.
 CREATE TABLE IF NOT EXISTS priority_tiers (
   id INTEGER PRIMARY KEY,
@@ -1128,6 +1132,10 @@ export function setSetting(key, value) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, String(value));
 }
 
+/** Whether an admin has stopped people creating pipeline tickets in KIT. Deals pulled from Pipedrive still come in. */
+export const pipelineTicketsClosed = () => getSetting('pipeline_tickets_closed') === '1';
+export const PIPELINE_TICKETS_CLOSED = 'An admin has turned off creating new pipeline tickets.';
+
 /** Set someone's teams to `teamIds`. Teams they keep keep their role (member or lead); new ones start as member. Unknown ids are dropped. */
 export function setUserTeams(userId, teamIds) {
   const known = new Set(db.prepare('SELECT id FROM teams').all().map((t) => t.id));
@@ -1191,7 +1199,7 @@ export function setUserTerritories(userId, territoryIds) {
 }
 
 /**
- * Who a new bid ticket belongs to when nobody says: its creator as BD director if they're on BD, and the territory
+ * Who a new pipeline ticket belongs to when nobody says: its creator as BD director if they're on BD, and the territory
  * its account type maps to, else the creator's only territory.
  */
 export function defaultAssignment(userId, accountType) {

@@ -132,7 +132,7 @@ function Report({ r }) {
       <Section title="At a glance">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 print:grid-cols-4">
           <Figure label={`Booked, ${r.period}`} value={compact(m.bookings.amount)} note={m.bookings.target ? `${pct(m.bookings.value)} of ${compact(m.bookings.target)} target` : 'No target set'} />
-          <Figure label="Qualified pipeline" value={compact(bd.qualified.value)} note={`${bd.qualified.count} bids`} />
+          <Figure label="Qualified pipeline" value={compact(bd.qualified.value)} note={`${bd.qualified.count} PL tickets`} />
           <Figure label="Expected, next 4 quarters" value={compact(q.reduce((s, x) => s + x.weighted, 0))} note={`PWIN-weighted · ${compact(bd.expected.undetermined.value)} undetermined`} />
           <Figure label="Backlog" value={compact(bd.backlog.total)} note={`${compact(bd.backlog.fundedBacklog)} funded · ${compact(bd.backlog.unfundedBacklog)} unfunded`} />
         </div>
@@ -176,10 +176,10 @@ function Report({ r }) {
           </p>
         </Section>
         <Section title="Qualified pipeline by territory">
-          <BarList rows={bd.qualifiedByTerritory.map((t) => ({ key: t.name, label: t.name, value: t.value, sub: `${t.count}` }))} empty="No qualified bids." />
+          <BarList rows={bd.qualifiedByTerritory.map((t) => ({ key: t.name, label: t.name, value: t.value, sub: `${t.count}` }))} empty="No qualified pipeline tickets." />
         </Section>
         <Section title="Qualified pipeline by BD director">
-          <BarList rows={bd.qualifiedByDirector.map((t) => ({ key: t.name, label: t.name, value: t.value, sub: `${t.count}` }))} empty="No qualified bids." />
+          <BarList rows={bd.qualifiedByDirector.map((t) => ({ key: t.name, label: t.name, value: t.value, sub: `${t.count}` }))} empty="No qualified pipeline tickets." />
         </Section>
         <Section title="Bookings by quarter, funded and unfunded">
           <StackedColumns categories={bd.bookings.byQuarter.map((x) => shortQuarter(x.quarter))} height={130}

@@ -1,5 +1,5 @@
 // Pipelines and their stages. KIT's own pipeline (pipeline_id null) uses PIPELINE_STATUSES; others, made to match
-// Pipedrive's pipelines, have their own stages. Every pipeline can also close a bid as Awarded or Lost.
+// Pipedrive's pipelines, have their own stages. Every pipeline can also close a pipeline ticket as Awarded or Lost.
 import { db } from './db.js';
 
 export const KIT_STAGES = ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation', 'Awarded', 'Lost'];

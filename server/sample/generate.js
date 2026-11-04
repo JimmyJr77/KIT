@@ -97,7 +97,7 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
     return { id, organization };
   });
 
-  // ---- Bids: open ones across the pipeline, and closed ones over the past five quarters.
+  // ---- Pipeline tickets: open ones across the pipeline, and closed ones over the past five quarters.
   const assessment = (strong) => Object.fromEntries(CRITERIA.map((c) => [c.key, { score: strong ? int(3, 5) : int(2, 4) }]));
   const STAGES = ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation'];
   const OPEN = [['Synthetic Training Data Pipeline', 0, 'Proposal', 18_500_000], ['Enterprise Cloud Migration Support', 2, 'Capture', 42_000_000],
@@ -113,7 +113,7 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
     ['Mobile Inspection App', 10, 'Lost', 3_200_000, 90], ['Imagery Tagging Service', 7, 'Awarded', 7_400_000, 30]];
   const history = db.prepare(`INSERT INTO ticket_history (ticket_id, pipeline_status, value, bd_director_id, territory_id, projected_win_date, win_date_undetermined, changed_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-  /** Replace a new bid's automatic history row with a climb through the stages from creation to now (or to its close). */
+  /** Replace a new pipeline ticket's automatic history row with a climb through the stages from creation to now (or to its close). */
   const backdate = (id, t, finalStatus, closedOn) => {
     db.prepare('DELETE FROM ticket_history WHERE ticket_id = ?').run(id);
     const end = closedOn || today;
@@ -168,7 +168,7 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
     return { id, title, owner };
   });
 
-  // Contacts on bids for the same organization; activities (next steps first) and process flow on open bids; a few conversations.
+  // Contacts on pipeline tickets for the same organization; activities (next steps first) and process flow on open pipeline tickets; a few conversations.
   bids.forEach((t) => contacts.filter((c) => c.organization === t.org).forEach((c) => insert('ticket_contacts', { ticket_id: t.id, contact_id: c.id, added_by: t.owner.id })));
   bids.forEach((t) => {
     const steps = some(['Schedule customer call', 'Draft white paper outline', 'Confirm teaming partner', 'Pricing review with finance', 'Submit questions by deadline'], int(2, 4))
@@ -266,7 +266,7 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
     event_id: e.id, title: pick(['Booth banner', 'One-pager for the booth']), category: pick(['Graphic design', 'Collateral / print']), details: `Materials for ${e.name}.`,
     requested_by: pick(bd).id, due_date: addDays(today, e.from - 7), status: 'open',
   }));
-  // Marketing spend over the last year: event sponsorships (split between whoever goes), spend on specific bids and
+  // Marketing spend over the last year: event sponsorships (split between whoever goes), spend on specific pipeline tickets and
   // directors, territory campaigns, and some company-wide.
   const spender = (onTeam('Marketing')[0] || people[0]).id;
   events.forEach((e) => insert('marketing_spend', { spent_on: addDays(today, Math.min(e.from, 0) - int(10, 40)), amount: int(4, 15) * 1000, description: `${e.name} sponsorship`,
@@ -320,7 +320,7 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
     }
   });
 
-  // Last quarter's forecast for the sample bids projected into it, so forecast reliability has a quarter to judge.
+  // Last quarter's forecast for the sample pipeline tickets projected into it, so forecast reliability has a quarter to judge.
   const lastQuarter = quarterFor(addDays(today, -95));
   const [ly, lq] = lastQuarter.split(' Q').map(Number);
   const qStart = `${ly}-${String((lq - 1) * 3 + 1).padStart(2, '0')}-01`;

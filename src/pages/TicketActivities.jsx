@@ -40,8 +40,8 @@ const overdue = (a) => !a.done && a.due_date && a.due_date < today();
 
 /**
  * The Activity section on a ticket: calls, meetings, lunches and so on, as in Pipedrive. Open activities are the
- * ticket's priorities, in order: drag them to reorder, and the top one is the ticket's next step. Check one off when
- * it's done; select one to open it here, with its subtasks and comments.
+ * ticket's priorities, in order: drag them to reorder, and the top one is the ticket's next step. Each is a primary task
+ * with its subtasks under it, to check off and add to right here; select one to open all its details and comments.
  */
 export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialId }) {
   const [data, setData] = useState(null);
@@ -49,11 +49,11 @@ export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialI
   const load = () => api.get(`/activities?ticket=${ticket.id}`).then(setData);
   useEffect(() => { load(); }, [ticket.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const changed = () => { load(); onChanged(); };
   const toggle = async (a) => {
     setData((d) => ({ ...d, activities: d.activities.map((x) => (x.id === a.id ? { ...x, done: !x.done } : x)) }));
     await api.put(`/activities/${a.id}`, { done: !a.done });
-    load();
-    onChanged();
+    changed();
   };
   const back = () => { onDirty?.(false); setView('list'); load(); };
 
@@ -62,8 +62,7 @@ export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialI
   const reorder = async (ids) => {
     setData((d) => ({ ...d, activities: [...ids.map((id) => d.activities.find((a) => a.id === id)), ...d.activities.filter((a) => a.done)] }));
     await api.put('/activities/order', { ticket_id: ticket.id, ids });
-    load();
-    onChanged();
+    changed();
   };
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
   const onDragEnd = ({ active, over }) => {
@@ -75,7 +74,7 @@ export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialI
   if (view !== 'list' && data) {
     return (
       <ActivityForm key={view} ticket={ticket} activityId={view === 'new' ? null : view} types={data.types} priorities={data.priorities} onClose={onClose}
-        onBack={back} onSaved={() => { back(); onChanged(); }} onChanged={() => { load(); onChanged(); }} onDirty={onDirty} />
+        onBack={back} onSaved={() => { back(); onChanged(); }} onChanged={changed} onDirty={onDirty} />
     );
   }
 
@@ -91,7 +90,7 @@ export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialI
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={open.map((a) => a.id)} strategy={verticalListSortingStrategy}>
                 <ol className="space-y-1.5">
-                  {open.map((a) => <ActivityRow key={a.id} a={a} sortable onToggle={() => toggle(a)} onOpen={() => setView(a.id)} />)}
+                  {open.map((a) => <ActivityRow key={a.id} a={a} sortable ticketId={ticket.id} onToggle={() => toggle(a)} onOpen={() => setView(a.id)} onChanged={changed} />)}
                 </ol>
               </SortableContext>
             </DndContext>
@@ -101,7 +100,7 @@ export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialI
           <section>
             <h4 className="mb-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase">Done</h4>
             <ul className="space-y-1.5">
-              {done.map((a) => <ActivityRow key={a.id} a={a} onToggle={() => toggle(a)} onOpen={() => setView(a.id)} />)}
+              {done.map((a) => <ActivityRow key={a.id} a={a} ticketId={ticket.id} onToggle={() => toggle(a)} onOpen={() => setView(a.id)} onChanged={changed} />)}
             </ul>
           </section>
         )}
@@ -110,47 +109,58 @@ export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialI
   );
 }
 
-function ActivityRow({ a, sortable, onToggle, onOpen }) {
+function ActivityRow({ a, ticketId, sortable, onToggle, onOpen, onChanged }) {
   const Icon = TYPE_ICONS[a.activity_type] || SquareCheck;
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: a.id, disabled: !sortable });
+  const [commenting, setCommenting] = useState(false);
   const next = a.rank === 1;
-  const subsDone = a.subtasks.filter((x) => x.done).length;
   return (
     <li ref={setNodeRef} style={sortable ? { transform: CSS.Transform.toString(transform), transition } : undefined}
-      className={`flex items-start gap-2 rounded-lg border bg-white px-2.5 py-2 ${isDragging ? 'relative z-10 shadow-lg' : ''} ${
+      className={`rounded-lg border bg-white px-2.5 py-2 ${isDragging ? 'relative z-10 shadow-lg' : ''} ${
         next ? 'border-brand-500 ring-2 ring-brand-100' : a.flagged && !a.done ? 'border-red-200' : 'border-slate-200'}`}>
-      {sortable && (
-        <button type="button" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Drag “${a.subject}” to reorder`} title="Drag to reorder"
-          className="mt-0.5 cursor-grab rounded p-0.5 text-slate-300 hover:text-slate-600 active:cursor-grabbing"><GripVertical size={14} /></button>
+      <div className="group flex items-start gap-2">
+        {sortable && (
+          <button type="button" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Drag “${a.subject}” to reorder`} title="Drag to reorder"
+            className="mt-0.5 cursor-grab rounded p-0.5 text-slate-300 hover:text-slate-600 active:cursor-grabbing"><GripVertical size={14} /></button>
+        )}
+        <input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-brand-600" checked={a.done} onChange={onToggle} aria-label={`Mark “${a.subject}” ${a.done ? 'not done' : 'done'}`} />
+        <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
+          {next && <span className="mb-0.5 inline-flex items-center gap-1 rounded bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">Next step</span>}
+          <span className="flex items-center gap-1.5">
+            <Icon size={14} className="shrink-0 text-slate-500" aria-label={a.activity_type} />
+            <span className={`truncate text-sm font-medium ${a.done ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{a.subject}</span>
+            {a.flagged && <Flag size={12} className="shrink-0 fill-red-500 text-red-500" aria-label="Flagged" />}
+            {a.waiting_client && !a.done && <WaitingIcon size={12} />}
+            {a.priority && <span className={`ml-auto shrink-0 rounded px-1.5 text-[10px] font-medium ring-1 ${PRIORITY_STYLE[a.priority]}`}>{a.priority}</span>}
+          </span>
+          <span className={`mt-0.5 block text-[11px] ${overdue(a) ? 'font-medium text-red-600' : 'text-slate-500'}`}>
+            {[when(a) || 'No date', overdue(a) && 'overdue', a.assignee_name].filter(Boolean).join(' · ')}
+          </span>
+          {a.cards.length > 0 && <span className="mt-0.5 flex items-center gap-0.5 text-[11px] text-slate-400"><CalendarRange size={11} /> Priority, week of {shortDate(a.cards[0].week_start)}</span>}
+          {(a.location || a.video_call || a.participants.length > 0) && (
+            <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-slate-400">
+              {a.location && <span className="flex items-center gap-0.5"><MapPin size={10} /> {a.location}</span>}
+              {a.video_call && <span className="flex items-center gap-0.5"><Video size={10} /> Video call</span>}
+              {a.participants.length > 0 && <span className="flex items-center gap-0.5"><Users size={10} /> {a.participants.map(contactName).join(', ')}</span>}
+            </span>
+          )}
+        </button>
+        <button type="button" onClick={() => setCommenting(!commenting)} title="Comment on this activity" aria-label={`Comment on “${a.subject}”`}
+          className={`flex items-center gap-0.5 text-[11px] ${a.comment_count ? 'text-violet-600' : 'text-slate-300 opacity-0 group-hover:opacity-100 focus:opacity-100'} hover:text-violet-700`}>
+          <MessageSquare size={14} />{a.comment_count > 0 && a.comment_count}
+        </button>
+      </div>
+      {commenting && (
+        <div className="mt-1.5 ml-6">
+          <CommentComposer ticketId={ticketId} target={{ type: 'activity', id: a.id }} autoFocus placeholder={`Comment on “${a.subject}”…`}
+            onPosted={() => { setCommenting(false); onChanged(); }} onCancel={() => setCommenting(false)} />
+        </div>
       )}
-      <input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-brand-600" checked={a.done} onChange={onToggle} aria-label={`Mark “${a.subject}” ${a.done ? 'not done' : 'done'}`} />
-      <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-        {next && <span className="mb-0.5 inline-flex items-center gap-1 rounded bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">Next step</span>}
-        <span className="flex items-center gap-1.5">
-          <Icon size={14} className="shrink-0 text-slate-500" aria-label={a.activity_type} />
-          <span className={`truncate text-sm font-medium ${a.done ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{a.subject}</span>
-          {a.flagged && <Flag size={12} className="shrink-0 fill-red-500 text-red-500" aria-label="Flagged" />}
-          {a.waiting_client && !a.done && <WaitingIcon size={12} />}
-          {a.priority && <span className={`ml-auto shrink-0 rounded px-1.5 text-[10px] font-medium ring-1 ${PRIORITY_STYLE[a.priority]}`}>{a.priority}</span>}
-        </span>
-        <span className={`mt-0.5 block text-[11px] ${overdue(a) ? 'font-medium text-red-600' : 'text-slate-500'}`}>
-          {[when(a) || 'No date', overdue(a) && 'overdue', a.assignee_name].filter(Boolean).join(' · ')}
-        </span>
-        {(a.subtasks.length > 0 || a.comment_count > 0 || a.cards.length > 0) && (
-          <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-slate-400">
-            {a.subtasks.length > 0 && <span className="flex items-center gap-0.5"><ListChecks size={11} /> {subsDone}/{a.subtasks.length}</span>}
-            {a.comment_count > 0 && <span className="flex items-center gap-0.5"><MessageSquare size={11} /> {a.comment_count}</span>}
-            {a.cards.length > 0 && <span className="flex items-center gap-0.5"><CalendarRange size={11} /> Priority, week of {shortDate(a.cards[0].week_start)}</span>}
-          </span>
-        )}
-        {(a.location || a.video_call || a.participants.length > 0) && (
-          <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-slate-400">
-            {a.location && <span className="flex items-center gap-0.5"><MapPin size={10} /> {a.location}</span>}
-            {a.video_call && <span className="flex items-center gap-0.5"><Video size={10} /> Video call</span>}
-            {a.participants.length > 0 && <span className="flex items-center gap-0.5"><Users size={10} /> {a.participants.map(contactName).join(', ')}</span>}
-          </span>
-        )}
-      </button>
+      {(!a.done || a.subtasks.length > 0) && (
+        <div className="mt-1.5 ml-6 border-l-2 border-slate-100 pl-2">
+          <SubtaskList activity={a} ticketId={ticketId} onChanged={onChanged} compact />
+        </div>
+      )}
     </li>
   );
 }
@@ -165,19 +175,19 @@ export function WaitingIcon({ size = 12, className = '' }) {
 }
 
 /** One activity, new or existing, in the pane. `activityId` null makes a new one. */
-export function ActivityForm({ ticket, activityId, types, priorities, onClose, onBack, onSaved, onChanged, onDirty, backLabel = 'All activities' }) {
+function ActivityForm({ ticket, activityId, types, priorities, onClose, onBack, onSaved, onChanged, onDirty }) {
   const [detail, setDetail] = useState(null);
   const loadDetail = () => api.get(`/activities/${activityId}`).then(setDetail);
   useEffect(() => { if (activityId) loadDetail(); }, [activityId]); // eslint-disable-line react-hooks/exhaustive-deps
   if (activityId && !detail) return <DrawerShell title="Activity" subtitle="Loading…" onClose={onClose}><p className="text-sm text-slate-400">Loading…</p></DrawerShell>;
   return (
     <ActivityEditor key={detail?.activity.id ?? 'new'} ticket={ticket} activity={detail?.activity ?? null} comments={detail?.comments ?? []} types={types} priorities={priorities}
-      onClose={onClose} onBack={onBack} onSaved={onSaved} onDirty={onDirty} backLabel={backLabel}
+      onClose={onClose} onBack={onBack} onSaved={onSaved} onDirty={onDirty}
       onChanged={() => { loadDetail(); onChanged?.(); }} />
   );
 }
 
-function ActivityEditor({ ticket, activity, comments, types, priorities, onClose, onBack, onSaved, onChanged, onDirty, backLabel }) {
+function ActivityEditor({ ticket, activity, comments, types, priorities, onClose, onBack, onSaved, onChanged, onDirty }) {
   const initial = activity ? formOf(activity) : blank(ticket);
   const [form, setForm] = useState(initial);
   const [newSubtasks, setNewSubtasks] = useState([]);
@@ -230,7 +240,7 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
           </button>
         </div>
       )}>
-      <button type="button" className="btn-ghost -mt-1 mb-3 px-1.5 py-1 text-xs" onClick={leave}><ArrowLeft size={13} /> {backLabel}</button>
+      <button type="button" className="btn-ghost -mt-1 mb-3 px-1.5 py-1 text-xs" onClick={leave}><ArrowLeft size={13} /> All activities</button>
       {activity?.rank === 1 && <p className="mb-3 rounded-md bg-brand-50 px-3 py-2 text-[11px] text-brand-800">This is the ticket’s next step: the top open activity.</p>}
       <div className="space-y-4">
         <input className="input text-base font-medium" placeholder="Title, e.g. Lunch with the program office" value={form.subject} onChange={set('subject')} autoFocus={!activity} aria-label="Title" />
@@ -343,15 +353,16 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
   );
 }
 
-// ---- Subtasks and comments, shared with the Tasks pane
+// ---- Subtasks and comments
 
-/** An activity's subtasks: check off, add, delete, and comment on each. */
+/** An activity's subtasks: check off, add, delete, and comment on each. `compact` tucks the add box behind a link, for lists. */
 export function SubtaskList({ activity, ticketId, onChanged, compact }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [commenting, setCommenting] = useState(null);
+  const [adding, setAdding] = useState(!compact);
   const run = async (p) => { setBusy(true); try { await p; onChanged(); } finally { setBusy(false); } };
-  const add = () => text.trim() && run(api.post(`/activities/${activity.id}/subtasks`, { text }).then(() => setText('')));
+  const add = () => text.trim() && !busy && run(api.post(`/activities/${activity.id}/subtasks`, { text }).then(() => setText('')));
   return (
     <div className={compact ? 'space-y-0.5' : 'space-y-1'}>
       <ul className="space-y-0.5">
@@ -377,11 +388,21 @@ export function SubtaskList({ activity, ticketId, onChanged, compact }) {
           </li>
         ))}
       </ul>
-      <div className="flex gap-1.5 pl-1">
-        <input className="input h-8 py-1 text-sm" placeholder="Add a subtask…" value={text} onChange={(e) => setText(e.target.value)} disabled={busy}
-          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} aria-label={`Add a subtask to “${activity.subject}”`} />
-        <button type="button" className="btn h-8 px-2" onClick={add} disabled={!text.trim() || busy} aria-label="Add subtask"><Plus size={14} /></button>
-      </div>
+      {adding ? (
+        <div className="flex gap-1.5 pl-1">
+          <input className="input h-8 py-1 text-sm" placeholder="Add a subtask…" value={text} onChange={(e) => setText(e.target.value)} autoFocus={compact}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); add(); }
+              if (e.key === 'Escape' && compact) { e.stopPropagation(); setText(''); setAdding(false); }
+            }}
+            onBlur={() => { if (compact && !text.trim()) setAdding(false); }} aria-label={`Add a subtask to “${activity.subject}”`} />
+          <button type="button" className="btn h-8 px-2" onClick={add} disabled={!text.trim() || busy} aria-label="Add subtask"><Plus size={14} /></button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setAdding(true)} className="flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-slate-400 hover:text-brand-700">
+          <Plus size={12} /> Add subtask
+        </button>
+      )}
     </div>
   );
 }

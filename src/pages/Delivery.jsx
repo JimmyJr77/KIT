@@ -13,7 +13,7 @@ import UserCombobox from '../components/UserCombobox.jsx';
 const money = (n) => usd(n).replace('.00', '');
 const wonOn = (utc) => (utc ? shortDate(parseUtc(utc).toLocaleDateString('en-CA'), { month: 'short', day: 'numeric', year: 'numeric' }) : '');
 
-/** Contracts we've won. A bid ticket is copied here when it's Awarded, to get a Program Manager and a delivery team. */
+/** Contracts we've won. A pipeline ticket is copied here when it's Awarded, to get a Program Manager and a delivery team. */
 export default function Delivery() {
   const users = useApi('/users');
   const teams = useApi('/teams');
@@ -47,7 +47,7 @@ export default function Delivery() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Delivery" subtitle="Contracts we’ve won. Each one lands here when its bid ticket is marked Awarded.">
+      <PageHeader title="Delivery" subtitle="Contracts we’ve won. Each one lands here when its pipeline ticket is marked Awarded.">
         <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
           {[['active', 'Active'], ['complete', 'Complete'], ['all', 'All']].map(([k, l]) => (
             <button key={k} type="button" onClick={() => setStatus(k)}
@@ -74,7 +74,7 @@ export default function Delivery() {
       {programs && !shown.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <BriefcaseBusiness size={28} className="mx-auto mb-2 text-slate-300" />
-          {q ? 'Nothing matches your search.' : status === 'complete' ? 'No completed contracts yet.' : 'No won contracts yet. Move a bid ticket to Awarded on BD Pipeline and it shows up here.'}
+          {q ? 'Nothing matches your search.' : status === 'complete' ? 'No completed contracts yet.' : 'No won contracts yet. Move a pipeline ticket to Awarded on BD Pipeline and it shows up here.'}
         </div>
       )}
 
@@ -158,9 +158,9 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 p-3">
           {p.ticket_exists ? (
             <Link to={`/tickets?open=${p.ticket_id}`} className="flex items-center gap-1.5 text-sm font-medium text-brand-700 hover:underline">
-              <Ticket size={14} /> Open the bid ticket it was won from
+              <Ticket size={14} /> Open the pipeline ticket it was won from
             </Link>
-          ) : <span className="text-sm text-slate-400">The original bid ticket was deleted.</span>}
+          ) : <span className="text-sm text-slate-400">The original pipeline ticket was deleted.</span>}
           <label className="flex items-center gap-2 text-sm">
             <span className="text-slate-500">Status</span>
             <select className="input h-8 w-36 py-0 text-sm" value={p.status} onChange={(e) => update({ status: e.target.value })}>
@@ -348,7 +348,7 @@ function MoneySection({ program: p, onChange, onError, onSaveValue }) {
         <span className="text-slate-500">Contract value ($)</span>
         <input type="number" min="0" className="input h-8 w-44 py-0 text-sm" value={value} onChange={(e) => setValue(e.target.value)} />
         {valueDirty && <button type="button" className="btn-primary h-8 px-3 py-0 text-xs" onClick={() => onSaveValue(value)}>Save value</button>}
-        <span className="text-xs text-slate-400">Starts as the bid's value; change it to the awarded ceiling if it differs.</span>
+        <span className="text-xs text-slate-400">Starts as the pipeline ticket's value; change it to the awarded ceiling if it differs.</span>
       </label>
 
       {/* Type, amount and date on one line; the note and Add on the next, so nothing is squeezed in a narrow panel. */}

@@ -81,7 +81,7 @@ export function TerritoriesPanel({ territories, onChanged }) {
   return (
     <div className="panel space-y-3">
       <h2 className="section-title flex items-center gap-2"><MapPin size={16} className="text-teal-600" /> Territories</h2>
-      <p className="text-xs text-slate-500">The customer areas BD directors cover. Each bid ticket belongs to one territory.</p>
+      <p className="text-xs text-slate-500">The customer areas BD directors cover. Each pipeline ticket belongs to one territory.</p>
       {error && <p className="text-sm text-red-600">{error}</p>}
       <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
         {list.map((t) => (

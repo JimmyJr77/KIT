@@ -11,8 +11,8 @@ export function formatPhoneInput(v) {
 export const fullName = (u) => (u ? `${u.first_name} ${u.last_name}` : '');
 export const initials = (u) => (u ? `${u.first_name?.[0] || ''}${u.last_name?.[0] || ''}`.toUpperCase() : '?');
 
-/** "Bid Ticket" for tickets meant to win a contract, "Work Ticket" for everything else. */
-export const ticketKind = (t) => (t?.ticket_type === 'work' ? 'Work Ticket' : 'Bid Ticket');
+/** "Pipeline Ticket" for tickets meant to win a contract, "Work Ticket" for everything else. */
+export const ticketKind = (t) => (t?.ticket_type === 'work' ? 'Work Ticket' : 'Pipeline Ticket');
 
 export const todayIso = () => new Date().toLocaleDateString('en-CA');
 

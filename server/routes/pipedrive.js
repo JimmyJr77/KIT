@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAdmin } from '../auth.js';
-import { startPull, lastPull, syncStatus } from '../services/pipedrive.js';
+import { startPull, lastPull, syncStatus, pullFileDeletes, setPullFileDeletes } from '../services/pipedrive.js';
 import { startSend, lastSend, preview, linkedTickets, sendModes, setSendModes, autoStatus, SEND_KINDS } from '../services/pipedriveSend.js';
 import { liveStatus, turnOn, turnOff } from '../services/pipedriveLive.js';
 
@@ -18,11 +18,13 @@ const leads = (userId) => !!db.prepare("SELECT 1 FROM user_teams WHERE user_id =
 const pulls = (u) => ['mine', ...(leads(u.id) ? ['team'] : []), ...(u.role === 'admin' ? ['all'] : [])];
 
 /** How Pipedrive stands for this person: what's running, their last pulls and (admins) the last full pull and send. */
+const fileDeletes = () => ({ to_pipedrive: sendModes().fileDeletes === 'manual', to_kit: pullFileDeletes() });
+
 r.get('/', (req, res) => {
   const admin = req.user.role === 'admin';
   res.json({
     ...syncStatus(), pulls: pulls(req.user), mine: lastPull(`pipedrive_last_pull_${req.user.id}`),
-    ...(admin ? { last: lastPull('pipedrive_last_sync'), lastSend: lastSend(), modes: sendModes(), auto: autoStatus() } : {}),
+    ...(admin ? { last: lastPull('pipedrive_last_sync'), lastSend: lastSend(), modes: sendModes(), auto: autoStatus(), fileDeletes: fileDeletes() } : {}),
   });
 });
 
@@ -50,6 +52,13 @@ r.get('/deals', requireAdmin, (req, res) => {
 
 /** Body: { kind: 'off' | 'manual' | 'auto', ... }. Manual and Auto kinds go with a send; Auto kinds also go on their own. */
 r.put('/send/modes', requireAdmin, (req, res) => res.json({ modes: setSendModes(req.body || {}) }));
+
+/** Body: { to_pipedrive, to_kit }, both booleans. to_pipedrive goes with an admin's send, never on its own. */
+r.put('/file-deletes', requireAdmin, (req, res) => {
+  setSendModes({ fileDeletes: req.body?.to_pipedrive ? 'manual' : 'off' });
+  setPullFileDeletes(!!req.body?.to_kit);
+  res.json({ fileDeletes: fileDeletes() });
+});
 
 /** Body: { kinds: [...], pipeline_id?, ticket_ids? }. What a send would do; nothing is sent or read from Pipedrive. */
 r.post('/send/preview', requireAdmin, (req, res) => res.json(preview(kindsOf(req.body), scopeOf(req.body))));

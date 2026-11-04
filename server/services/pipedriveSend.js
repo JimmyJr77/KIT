@@ -18,7 +18,7 @@ import {
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
 const TIME_ZONE = process.env.PIPEDRIVE_TIME_ZONE || 'America/New_York';
 
-export const SEND_KINDS = ['deals', 'labels', 'notes', 'activities', 'files', 'products', 'followers', 'contacts'];
+export const SEND_KINDS = ['deals', 'labels', 'notes', 'activities', 'files', 'fileDeletes', 'products', 'followers', 'contacts'];
 export const FIELD_LABELS = {
   opportunity_title: 'Title', value: 'Value', pipeline_status: 'Stage', lost_reason: 'Lost reason', probability: 'Probability',
   projected_win_date: 'Expected close date', bd_director_id: 'Owner', territory_id: 'Account (territory)',
@@ -30,15 +30,17 @@ const LIST_MAX = 200;
 // ---- Off, Manual or Auto, per kind
 
 const MODES = ['off', 'manual', 'auto'];
+const NEVER_AUTO = ['fileDeletes']; // deletions only ever go when an admin sends
+const allowed = (kind, mode) => MODES.includes(mode) && !(mode === 'auto' && NEVER_AUTO.includes(kind));
 /** Each kind's mode; a kind never set is off. */
 export function sendModes() {
   const saved = json.parse(getSetting('pipedrive_send_modes'), {});
-  return Object.fromEntries(SEND_KINDS.map((k) => [k, MODES.includes(saved[k]) ? saved[k] : 'off']));
+  return Object.fromEntries(SEND_KINDS.map((k) => [k, allowed(k, saved[k]) ? saved[k] : 'off']));
 }
 /** `changes`: { kind: mode }, for some kinds. Returns every kind's mode. */
 export function setSendModes(changes = {}) {
   const next = sendModes();
-  Object.entries(changes).forEach(([k, m]) => { if (SEND_KINDS.includes(k) && MODES.includes(m)) next[k] = m; });
+  Object.entries(changes).forEach(([k, m]) => { if (SEND_KINDS.includes(k) && allowed(k, m)) next[k] = m; });
   setSetting('pipedrive_send_modes', json.str(next));
   return next;
 }
@@ -133,10 +135,10 @@ function plan(kinds, scope, { auto = false } = {}) {
       remove: deletes('activity'),
     };
   }
-  if (on('files')) {
+  if (on('files') || on('fileDeletes')) {
     out.files = {
-      add: db.prepare(FILE_SQL).all({ ids }).map((f) => ({ id: f.id, ticket_id: f.ticket_id, title: f.title, text: f.original_name, link: !!f.url })),
-      remove: deletes('file'),
+      add: on('files') ? db.prepare(FILE_SQL).all({ ids }).map((f) => ({ id: f.id, ticket_id: f.ticket_id, title: f.title, text: f.original_name, link: !!f.url })) : [],
+      remove: on('fileDeletes') ? deletes('file') : [],
     };
   }
   if (on('products')) {

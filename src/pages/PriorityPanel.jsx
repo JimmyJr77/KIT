@@ -6,6 +6,7 @@ import { fullName, shortDate, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import MultiSelect from '../components/MultiSelect.jsx';
 import CardNotes from './CardNotes.jsx';
+import { TicketTypeChoice } from './NewTicketPanel.jsx';
 import { useApi } from '../lib/data.js';
 
 const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', pipeline_status: '', value: '' };
@@ -124,9 +125,14 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   };
 
   const ro = readOnly;
-  // A brand-new ticket (not an existing one picked from search) chooses Bid or Work.
+  // A brand-new ticket (not an existing one picked from search) chooses Pipeline or Work.
   const creatingTicket = isNew && ticketMode === 'new' && !ticketId && !ro;
   const isWork = ticket.ticket_type === 'work';
+  const pipelineClosed = !!meta.data?.pipelineTicketsClosed;
+  // With pipeline tickets turned off, a brand-new ticket can only be a work ticket (including after switching back from Existing).
+  useEffect(() => {
+    if (pipelineClosed && creatingTicket && !isWork) setTicket((t) => ({ ...t, ticket_type: 'work' }));
+  }, [pipelineClosed, creatingTicket, isWork]);
 
   return (
     <>
@@ -186,20 +192,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
                     ← Choose a different ticket
                   </button>
                 )}
-                {creatingTicket && (
-                  <div>
-                    <span className="label">Ticket type</span>
-                    <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Ticket type">
-                      {[['bid', 'Bid Ticket', 'To win a contract. Has a value and pipeline status.'], ['work', 'Work Ticket', 'Any other work. No value or pipeline status.']].map(([k, l, hint]) => (
-                        <button key={k} type="button" role="radio" aria-checked={ticket.ticket_type === k} onClick={() => setT('ticket_type', k)}
-                          className={`rounded-lg border px-3 py-2 text-left transition ${ticket.ticket_type === k ? 'border-brand-500 bg-white ring-2 ring-brand-100' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
-                          <div className={`text-sm font-semibold ${ticket.ticket_type === k ? 'text-brand-700' : 'text-slate-700'}`}>{l}</div>
-                          <div className="text-[11px] leading-snug text-slate-500">{hint}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                {creatingTicket && <TicketTypeChoice value={ticket.ticket_type} onChange={(k) => setT('ticket_type', k)} pipelineClosed={pipelineClosed} />}
                 <Field label={isWork ? 'Title *' : 'Opportunity title *'}>
                   <input className="input" value={ticket.opportunity_title} onChange={(e) => setT('opportunity_title', e.target.value)} disabled={ro} autoFocus={isNew} />
                 </Field>

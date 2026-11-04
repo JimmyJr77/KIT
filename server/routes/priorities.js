@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, json, withTeams } from '../db.js';
+import { db, json, withTeams, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED } from '../db.js';
 import { loadThreads, bidAssignment, NO_ASSIGNMENT } from './tickets.js';
 import { recordWork, loadWorkLog } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
@@ -66,7 +66,7 @@ function loadCard(id) {
   return c ? loadCards(c.team_id, c.week_start).find((x) => x.id === Number(id)) : null;
 }
 
-r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES, pipelines: listPipelines(), accountTypes: ACCOUNT_TYPES }));
+r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES, pipelines: listPipelines(), accountTypes: ACCOUNT_TYPES, pipelineTicketsClosed: pipelineTicketsClosed() }));
 
 /**
  * Every active user across all teams. The strip runs on Monday weeks; each team's cards
@@ -183,7 +183,7 @@ r.get('/tickets', (req, res) => {
   const dir = req.query.dir === 'asc' ? 'ASC' : 'DESC';
   const rows = db.prepare(`SELECT t.*, COUNT(c.id) AS card_count, MIN(c.due_date) AS next_due
     FROM tickets t LEFT JOIN priority_cards c ON c.ticket_id = t.id
-    WHERE t.archive_set_id IS NULL AND (t.opportunity_title LIKE ? OR t.organization LIKE ?)
+    WHERE t.archive_set_id IS NULL AND t.archived_at IS NULL AND (t.opportunity_title LIKE ? OR t.organization LIKE ?)
     GROUP BY t.id ORDER BY ${sort} ${dir} LIMIT 200`).all(q, q);
   res.json({ tickets: rows });
 });
@@ -247,6 +247,7 @@ r.post('/cards', (req, res) => {
       if (!tf.opportunity_title) throw new Error('Opportunity Title is required');
       // The ticket type is chosen once, when the ticket is created. Work tickets have no value or pipeline status.
       const ticketType = b.ticket?.ticket_type === 'work' ? 'work' : 'bid';
+      if (ticketType === 'bid' && pipelineTicketsClosed()) throw new Error(PIPELINE_TICKETS_CLOSED);
       const fields = ticketType === 'work' ? { ...tf, pipeline_status: null, value: null } : tf;
       const assign = ticketType === 'bid' ? bidAssignment(b.ticket, req.user.id, fields.account_type) : NO_ASSIGNMENT;
       ticketId = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by,

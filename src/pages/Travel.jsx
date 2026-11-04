@@ -10,6 +10,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import UserCombobox from '../components/UserCombobox.jsx';
 import { locationLabel } from '../components/LocationInput.jsx';
+import { LockButton, EstimateLockPanel } from '../components/EstimateLock.jsx';
 import TripForm, { newTrip, tripFromEvent, travelFromOf, ApprovalBadge } from './TripForm.jsx';
 
 export default function Travel() {
@@ -27,6 +28,7 @@ export default function Travel() {
   const [refreshed, setRefreshed] = useState(0);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [locking, setLocking] = useState(null); // the trip whose estimate is open in the side panel
   const [outlook, setOutlook] = useState(null);
   const [mode, setMode] = useState('estimated'); // estimated | actual: what the list below the filters shows
   const [actuals, setActuals] = useState([]);
@@ -133,7 +135,7 @@ export default function Travel() {
         users={users.data?.users || []}
         teams={teams.data?.teams || []}
         meta={meta.data}
-        onClose={() => setEditing(null)}
+        onClose={() => { setEditing(null); load(); }}
         onSaved={(t) => {
           setEditing(null);
           load();
@@ -282,7 +284,9 @@ export default function Travel() {
                 <td className="px-4 py-3 whitespace-nowrap">{shortDate(t.date_from)} – {shortDate(t.date_to, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
                 <td className="px-4 py-3">{t.quarter}</td>
                 <td className="px-4 py-3 capitalize text-slate-500">{t.airfare?.mode === 'none' ? 'No air' : t.airfare?.mode}</td>
-                <td className="px-4 py-3 text-right font-semibold">{usd(t.total_estimate)}</td>
+                <td className="px-4 py-3 font-semibold">
+                  <div className="flex items-center justify-end gap-2">{usd(t.total_estimate)}<LockButton locked={!!t.locked_estimate} onClick={() => setLocking(t)} /></div>
+                </td>
                 <td className="px-4 py-3" title={t.approver_name ? `${t.approval === 'declined' ? 'Declined' : 'Approved'} by ${t.approver_name}` : undefined}>
                   {t.approval ? <ApprovalBadge approval={t.approval} /> : <span className="text-slate-300">—</span>}
                 </td>
@@ -293,6 +297,8 @@ export default function Travel() {
         </table>
       </div>
       )}
+
+      {locking && <EstimateLockPanel trip={locking} onClose={() => setLocking(null)} onSaved={() => { setLocking(null); load(); }} />}
 
       {editingActual && (
         <ActualForm initial={editingActual} users={users.data?.users || []} onClose={() => setEditingActual(null)}

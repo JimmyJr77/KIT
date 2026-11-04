@@ -1,5 +1,5 @@
 // Priority accounts, at the top of My dashboard: each person sorts the agencies, departments and organizations that
-// matter most into tiers (Tier 1, Tier 2, …; tiers, not a ranking), picks the bid tickets that matter at each, and keeps
+// matter most into tiers (Tier 1, Tier 2, …; tiers, not a ranking), picks the pipeline tickets that matter at each, and keeps
 // one ordered list of priority tickets chosen from those. A ticket on anyone's list carries a "Priority" tag.
 import { Router } from 'express';
 import { db } from '../db.js';
@@ -18,7 +18,7 @@ function prune(userId) {
     JOIN priority_accounts a ON a.id = pt.account_id JOIN priority_tiers t ON t.id = a.tier_id WHERE t.user_id = ?)`).run(userId, userId);
 }
 
-/** Someone's tiers, accounts, account tickets and priority list. Bid tickets archived (by hand or with Archive all) are left out. */
+/** Someone's tiers, accounts, account tickets and priority list. Pipeline tickets archived (by hand or with Archive all) are left out. */
 export function priorityAccounts(userId) {
   const tiers = db.prepare('SELECT id, name, position FROM priority_tiers WHERE user_id = ? ORDER BY position, id').all(userId);
   const accounts = db.prepare(`SELECT a.id, a.tier_id, a.name, a.position FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
@@ -131,7 +131,7 @@ r.delete('/accounts/:id', (req, res) => {
   res.json(priorityAccounts(req.user.id));
 });
 
-/** Body: { ticket_ids: [] }, in order: the account's priority bid tickets. Tickets dropped from every account leave the list. */
+/** Body: { ticket_ids: [] }, in order: the account's priority pipeline tickets. Tickets dropped from every account leave the list. */
 r.put('/accounts/:id/tickets', (req, res) => {
   if (!ownAccount(req.params.id, req.user.id)) return res.status(404).json({ error: 'Account not found' });
   const ids = [...new Set((Array.isArray(req.body?.ticket_ids) ? req.body.ticket_ids : []).map(Number).filter(Boolean))]

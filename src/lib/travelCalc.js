@@ -130,5 +130,14 @@ export function tripCosts(trip = {}) {
   return costs;
 }
 
+/** The amounts someone can set by hand when they lock a trip's estimate. */
+export const LOCK_FIELDS = [['airfare', 'Airfare'], ['train', 'Train / Tram'], ['pov', 'POV'], ['car', 'Car rental'], ['lodging', 'Lodging'], ['mie', 'M&IE'], ['events', 'Event fees']];
+
+/** The sum of a locked estimate's amounts, to the cent. */
+export const lockSum = (costs = {}) => Math.round(LOCK_FIELDS.reduce((s, [k]) => s + (num(costs[k]) ?? 0), 0) * 100) / 100;
+
+/** What a locked estimate comes to: the total cost override when there is one, whatever the amounts add up to. */
+export const lockTotal = (costs, override) => num(override) ?? lockSum(costs);
+
 export const usd = (n) =>
   (Number(n) || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });

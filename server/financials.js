@@ -1,6 +1,6 @@
 // BD financial figures, shared by the dashboards, the BD report card and the reports. All money is in dollars.
-//   Pipeline: open bids, by stage. Qualified pipeline: open bids from Qualified onward.
-//   Projected bookings: each open bid's value × its PWIN, by the quarter of its projected win date. Bids without a PWIN
+//   Pipeline: open pipeline tickets, by stage. Qualified pipeline: open pipeline tickets from Qualified onward.
+//   Projected bookings: each open pipeline ticket's value × its PWIN, by the quarter of its projected win date. Pipeline tickets without a PWIN
 //     count at full value and are reported apart, so it's clear how much of the forecast is PWIN-adjusted.
 //   Bookings: contracts won (delivery programs), on the day they were awarded.
 //   Backlog: what's left to bill on active contracts, split into funded (funded − billed) and unfunded (value − funded).
@@ -17,6 +17,12 @@ export const OPEN_STAGES = ['Prospecting', 'Qualified', 'Capture', 'Proposal', '
 export const QUALIFIED_STAGES = ['Qualified', 'Capture', 'Proposal', 'Under Evaluation'];
 export const CLOSED_STAGES = ['Awarded', 'Lost'];
 export const localToday = () => new Date().toLocaleDateString('en-CA');
+/**
+ * Whether a ticket is still in the books. Archiving a ticket (by hand or with Archive all) takes it out of every figure,
+ * past and present, until it's restored; deleting it takes its contract and forecast lines with it. A closed ticket that
+ * simply aged off the board after 14 days stays in: it has no archived_at, and its win or loss still happened.
+ */
+export const inBooks = (t = 't') => `${t}.archived_at IS NULL AND ${t}.archive_set_id IS NULL`;
 
 /** `count` quarters starting `offset` quarters from the one containing `date` ("2026 Q4", …). */
 export function quarters(count, offset = 0, date = localToday()) {
@@ -41,8 +47,7 @@ export function filtersFrom(q = {}) {
 const matches = (t, f) => (!f.director || t.bd_director_id === f.director) && (!f.territory || t.territory_id === f.territory);
 
 /**
- * Every bid ticket with its director and territory names and its PWIN (0–1, or null). Bids in an archived dataset are left
- * out, and so are open bids archived by hand: they're no longer being pursued. Closed bids count wherever they're kept.
+ * Every pipeline ticket still in the books (see inBooks), with its director and territory names and its PWIN (0–1, or null).
  */
 export function bids(f = {}) {
   const model = pwinModel();
@@ -50,7 +55,7 @@ export function bids(f = {}) {
       t.projected_win_date, t.win_date_undetermined, t.assessment, t.created_at, t.done_at,
       d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
     FROM tickets t LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id
-    WHERE t.ticket_type = 'bid' AND t.archive_set_id IS NULL AND (t.archived_at IS NULL OR t.pipeline_status IN ('Awarded', 'Lost'))`).all()
+    WHERE t.ticket_type = 'bid' AND ${inBooks()}`).all()
     .filter((t) => matches(t, f))
     .map((t) => {
       const p = pwin(json.parse(t.assessment, {}), model.weights, model.gates);
@@ -61,7 +66,7 @@ export function bids(f = {}) {
 const isOpen = (t) => !CLOSED_STAGES.includes(t.pipeline_status);
 const weighted = (t) => (t.value || 0) * (t.pwin ?? 1);
 
-/** Value and count in each pipeline stage (open and closed), in stage order; bids with no stage last. */
+/** Value and count in each pipeline stage (open and closed), in stage order; pipeline tickets with no stage last. */
 export function byStage(list, stages) {
   const rows = stages.map((stage) => {
     const xs = list.filter((t) => t.pipeline_status === stage);
@@ -73,9 +78,9 @@ export function byStage(list, stages) {
 }
 
 /**
- * Projected bookings from open bids by the quarter of their projected win date, for the next `count` quarters, with
- * PWIN-adjusted and unadjusted money apart. Bids beyond that are "Later"; the rest fall in three pools: undetermined
- * (flagged so), overdue (the date has passed but the bid is still open), and no date (never set).
+ * Projected bookings from open pipeline tickets by the quarter of their projected win date, for the next `count` quarters, with
+ * PWIN-adjusted and unadjusted money apart. Pipeline tickets beyond that are "Later"; the rest fall in three pools: undetermined
+ * (flagged so), overdue (the date has passed but the pipeline ticket is still open), and no date (never set).
  */
 export function expected(list, count = 4) {
   const open = list.filter(isOpen);
@@ -118,11 +123,11 @@ export function qualifiedBy(list, key) {
   return [...groups.values()].sort((a, b) => b.value - a.value);
 }
 
-/** Won contracts with their director, territory, funding and billing (filtered like bids), less those whose bid is in an archived dataset. */
+/** Won contracts with their director, territory, funding and billing (filtered like pipeline tickets). A contract counts only while its pipeline ticket is in the books. */
 export function contracts(f = {}) {
   const rows = db.prepare(`SELECT p.*, t.bd_director_id, t.territory_id, d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
-    FROM delivery_programs p LEFT JOIN tickets t ON t.id = p.ticket_id LEFT JOIN users d ON d.id = t.bd_director_id
-    LEFT JOIN territories tr ON tr.id = t.territory_id WHERE t.archive_set_id IS NULL`).all().filter((p) => matches(p, f));
+    FROM delivery_programs p JOIN tickets t ON t.id = p.ticket_id LEFT JOIN users d ON d.id = t.bd_director_id
+    LEFT JOIN territories tr ON tr.id = t.territory_id WHERE ${inBooks()}`).all().filter((p) => matches(p, f));
   const entries = db.prepare('SELECT * FROM program_entries').all();
   return rows.map((p) => {
     const mine = entries.filter((e) => e.program_id === p.id);
@@ -204,9 +209,16 @@ export function quartersTarget(qs, director = null) {
   });
 }
 
+/** Forecast lines for the quarters asked for (all quarters without any), for pipeline tickets still in the books. */
+export function forecastLines(qs = null) {
+  return db.prepare(`SELECT s.* FROM forecast_snapshots s JOIN tickets t ON t.id = s.ticket_id WHERE ${inBooks()}
+    AND (@all = 1 OR s.quarter IN (SELECT value FROM json_each(@qs)))`).all({ all: qs ? 0 : 1, qs: JSON.stringify(qs || []) });
+}
+
 /**
  * The pipeline as it stood at the end of each interval between `from` and `to`, from the ticket history.
  * by: stage (open stages) | director | territory (qualified pipeline). interval: week | month | quarter | year.
+ * Only tickets still in the books count, so an archived ticket is gone from past points too, not just today's.
  */
 export function trends({ from, to, interval = 'month', by = 'stage', f = {} }) {
   const points = [];
@@ -227,8 +239,9 @@ export function trends({ from, to, interval = 'month', by = 'stage', f = {} }) {
   if (!points.length || points[points.length - 1] < to) points.push(to);
 
   const history = db.prepare(`SELECT h.*, d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
-    FROM ticket_history h LEFT JOIN users d ON d.id = h.bd_director_id LEFT JOIN territories tr ON tr.id = h.territory_id
-    ORDER BY h.ticket_id, h.changed_at, h.id`).all();
+    FROM ticket_history h JOIN tickets t ON t.id = h.ticket_id
+      LEFT JOIN users d ON d.id = h.bd_director_id LEFT JOIN territories tr ON tr.id = h.territory_id
+    WHERE ${inBooks()} ORDER BY h.ticket_id, h.changed_at, h.id`).all();
   const byTicket = new Map();
   history.forEach((h) => { if (!byTicket.has(h.ticket_id)) byTicket.set(h.ticket_id, []); byTicket.get(h.ticket_id).push(h); });
 

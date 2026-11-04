@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -275,13 +275,21 @@ function Event({ event: e, ticket, onChanged, onOpenActivity }) {
                 {e.file.step_type && <> to <span className="font-medium text-slate-700">{e.file.step_type}</span></>}
                 {e.file.email_id && ' from an email'}
               </Meta>
+              <div className="mt-1.5 flex items-center gap-1">
               <a href={`/api/tickets/files/${e.file.id}`} target={e.file.url ? '_blank' : undefined} rel={e.file.url ? 'noreferrer' : undefined}
-                className="mt-1.5 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:border-brand-500">
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:border-brand-500">
                 <FileText size={16} className="shrink-0 text-emerald-600" />
                 <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{e.file.name}</span>
                 {e.file.size != null && <span className="shrink-0 text-[11px] text-slate-400">{bytes(e.file.size)}</span>}
                 {e.file.url ? <ExternalLink size={14} className="shrink-0 text-slate-400" /> : <Download size={14} className="shrink-0 text-slate-400" />}
               </a>
+              {(e.author?.id === user.id || user.role === 'admin') && (
+                <button type="button" className="btn-ghost shrink-0 px-2 py-1 text-slate-400 hover:text-red-600" aria-label={`Delete ${e.file.name}`} title="Delete file"
+                  onClick={async () => { if (confirm(`Delete “${e.file.name}”?`)) { await api.del(`/tickets/files/${e.file.id}`); onChanged(); } }}>
+                  <Trash2 size={14} />
+                </button>
+              )}
+              </div>
             </>
           )}
 

@@ -50,7 +50,7 @@ export function sampleStatus() {
   return { loaded: rows.length > 0, hidden: getSetting('sample_hidden') === '1', loadedAt: getSetting('sample_loaded_at') || null, counts: Object.fromEntries(rows.map((r) => [r.tbl, r.n])) };
 }
 
-// A sample bid's contract, and the forecast lines about it, go with the bid rather than staying behind unlinked.
+// A sample pipeline ticket's contract, and the forecast lines about it, go with the pipeline ticket rather than staying behind unlinked.
 const DELETE_WITH_PARENT = new Set(['delivery_programs.ticket_id', 'forecast_snapshots.ticket_id']);
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
 

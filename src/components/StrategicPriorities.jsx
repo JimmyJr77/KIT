@@ -139,7 +139,7 @@ function TeamRollup({ people }) {
       <div>
         <div className="mb-3">
           <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Building2 size={17} className="text-brand-600" /> Priority accounts</h2>
-          <p className="text-xs text-slate-500">Everyone&apos;s tiers together. Faces show who lists each account; click one to see its priority bid tickets.</p>
+          <p className="text-xs text-slate-500">Everyone&apos;s tiers together. Faces show who lists each account; click one to see its priority pipeline tickets.</p>
         </div>
         <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(15rem,1fr))]">
           {tiers.map((t) => (
@@ -193,7 +193,7 @@ function TeamRollup({ people }) {
 
       {account && (
         <SidePanel title={account.name} subtitle={`${account.tier} · listed by ${account.people.map((p) => fullName(p.member)).join(', ')}`} onClose={() => setOpenAccount(null)} wide>
-          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority bid tickets</h3>
+          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority pipeline tickets</h3>
           {account.tickets.length ? (
             <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
               {account.tickets.map((k) => (
@@ -208,7 +208,7 @@ function TeamRollup({ people }) {
                 </li>
               ))}
             </ul>
-          ) : <p className="text-sm text-slate-400">No bid tickets chosen for this account.</p>}
+          ) : <p className="text-sm text-slate-400">No pipeline tickets chosen for this account.</p>}
         </SidePanel>
       )}
       {ticketId && <TicketTimeline key={`${ticketId}-${ticketStep}`} ticketId={ticketId} activityId={ticketStep} onClose={() => { setTicketId(null); loadCards(); }} onChanged={loadCards} />}

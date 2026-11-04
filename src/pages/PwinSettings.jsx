@@ -76,7 +76,7 @@ export default function PwinSettings({ onClose, onSaved }) {
         <div className="space-y-4">
           <section className="space-y-2 rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
             <p>
-              <b className="text-slate-800">PWIN</b> turns each bid ticket’s Bid and win assessment into a probability of win from 0 to{' '}
+              <b className="text-slate-800">PWIN</b> turns each pipeline ticket’s Bid and win assessment into a probability of win from 0 to{' '}
               {Math.round(MAX_PWIN * 100)}%. Even a ticket rated 5 everywhere tops out at {Math.round(MAX_PWIN * 100)}%, because no pursuit is a sure win.
             </p>
             <div>
@@ -98,7 +98,7 @@ export default function PwinSettings({ onClose, onSaved }) {
                 everything else is. Other areas below 3 cut it too, by more the heavier their weight.
               </p>
             </div>
-            <p>Areas not yet rated count as 1 (no information). Weights are relative, so they don’t have to add up to 100. These settings apply to every bid ticket, for everyone.</p>
+            <p>Areas not yet rated count as 1 (no information). Weights are relative, so they don’t have to add up to 100. These settings apply to every pipeline ticket, for everyone.</p>
             <p className="text-slate-500">
               {saved.custom
                 ? <>Custom settings{saved.updated_by && <> · changed by {saved.updated_by}</>}{saved.updated_at && <> · {stamp(saved.updated_at)}</>}</>

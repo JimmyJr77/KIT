@@ -16,7 +16,7 @@ const GENERIC = new Set(['the', 'and', 'for', 'of', 'command', 'department', 'of
 
 /**
  * Priority accounts, at the top of My dashboard: agencies, departments and organizations sorted into tiers (tiers, not
- * a ranking), the bid tickets that matter at each, and an ordered list of priority tickets picked from those. The
+ * a ranking), the pipeline tickets that matter at each, and an ordered list of priority tickets picked from those. The
  * tickets show as standard pipeline cards with a "Priority" tag. `userId` shows someone else's, read-only.
  */
 export default function PriorityAccounts({ userId, name }) {
@@ -52,7 +52,7 @@ export default function PriorityAccounts({ userId, name }) {
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <div className="mr-auto">
             <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Building2 size={17} className="text-brand-600" /> {edit ? 'Priority accounts' : `${name}'s priority accounts`}</h2>
-            <p className="text-xs text-slate-500">Agencies, departments and organizations in tiers.{edit ? ' Drag them between tiers; click one to choose its priority bid tickets.' : ''}</p>
+            <p className="text-xs text-slate-500">Agencies, departments and organizations in tiers.{edit ? ' Drag them between tiers; click one to choose its priority pipeline tickets.' : ''}</p>
           </div>
           {edit && <AddTier onAdd={(n) => save(api.post('/priority-accounts/tiers', { name: n }))} />}
         </div>
@@ -65,9 +65,9 @@ export default function PriorityAccounts({ userId, name }) {
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <div className="mr-auto">
             <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Star size={17} className="fill-amber-400 text-amber-500" /> Priority tickets</h2>
-            <p className="text-xs text-slate-500">Picked from the bid tickets under the accounts above{edit ? ', in whatever order you like. Drag to reorder.' : '.'}</p>
+            <p className="text-xs text-slate-500">Picked from the pipeline tickets under the accounts above{edit ? ', in whatever order you like. Drag to reorder.' : '.'}</p>
           </div>
-          {edit && <button type="button" className="btn" disabled={!inTiers.length} title={inTiers.length ? '' : 'Add bid tickets to an account first'}
+          {edit && <button type="button" className="btn" disabled={!inTiers.length} title={inTiers.length ? '' : 'Add pipeline tickets to an account first'}
             onClick={() => setPicking(true)}><Plus size={15} /> Choose tickets</button>}
         </div>
         {list.length ? (
@@ -77,7 +77,7 @@ export default function PriorityAccounts({ userId, name }) {
             onOpen={(t, step) => { setTicketStep(step); setTicketId(t.id); }} />
         ) : (
           <p className="rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
-            {edit ? (inTiers.length ? 'No priority tickets yet. Choose them from the tickets under your accounts.' : 'Add accounts to your tiers and give them bid tickets, then choose your priority tickets from those.') : 'No priority tickets yet.'}
+            {edit ? (inTiers.length ? 'No priority tickets yet. Choose them from the tickets under your accounts.' : 'Add accounts to your tiers and give them pipeline tickets, then choose your priority tickets from those.') : 'No priority tickets yet.'}
           </p>
         )}
       </div>
@@ -228,7 +228,7 @@ function AccountChip({ account, edit, onOpen, handle, overlay }) {
       {edit && <span {...handle} className="cursor-grab p-1.5 text-slate-300 hover:text-slate-500 active:cursor-grabbing" aria-label={`Move ${account.name}`}><GripVertical size={14} /></span>}
       <button type="button" onClick={onOpen} className={`flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-left ${edit ? '' : 'pl-2.5'}`}>
         <span className="truncate font-medium text-slate-800">{account.name}</span>
-        <span className="ml-auto shrink-0 text-[11px] text-slate-500" title={`${account.tickets.length} priority bid ticket${account.tickets.length === 1 ? '' : 's'}`}>
+        <span className="ml-auto shrink-0 text-[11px] text-slate-500" title={`${account.tickets.length} priority pipeline ticket${account.tickets.length === 1 ? '' : 's'}`}>
           {account.tickets.length ? `${account.tickets.length} · ${money(open.reduce((s, t) => s + (t.value || 0), 0))}` : 'No tickets'}
         </span>
       </button>
@@ -236,11 +236,11 @@ function AccountChip({ account, edit, onOpen, handle, overlay }) {
   );
 }
 
-// ---- An account: its name, tier and priority bid tickets.
+// ---- An account: its name, tier and priority pipeline tickets.
 
 function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
   const [name, setName] = useState(account.name);
-  const [all, setAll] = useState(null); // every open bid ticket, for picking
+  const [all, setAll] = useState(null); // every open pipeline ticket, for picking
   const [q, setQ] = useState('');
   const [everyOrg, setEveryOrg] = useState(false);
   useEffect(() => {
@@ -294,7 +294,7 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
           </div>
         )}
         <div>
-          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority bid tickets</h3>
+          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority pipeline tickets</h3>
           {account.tickets.length ? (
             <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
               {account.tickets.map((t, i) => (
@@ -316,11 +316,11 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
         </div>
         {edit && (
           <div>
-            <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Add bid tickets</h3>
+            <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Add pipeline tickets</h3>
             <div className="mb-2 flex flex-wrap items-center gap-3">
               <div className="relative min-w-48 flex-1">
                 <Search size={14} className="absolute top-2.5 left-2.5 text-slate-400" />
-                <input className="input h-9 pl-8 text-sm" placeholder="Search open bid tickets" value={q} onChange={(e) => setQ(e.target.value)} />
+                <input className="input h-9 pl-8 text-sm" placeholder="Search open pipeline tickets" value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
               <label className="flex items-center gap-1.5 text-xs text-slate-600">
                 <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={everyOrg} onChange={(e) => setEveryOrg(e.target.checked)} />
@@ -342,7 +342,7 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-slate-400">{q || everyOrg ? 'No matching open bid tickets.' : `No open bid tickets for ${account.name}. Search, or tick Every organization.`}</p>
+              <p className="text-sm text-slate-400">{q || everyOrg ? 'No matching open pipeline tickets.' : `No open pipeline tickets for ${account.name}. Search, or tick Every organization.`}</p>
             )}
           </div>
         )}
@@ -398,7 +398,7 @@ function PickList({ tickets, chosen, onClose, onSave }) {
   const [picked, setPicked] = useState(chosen);
   const toggle = (id) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
   return (
-    <SidePanel title="Choose priority tickets" subtitle="From the bid tickets under your priority accounts" onClose={onClose}
+    <SidePanel title="Choose priority tickets" subtitle="From the pipeline tickets under your priority accounts" onClose={onClose}
       footer={(
         <div className="flex justify-end gap-2">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { db, json, withTeams } from '../db.js';
 import { estimateFlight, estimateCar, mcpStatus, VEHICLE_CLASSES, placeLabel } from '../services/estimators.js';
 import { mileageRate } from '../services/gsa.js';
-import { quarterFor, tripCosts, upcomingQuarters, PURPOSES } from '../../src/lib/travelCalc.js';
+import { quarterFor, tripCosts, upcomingQuarters, lockTotal, LOCK_FIELDS, PURPOSES } from '../../src/lib/travelCalc.js';
 
 const r = Router();
 
@@ -12,6 +12,7 @@ function hydrate(row) {
   if (!row) return null;
   const t = { ...row };
   for (const [k, d] of Object.entries(JSON_COLS)) t[k] = json.parse(row[k], d);
+  t.locked_estimate = json.parse(row.locked_estimate, null);
   return t;
 }
 
@@ -50,7 +51,7 @@ function validate(b = {}) {
   return null;
 }
 
-function toRow(b) {
+function toRow(b, lock = null) {
   const row = {
     traveler_id: Number(b.traveler_id),
     details: b.details || null,
@@ -58,7 +59,7 @@ function toRow(b) {
     date_to: b.date_to,
     quarter: quarterFor(b.date_from),
     train: b.train === '' || b.train == null ? null : Number(b.train),
-    total_estimate: tripCosts(b).total,
+    total_estimate: lock ? lock.total : tripCosts(b).total,
     event_id: Number(b.event_id) || null,
   };
   for (const [k, d] of Object.entries(JSON_COLS)) row[k] = json.str(b[k] ?? d);
@@ -197,7 +198,7 @@ r.put('/:id', (req, res) => {
   if (err) return res.status(400).json({ error: err });
   const before = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Not found' });
-  const row = toRow(req.body);
+  const row = toRow(req.body, json.parse(before.locked_estimate, null));
   // A decided request goes back for approval when what was approved changes: who, when, where, or what it costs.
   const changed = ['traveler_id', 'date_from', 'date_to', 'location_to', 'total_estimate'].some((k) => String(row[k] ?? '') !== String(before[k] ?? ''));
   const resubmit = !before.approval || (before.approval !== 'pending' && changed);
@@ -208,6 +209,33 @@ r.put('/:id', (req, res) => {
   if (resubmit || (before.approval === 'pending' && row.traveler_id !== before.traveler_id)) submitted(trip, req.user.id);
   res.json({ trip: withApproval(req.user)(trip) });
 });
+
+/** Set or clear a trip's locked estimate. A decided request goes back for approval when that changes what it costs. */
+function setLock(req, res, lock) {
+  const before = hydrate(db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id));
+  if (!before) return res.status(404).json({ error: 'Not found' });
+  const total = lock ? lock.total : tripCosts(before).total;
+  const resubmit = before.approval && before.approval !== 'pending' && Math.abs(total - before.total_estimate) >= 0.005;
+  db.prepare(`UPDATE trips SET locked_estimate = ?, total_estimate = ?, updated_at = datetime('now')
+    ${resubmit ? ", approval = 'pending', approved_by = NULL, approved_at = NULL, approval_note = NULL" : ''} WHERE id = ?`)
+    .run(lock ? json.str(lock) : null, total, before.id);
+  const trip = hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(before.id));
+  if (resubmit) submitted(trip, req.user.id);
+  res.json({ trip: withApproval(req.user)(trip) });
+}
+
+/** Lock the estimate. Body: { costs: { airfare, train, pov, car, lodging, mie, events }, override }; a blank override means none. */
+r.put('/:id/lock', (req, res) => {
+  const { costs: given = {}, override: rawOverride } = req.body || {};
+  const blank = (v) => v === '' || v == null;
+  const costs = Object.fromEntries(LOCK_FIELDS.map(([k]) => [k, blank(given[k]) ? 0 : Number(given[k])]));
+  const override = blank(rawOverride) ? null : Number(rawOverride);
+  if ([...Object.values(costs), override ?? 0].some((n) => !(n >= 0))) return res.status(400).json({ error: 'Amounts must be zero or more' });
+  setLock(req, res, { costs, override, total: lockTotal(costs, override) });
+});
+
+/** Unlock the estimate: the trip goes back to its calculated total. */
+r.delete('/:id/lock', (req, res) => setLock(req, res, null));
 
 /** Approve or decline a travel request. Body: { decision: 'approved' | 'declined', note }. The traveler gets an alert. */
 r.post('/:id/approval', (req, res) => {
@@ -270,12 +298,13 @@ r.post('/estimate/car', async (req, res) => {
   res.json({ estimate: await estimateCar(input) });
 });
 
-// Re-price every upcoming trip that uses estimated airfare or an estimated rental car.
+// Re-price every upcoming trip that uses estimated airfare or an estimated rental car, leaving locked estimates alone.
 r.post('/refresh', async (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const trips = db.prepare(`${SELECT} WHERE t.date_to >= ?`).all(today).map(hydrate);
   let updated = 0;
   for (const trip of trips) {
+    if (trip.locked_estimate) continue;
     let changed = false;
     if (trip.airfare?.mode === 'estimated') {
       trip.airfare.estimate = { ...(await estimateFlight(flightInput(trip.airfare, trip))), key: trip.airfare.estimate?.key };

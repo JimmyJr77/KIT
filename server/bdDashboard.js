@@ -6,7 +6,7 @@
 //     and expenses (actual travel and marketing) against revenue.
 //   BD numbers: bookings, revenue and expected closings over time, the Qualified+ pipeline, and book-to-bill three ways.
 //   (The BD report card is its own endpoint: /financials/report-card.)
-// Bookings are contracts won, on their award date; revenue is what's billed on them; both follow the bid's BD director.
+// Bookings are contracts won, on their award date; revenue is what's billed on them; both follow the pipeline ticket's BD director.
 import { db, json } from './db.js';
 import { weekStartFor } from './routes/priorities.js';
 import {
@@ -21,7 +21,7 @@ const inList = (ids) => JSON.stringify(ids);
 
 /**
  * Who the dashboard is about. ?director=<user id>: one person. ?team=<team id>: everyone on the team. The BD team also
- * gets every bid, whoever its director is (bids with no director included); any other team, only bids its people direct.
+ * gets every pipeline ticket, whoever its director is (pipeline tickets with no director included); any other team, only pipeline tickets its people direct.
  * ?territory=<id> narrows the money (pipeline, bookings, revenue, marketing) to one territory.
  */
 export function scopeFrom(q, me) {
@@ -37,7 +37,7 @@ export function scopeFrom(q, me) {
   return { kind: 'team', team: team.id, people, director: null, label: team.name, territory, allBids: team.name === 'BD' };
 }
 
-/** The scope's bids and contracts. */
+/** The scope's pipeline tickets and contracts. */
 function money(s) {
   const f = { director: s.director, territory: s.territory };
   const keep = (x) => s.allBids || s.director || s.people.includes(x.bd_director_id);

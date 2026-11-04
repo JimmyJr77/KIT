@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Loader2, Check, SquareCheck, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, MessageSquare } from 'lucide-react';
+import { X, Plus, Trash2, Loader2, Check, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { api } from '../lib/api.js';
@@ -7,14 +7,13 @@ import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import { PROCESS_TYPES, REVIEW_AREAS } from '../lib/process.js';
-import { ActivitiesDrawer, ActivityForm, SubtaskList, CommentComposer, when } from './TicketActivities.jsx';
+import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
-/** The menu items along the ticket pane's left edge. Strategy and the win assessment are for bid tickets only. */
+/** The menu items along the ticket pane's left edge. Strategy and the win assessment are for pipeline tickets only. */
 export const PLAN_TOOLS = [
   { key: 'strategy', label: 'Strategy', icon: ChessPawn, bidOnly: true },
   { key: 'activities', label: 'Activity', icon: CalendarCheck },
-  { key: 'tasks', label: 'Tasks', icon: SquareCheck },
   { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
   { key: 'people', label: 'People', icon: ContactRound },
   { key: 'process', label: 'Process flow', icon: Workflow, bidOnly: true },
@@ -33,7 +32,6 @@ export function PlanRail({ ticket, active, onSelect }) {
 /** The extra pane for whichever menu item is open. `onChanged` refreshes the timeline after a save. */
 export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty, activityId }) {
   if (tool === 'activities') return <ActivitiesDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} initialId={activityId} />;
-  if (tool === 'tasks') return <TasksDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'people') return <PeopleDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
   if (tool === 'strategy') return <StrategyDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'process') return <ProcessDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
@@ -55,77 +53,6 @@ export function DrawerShell({ title, subtitle, onClose, footer, children }) {
       <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
       {footer && <footer className="border-t border-slate-200 bg-white px-5 py-3">{footer}</footer>}
     </>
-  );
-}
-
-// ---- Tasks
-
-/**
- * Every activity on the ticket as a checkbox, in priority order, with its subtasks indented under it. Checking an
- * activity marks it done in the Activity pane too. A new task is a new activity: its form opens here, then returns.
- */
-function TasksDrawer({ ticket, onClose, onChanged, onDirty }) {
-  const [data, setData] = useState(null);
-  const [view, setView] = useState('list'); // list | new | <activity id>
-  const [commenting, setCommenting] = useState(null);
-  const load = () => api.get(`/activities?ticket=${ticket.id}`).then(setData);
-  useEffect(() => { load(); }, [ticket.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  const changed = () => { load(); onChanged(); };
-  const back = () => { onDirty?.(false); setView('list'); load(); };
-
-  if (view !== 'list' && data) {
-    return (
-      <ActivityForm key={view} ticket={ticket} activityId={view === 'new' ? null : view} types={data.types} priorities={data.priorities} onClose={onClose}
-        onBack={back} onSaved={() => { back(); onChanged(); }} onChanged={changed} onDirty={onDirty} backLabel="Back to tasks" />
-    );
-  }
-
-  const toggle = async (a) => {
-    setData((d) => ({ ...d, activities: d.activities.map((x) => (x.id === a.id ? { ...x, done: !x.done } : x)) }));
-    await api.put(`/activities/${a.id}`, { done: !a.done });
-    changed();
-  };
-  const all = data?.activities || [];
-  const items = all.length + all.reduce((n, a) => n + a.subtasks.length, 0);
-  const done = all.filter((a) => a.done).length + all.reduce((n, a) => n + a.subtasks.filter((x) => x.done).length, 0);
-
-  return (
-    <DrawerShell title="Tasks" subtitle={data ? `${items - done} to do · ${done} done across this ticket` : 'Loading…'} onClose={onClose}>
-      <div className="space-y-4">
-        <button type="button" className="btn-primary w-full justify-center" onClick={() => setView('new')}><Plus size={15} /> New task</button>
-        {data && !all.length && <p className="text-center text-sm text-slate-400">No tasks yet. A new task is a new activity on this ticket.</p>}
-        <ul className="space-y-2">
-          {all.map((a) => (
-            <li key={a.id} className={`rounded-lg border bg-white p-2.5 ${a.rank === 1 ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
-              <div className="group flex items-start gap-2">
-                <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600" checked={a.done} onChange={() => toggle(a)}
-                  aria-label={`Mark “${a.subject}” ${a.done ? 'not done' : 'done'}`} />
-                <button type="button" onClick={() => setView(a.id)} className="min-w-0 flex-1 text-left">
-                  {a.rank === 1 && <span className="mb-0.5 inline-block rounded bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">Next step</span>}
-                  <span className={`block text-sm font-medium ${a.done ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{a.subject}</span>
-                  <span className="block text-[11px] text-slate-500">{[a.activity_type, when(a) || 'No date', a.assignee_name].filter(Boolean).join(' · ')}</span>
-                </button>
-                <button type="button" onClick={() => setCommenting(commenting === a.id ? null : a.id)} title="Comment on this task" aria-label={`Comment on “${a.subject}”`}
-                  className={`flex items-center gap-0.5 text-[11px] ${a.comment_count ? 'text-violet-600' : 'text-slate-300 opacity-0 group-hover:opacity-100'} hover:text-violet-700`}>
-                  <MessageSquare size={14} />{a.comment_count > 0 && a.comment_count}
-                </button>
-              </div>
-              {commenting === a.id && (
-                <div className="mt-1.5 ml-6">
-                  <CommentComposer ticketId={ticket.id} target={{ type: 'activity', id: a.id }} autoFocus placeholder={`Comment on “${a.subject}”…`}
-                    onPosted={() => { setCommenting(null); changed(); }} onCancel={() => setCommenting(null)} />
-                </div>
-              )}
-              {(!a.done || a.subtasks.length > 0) && (
-                <div className="mt-1.5 ml-6 border-l-2 border-slate-100 pl-2">
-                  <SubtaskList activity={a} ticketId={ticket.id} onChanged={changed} compact />
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      </div>
-    </DrawerShell>
   );
 }
 
@@ -244,7 +171,7 @@ const today = () => new Date().toLocaleDateString('en-CA');
 const stepForm = (s) => ({ step_type: s.step_type, step_date: s.step_date || '', notes: s.notes, reviews: s.reviews });
 
 /**
- * A timeline of the formal process steps on a bid (RFI, RFP, gate reviews, ROM, proposal…), oldest first.
+ * A timeline of the formal process steps on a pipeline ticket (RFI, RFP, gate reviews, ROM, proposal…), oldest first.
  * Steps can be added at any time. Each records who was involved in its reviews, notes, and documents.
  */
 function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {

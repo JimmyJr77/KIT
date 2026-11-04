@@ -14,6 +14,7 @@ import BookingTargetsPanel from '../components/BookingTargets.jsx';
 import SampleDataPanel from '../components/SampleDataPanel.jsx';
 import ArchiveAllPanel from '../components/ArchiveAllPanel.jsx';
 import PipedrivePanel from '../components/PipedrivePanel.jsx';
+import NewPipelineTicketsPanel from '../components/NewPipelineTicketsPanel.jsx';
 import { TerritoryTags, TerritoryChecklist, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
 
 /** Admins only: access requests from the sign-in page, approved accounts, and the team directory. */
@@ -38,6 +39,7 @@ function AdminPage() {
       <DirectoryPanel approved={approved} users={users} teams={teamList} territories={territories.data?.territories || []} onError={setError} />
       <TerritoriesPanel territories={territories} onChanged={users.reload} />
       <BookingTargetsPanel />
+      <NewPipelineTicketsPanel />
       <PipedrivePanel />
       <ArchiveAllPanel />
       <SampleDataPanel />

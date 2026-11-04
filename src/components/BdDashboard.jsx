@@ -22,7 +22,7 @@ const share = (r) => (r == null || !Number.isFinite(r) ? '—' : r < 0.1 ? `${(r
 /**
  * The BD dashboard for one person (`director`) or a team (`team`), optionally narrowed to a territory: to-do highlights,
  * top-level metrics, BD numbers and the report card. `self` is true when it's the viewer's own (My dashboard). Someone
- * who isn't in BD (not on the team and directing no bids), or a team other than BD, gets the to-do highlights only.
+ * who isn't in BD (not on the team and directing no pipeline tickets), or a team other than BD, gets the to-do highlights only.
  * `header(data)` renders above everything; `children` sit between the to-do highlights and the numbers.
  */
 export default function BdDashboard({ director, team, territory, self = false, header, children }) {
@@ -195,11 +195,11 @@ function TopMetrics({ top, people, territory }) {
         <YearBasisToggle />
       </SectionHead>
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(12.5rem,1fr))]">
-        <StatTile label="Qualified+ pipeline" value={compact(ql.value)} sub={`${plural(ql.count, 'open bid')}, Qualified onward · ${compact(ql.weighted)} PWIN-adjusted`} />
+        <StatTile label="Qualified+ pipeline" value={compact(ql.value)} sub={`${plural(ql.count, 'open PL ticket')}, Qualified onward · ${compact(ql.weighted)} PWIN-adjusted`} />
         <PairTile label="Booked (awarded)" q={top.booked.quarter} y={top.booked.year} note={territory ? 'Targets are set per BD director, not per territory' : null} />
         <PairTile label="Revenue (billed)" q={top.revenue.quarter} y={top.revenue.year} />
         <StatTile label={`Expected bookings through ${ex.through}`} value={compact(ex.byQ4.weighted)}
-          sub={`PWIN-adjusted, ${plural(ex.byQ4.count, 'Qualified+ bid')} with a close date by year end`}>
+          sub={`PWIN-adjusted, ${plural(ex.byQ4.count, 'Qualified+ PL ticket')} with a close date by year end`}>
           <div className="mt-2 space-y-0.5 border-t border-slate-100 pt-2 text-xs text-slate-600" title="All PWIN-adjusted">
             <Row label="All Qualified+" value={compact(ex.all.weighted)} strong />
             <Row label={`With close date (${ex.dated.count})`} value={compact(ex.dated.weighted)} />
@@ -240,7 +240,7 @@ function TopMetrics({ top, people, territory }) {
             <DataTable columns={[{ key: 'label', label: '' }, { key: 'value', label: 'Amount', align: 'right', format: fullMoney }]}
               rows={[{ label: 'Travel (actual)', value: xp.year.travel }, { label: 'Trips (estimated)', value: xp.year.travelEstimated },
                 { label: 'Marketing', value: xp.year.marketing }, { label: 'Revenue billed', value: xp.year.revenue }]} />
-            <p className="mt-2 text-[11px] text-slate-400">Marketing counts spend tied to this person, to their bid tickets, or (split evenly) to events they attended. The Marketing team records it under Marketing › Spend.</p>
+            <p className="mt-2 text-[11px] text-slate-400">Marketing counts spend tied to this person, to their pipeline tickets, or (split evenly) to events they attended. The Marketing team records it under Marketing › Spend.</p>
           </ChartCard>
         )}
       </div>
@@ -287,8 +287,8 @@ function BdNumbers({ numbers: n, isTeam }) {
           timeline={<LineChart points={rv.map((x) => x.quarter)} labels={rv.map((x) => shortQuarter(x.quarter))} height={180}
             series={[{ key: 'rev', label: 'Revenue', values: rv.map((x) => x.value) }]} />} />
 
-        <ViewCard title="Expected closings" subtitle="Qualified+ bids by the quarter of their projected win date: how many, and their full value"
-          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'Bids', align: 'right' }, { key: 'value', label: 'Value', align: 'right', format: fullMoney },
+        <ViewCard title="Expected closings" subtitle="Qualified+ pipeline tickets by the quarter of their projected win date: how many, and their full value"
+          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'PL tickets', align: 'right' }, { key: 'value', label: 'Value', align: 'right', format: fullMoney },
             { key: 'weighted', label: 'PWIN-adjusted', align: 'right', format: fullMoney }],
             rows: [...cl.quarters, ...pools.map(([l, b]) => ({ quarter: l, ...b }))] }}
           bar={<StackedColumns categories={cl.quarters.map((x) => `${shortQuarter(x.quarter)} · ${x.count}`)} height={150}
@@ -297,8 +297,8 @@ function BdNumbers({ numbers: n, isTeam }) {
             series={[{ key: 'value', label: 'Value', values: cl.quarters.map((x) => x.value) }, { key: 'weighted', label: 'PWIN-adjusted', values: cl.quarters.map((x) => x.weighted) }]} />}
           footer={pools.length > 0 && <p className="mt-3 text-xs text-slate-500">Not in a quarter: {pools.map(([l, b]) => `${l} ${compact(b.value)} (${b.count})`).join(' · ')}</p>} />
 
-        <ViewCard title="Qualified+ pipeline" subtitle={`Open bids from Qualified onward that haven't been awarded: ${compact(ql.stages.reduce((s, x) => s + x.value, 0))} in all`}
-          table={{ columns: [{ key: 'label', label: qualBy === 'stage' ? 'Stage' : qualBy === 'territory' ? 'Territory' : 'BD director' }, { key: 'count', label: 'Bids', align: 'right' },
+        <ViewCard title="Qualified+ pipeline" subtitle={`Open pipeline tickets from Qualified onward that haven't been awarded: ${compact(ql.stages.reduce((s, x) => s + x.value, 0))} in all`}
+          table={{ columns: [{ key: 'label', label: qualBy === 'stage' ? 'Stage' : qualBy === 'territory' ? 'Territory' : 'BD director' }, { key: 'count', label: 'PL tickets', align: 'right' },
             { key: 'value', label: 'Value', align: 'right', format: fullMoney }, { key: 'weighted', label: 'PWIN-adjusted', align: 'right', format: fullMoney }], rows: qualRows }}
           bar={(
             <div>
@@ -308,7 +308,7 @@ function BdNumbers({ numbers: n, isTeam }) {
                     className={`rounded px-2 ${qualBy === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
                 ))}
               </div>
-              <BarList rows={qualRows.map((r) => ({ key: r.key, label: r.label, value: r.value, sub: `${r.count}` }))} empty="No Qualified+ bids." />
+              <BarList rows={qualRows.map((r) => ({ key: r.key, label: r.label, value: r.value, sub: `${r.count}` }))} empty="No Qualified+ pipeline tickets." />
             </div>
           )}
           timeline={<LineChart points={ql.trend.points} labels={ql.trend.points.map(trendLabel)} height={180}
@@ -317,8 +317,8 @@ function BdNumbers({ numbers: n, isTeam }) {
         <PipelineByPerson className="lg:col-span-2" data={ql.byPerson} />
 
         <ViewCard className="lg:col-span-2" title="Qualified+ expected bookings by quarter"
-          subtitle="By projected win quarter. Bids with a PWIN count at value × PWIN; bids without one count at full value and are shown apart."
-          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'Bids', align: 'right' }, { key: 'adjCount', label: 'With PWIN', align: 'right' },
+          subtitle="By projected win quarter. Pipeline tickets with a PWIN count at value × PWIN; pipeline tickets without one count at full value and are shown apart."
+          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'PL tickets', align: 'right' }, { key: 'adjCount', label: 'With PWIN', align: 'right' },
             { key: 'adj', label: 'PWIN-adjusted', align: 'right', format: fullMoney }, { key: 'adjRaw', label: '(their full value)', align: 'right', format: fullMoney },
             { key: 'rawCount', label: 'No PWIN', align: 'right' }, { key: 'raw', label: 'No-PWIN value', align: 'right', format: fullMoney }, { key: 'total', label: 'Expected', align: 'right', format: fullMoney }],
             rows: cl.quarters.map((x) => ({ quarter: x.quarter, count: x.count, adjCount: x.adjusted.count, adj: x.adjusted.weighted, adjRaw: x.adjusted.value,

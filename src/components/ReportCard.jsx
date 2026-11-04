@@ -37,37 +37,37 @@ function explain(key, t) {
       assesses: 'Whether we are winning enough work to hit our booking goal.',
       how: 'Contract value awarded in the period ÷ the booking target for the period. While the period is still running, the result is compared with how much of the period has passed (pace), so 50% booked halfway through the quarter is on track.',
       scale: ['At or ahead of pace (100% or more for a finished period)', 'At least 75% of pace', 'Below 75% of pace'],
-      needs: 'Booking targets (Admin Access or My team › Booking targets) and bids marked Awarded.',
+      needs: 'Booking targets (Admin Access or My team › Booking targets) and pipeline tickets marked Awarded.',
     },
     newQualified: {
       assesses: 'Whether we are creating enough future growth opportunity.',
-      how: 'The dollar value of bids that first reached Qualified (or a later stage) during the period, from each bid\'s stage history. A bid counts once, in the period it first qualified.',
+      how: 'The dollar value of pipeline tickets that first reached Qualified (or a later stage) during the period, from each pipeline ticket\'s stage history. A pipeline ticket counts once, in the period it first qualified.',
       scale: ['At least the period\'s booking target (pro-rated to pace)', 'At least half of that', 'Less than half'],
-      needs: 'Bids moved through the pipeline stages, and booking targets.',
+      needs: 'Pipeline tickets moved through the pipeline stages, and booking targets.',
     },
     coverage: {
       assesses: 'Whether there is enough qualified opportunity to reach the goal.',
-      how: 'Qualified pipeline (open bids from Qualified onward) ÷ the target still to book. For a finished period, the pipeline as it stood when the period began ÷ the full target. Shows "Met" once the target is reached.',
+      how: 'Qualified pipeline (open pipeline tickets from Qualified onward) ÷ the target still to book. For a finished period, the pipeline as it stood when the period began ÷ the full target. Shows "Met" once the target is reached.',
       scale: [`${t.coverage.good}× or more`, `${t.coverage.watch}× to ${t.coverage.good}×`, `Under ${t.coverage.watch}×`],
-      needs: 'Pipeline stages and values on bids, and booking targets.',
+      needs: 'Pipeline stages and values on pipeline tickets, and booking targets.',
     },
     winRate: {
       assesses: 'Whether we are pursuing and winning the right work.',
-      how: 'Bids won ÷ bids decided (won or lost) in the period, by count; the share by dollar value is shown beside it. Wins are dated by their contract\'s award date.',
+      how: 'Pipeline tickets won ÷ pipeline tickets decided (won or lost) in the period, by count; the share by dollar value is shown beside it. Wins are dated by their contract\'s award date.',
       scale: [`${pctOf(t.winRate.good)} or more`, `${pctOf(t.winRate.watch)} to ${pctOf(t.winRate.good)}`, `Under ${pctOf(t.winRate.watch)}`],
-      needs: 'Bids closed as Awarded or Lost.',
+      needs: 'Pipeline tickets closed as Awarded or Lost.',
     },
     progression: {
       assesses: 'Whether pursuits are moving forward and improving our position to win.',
-      how: `The number of bids that moved forward at least one stage in the period. An open bid is stalled if its stage hasn't changed in ${t.stalledDays} or more days, or its projected win date has passed; stalled bids are listed below the cards.`,
-      scale: ['80% or more of open bids are moving', '60% to 80% moving', 'Under 60% moving'],
-      needs: 'Stage changes on bids, and projected win dates.',
+      how: `The number of pipeline tickets that moved forward at least one stage in the period. An open pipeline ticket is stalled if its stage hasn't changed in ${t.stalledDays} or more days, or its projected win date has passed; stalled pipeline tickets are listed below the cards.`,
+      scale: ['80% or more of open pipeline tickets are moving', '60% to 80% moving', 'Under 60% moving'],
+      needs: 'Stage changes on pipeline tickets, and projected win dates.',
     },
     forecast: {
       assesses: 'Whether leadership can rely on our outlook.',
-      how: 'Actual bookings in a quarter ÷ the forecast saved at the start of that quarter (value × PWIN of every open bid projected to close in it; full value if it had no PWIN). Judged only once the quarter has ended; a year looks at its finished quarters.',
+      how: 'Actual bookings in a quarter ÷ the forecast saved at the start of that quarter (value × PWIN of every open pipeline ticket projected to close in it; full value if it had no PWIN). Judged only once the quarter has ended; a year looks at its finished quarters.',
       scale: [`Within ${pctOf(t.forecast.good)} of the forecast`, `Within ${pctOf(t.forecast.watch)}`, `Off by more than ${pctOf(t.forecast.watch)}`],
-      needs: 'Projected win dates on bids (the forecast is saved automatically early each quarter) and win assessments for PWIN.',
+      needs: 'Projected win dates on pipeline tickets (the forecast is saved automatically early each quarter) and win assessments for PWIN.',
     },
     accounts: {
       assesses: 'Whether we are building access and shaping future customer demand.',
@@ -106,7 +106,7 @@ function ConfigDialog({ measures, thresholds, period, onClose }) {
             <div className="mb-1.5 font-semibold text-slate-800">Statuses</div>
             <p className="mb-2">Every measure gets one of four statuses, always shown with an icon and a word. Where each threshold sits is listed under each measure.</p>
             <div className="flex flex-wrap gap-2">{['good', 'watch', 'behind', 'none'].map((k) => <StatusChip key={k} status={k} />)}</div>
-            <p className="mt-2">Periods: this or last quarter, or this or last year. A year can be the calendar year or the trailing four quarters (the last four finished quarters, or the four before those). A period still running is judged against how much of it has passed. Pipeline figures (coverage, stalled bids) are as of today.</p>
+            <p className="mt-2">Periods: this or last quarter, or this or last year. A year can be the calendar year or the trailing four quarters (the last four finished quarters, or the four before those). A period still running is judged against how much of it has passed. Pipeline figures (coverage, stalled pipeline tickets) are as of today.</p>
           </section>
           {measures.map((m, i) => {
             const e = explain(m.key, thresholds);
@@ -244,7 +244,7 @@ function Measures({ card }) {
 
 /**
  * Stalled pursuits as one card per stage, Qualified through Under Evaluation: how many and their value. Select a card to
- * list its bids in a side panel; select a bid to open its ticket.
+ * list its pipeline tickets in a side panel; select one to open its ticket.
  */
 export function StalledByStage({ measure, showDirector }) {
   const [open, setOpen] = useState(null);
@@ -272,7 +272,7 @@ export function StalledByStage({ measure, showDirector }) {
         })}
       </div>
       {open && (
-        <SidePanel title={`Stalled in ${open}`} subtitle={`${shown.length} bid${shown.length === 1 ? '' : 's'} · ${compact(total(shown))} · no stage change in 45+ days, or past the projected win date`}
+        <SidePanel title={`Stalled in ${open}`} subtitle={`${shown.length} pipeline ticket${shown.length === 1 ? '' : 's'} · ${compact(total(shown))} · no stage change in 45+ days, or past the projected win date`}
           onClose={() => setOpen(null)}>
           <ul className="space-y-2">
             {shown.map((x) => (

@@ -6,7 +6,7 @@
 // KIT → Pipedrive happens only when an admin sends it, choosing what goes (pipedriveSend.js). Nothing in KIT sends on
 // its own: edits made in KIT are only marked as waiting to be sent.
 //
-// What comes over: pipelines and their stages (KIT makes a pipeline to match each one), deals as bid tickets (closed
+// What comes over: pipelines and their stages (KIT makes a pipeline to match each one), deals as pipeline tickets (closed
 // ones already archived, dated when they closed), people as CRM contacts, and each deal's activities, notes and files.
 // Pipedrive users are matched to KIT accounts by email; an owner with no KIT account gets one to claim.
 import crypto from 'node:crypto';
@@ -162,6 +162,10 @@ export function activityView(a, owner) {
   };
 }
 
+/** Whether a file deleted in Pipedrive is deleted in KIT too, on the next pull or live update. Admins choose; off by default. */
+export const pullFileDeletes = () => getSetting('pipedrive_pull_file_deletes') === '1';
+export const setPullFileDeletes = (on) => setSetting('pipedrive_pull_file_deletes', on ? '1' : '0');
+
 /** Mark a Pipedrive record deleted in KIT: it isn't imported again, and an admin's send deletes it in Pipedrive. */
 export function queueDelete(kind, pipedriveId, dealId = null) {
   if (pipedriveId) db.prepare('INSERT OR IGNORE INTO pipedrive_deletes (kind, pipedrive_id, deal_id) VALUES (?, ?, ?)').run(kind, pipedriveId, dealId);
@@ -233,7 +237,29 @@ async function dealExtras(deals, phase) {
   return { ...out, persons: [...persons.values()] };
 }
 
-/** Read from Pipedrive, then write it to KIT in one transaction. Returns what changed. */
+/**
+ * Pipedrive ids of KIT's files on these deals that were deleted in Pipedrive. Missing from the deal's list isn't enough (a
+ * file moved to a deal outside this pull is missing too), so each one is asked about, and any doubt keeps the file.
+ */
+async function filesDeletedThere(dealIds, files, phase) {
+  const listed = new Set(files.filter((f) => f.active_flag !== false).map((f) => f.id));
+  const missing = db.prepare(`SELECT f.pipedrive_id AS id FROM main.ticket_files f JOIN main.tickets t ON t.id = f.ticket_id
+    WHERE f.pipedrive_id IS NOT NULL AND f.email_id IS NULL AND t.archive_set_id IS NULL AND t.pipedrive_id IN (SELECT value FROM json_each(?))`)
+    .all(json.str([...dealIds])).map((f) => f.id).filter((id) => !listed.has(id));
+  const gone = [];
+  for (const [i, id] of missing.entries()) {
+    phase(`Checking file ${i + 1} of ${missing.length}`);
+    try {
+      if ((await call(`files/${id}`)).data?.active_flag === false) gone.push(id);
+    } catch (e) {
+      if (/: (404|410) /.test(e.message)) gone.push(id);
+      else console.error(`Pipedrive file ${id}: ${e.message}`);
+    }
+  }
+  return gone;
+}
+
+/** Read from Pipedrive, then write it to KIT in one transaction. Returns what changed. A deal whose ticket was deleted in KIT is skipped. */
 async function pull(scope, phase) {
   phase('Reading Pipedrive');
   const [users, pipelines, stages, dealFields] = await Promise.all([all('users'), all('pipelines'), all('stages'), all('dealFields')]);
@@ -272,6 +298,8 @@ async function pull(scope, phase) {
     ...db.prepare('SELECT pipedrive_id FROM main.ticket_files WHERE pipedrive_id IS NOT NULL').all().map((f) => f.pipedrive_id),
     ...db.prepare("SELECT pipedrive_id FROM pipedrive_deletes WHERE kind = 'file'").all().map((f) => f.pipedrive_id),
   ]);
+  const deletedDeals = new Set(db.prepare("SELECT pipedrive_id FROM pipedrive_deletes WHERE kind = 'deal'").all().map((x) => x.pipedrive_id));
+  deals = deals.filter((d) => !deletedDeals.has(d.id));
   const dealIds = new Set(deals.map((d) => d.id));
   const wanted = files.filter((f) => f.deal_id && dealIds.has(f.deal_id) && !f.inline_flag && f.active_flag !== false);
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -287,12 +315,17 @@ async function pull(scope, phase) {
     }
   }
 
+  const filesGone = pullFileDeletes() ? await filesDeletedThere(dealIds, files, phase) : [];
+  const storedGone = db.prepare('SELECT stored_name, url FROM main.ticket_files WHERE pipedrive_id IN (SELECT value FROM json_each(?))').all(json.str(filesGone));
+
   phase('Saving to KIT');
   try {
-    return db.transaction(() => write({
+    const result = db.transaction(() => write({
       users, pipelines, stages, dealFields, deals, persons,
-      activities: activities.filter((a) => dealIds.has(a.deal_id)), notes: notes.filter((n) => dealIds.has(n.deal_id)), files: wanted, downloaded,
+      activities: activities.filter((a) => dealIds.has(a.deal_id)), notes: notes.filter((n) => dealIds.has(n.deal_id)), files: wanted, downloaded, filesGone,
     }))();
+    storedGone.forEach((f) => { if (f.stored_name && !f.url) fs.rmSync(path.join(uploadDir, f.stored_name), { force: true }); });
+    return result;
   } catch (e) {
     // Nothing was saved, so the files just downloaded aren't needed.
     downloaded.forEach((d) => fs.rmSync(path.join(uploadDir, d.stored), { force: true }));
@@ -300,7 +333,7 @@ async function pull(scope, phase) {
   }
 }
 
-function write({ users, pipelines, stages, dealFields, deals, persons, activities, notes, files, downloaded }) {
+function write({ users, pipelines, stages, dealFields, deals, persons, activities, notes, files, downloaded, filesGone = [] }) {
   const count = {};
   const tally = (k) => { count[k] = (count[k] || 0) + 1; };
 
@@ -420,7 +453,7 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
   });
   const linkContact = db.prepare('INSERT OR IGNORE INTO ticket_contacts (ticket_id, contact_id) VALUES (?, ?)');
 
-  // ---- Deals → bid tickets
+  // ---- Deals → pipeline tickets
   const ticketByPd = db.prepare('SELECT * FROM main.tickets WHERE pipedrive_id = ? AND archive_set_id IS NULL');
   const ticketByTitle = db.prepare(`SELECT * FROM main.tickets WHERE pipedrive_id IS NULL AND ticket_type = 'bid' AND archive_set_id IS NULL
     AND opportunity_title = ? COLLATE NOCASE AND id NOT IN (SELECT row_id FROM main.sample_rows WHERE tbl = 'tickets') LIMIT 1`);
@@ -578,6 +611,11 @@ function write({ users, pipelines, stages, dealFields, deals, persons, activitie
     db.prepare(`INSERT INTO ticket_files (ticket_id, original_name, stored_name, mime_type, size, uploaded_by, created_at, pipedrive_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(ticketId, f.name || f.file_name, got.stored, MIME[path.extname(f.name || '').toLowerCase()] || null, got.size, account(f.user_id), f.add_time, f.id);
     tally('filesAdded');
+  });
+
+  filesGone.forEach((id) => {
+    db.prepare("DELETE FROM work_log WHERE kind = 'file' AND ref_id IN (SELECT id FROM main.ticket_files WHERE pipedrive_id = ?)").run(id);
+    if (db.prepare('DELETE FROM main.ticket_files WHERE pipedrive_id = ?').run(id).changes) tally('filesDeleted');
   });
 
   return { ...count, accountsMatched: [...new Set(matched)].sort(), accountsCreated: created.sort() };

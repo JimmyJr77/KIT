@@ -5,7 +5,8 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { db, json, getSetting, setSetting, withTeams, defaultAssignment } from '../db.js';
+import { db, json, getSetting, setSetting, withTeams, defaultAssignment, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED } from '../db.js';
+import { requireAdmin } from '../auth.js';
 import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../src/lib/assessment.js';
 import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
 import { recordWork } from '../worklog.js';
@@ -109,6 +110,12 @@ r.put('/pwin-weights', (req, res) => {
   res.json(weightsOut());
 });
 
+/** Admins. Body: { closed }. Whether anyone can create pipeline tickets in KIT; everyone reads it from /priorities/meta. */
+r.put('/pipeline-creation', requireAdmin, (req, res) => {
+  setSetting('pipeline_tickets_closed', req.body?.closed ? '1' : '0');
+  res.json({ closed: pipelineTicketsClosed() });
+});
+
 /**
  * Master tickets. scope: mine (default) | all. Outside "mine", `team` keeps tickets whose owner is
  * on that team. In any scope, `owners` (comma-separated user ids) keeps those owners' tickets and `types`
@@ -120,7 +127,7 @@ r.get('/', (req, res) => {
   const team = scope !== 'mine' && Number(req.query.team) ? Number(req.query.team) : null;
   const owners = String(req.query.owners || '').split(',').map(Number).filter(Boolean);
   const types = String(req.query.types || '').split(',').filter(Boolean);
-  const kind = ['bid', 'work'].includes(req.query.kind) ? req.query.kind : null; // bid or work tickets only
+  const kind = ['bid', 'work'].includes(req.query.kind) ? req.query.kind : null; // pipeline or work tickets only
   const territories = String(req.query.territories || '').split(',').map(Number).filter(Boolean);
   const ids = String(req.query.ids || '').split(',').map(Number).filter(Boolean); // just these tickets
   const rows = db.prepare(`SELECT t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name,
@@ -167,16 +174,17 @@ r.get('/', (req, res) => {
 
 /**
  * Create a ticket on its own, without a priority. Body: { ticket_type: 'bid' | 'work', opportunity_title, organization,
- * account_type, pipeline_status, value, bd_director_id, territory_id }. A bid ticket left without a director or territory
+ * account_type, pipeline_status, value, bd_director_id, territory_id }. A pipeline ticket left without a director or territory
  * gets the defaults (see defaultAssignment).
  */
 r.post('/', (req, res) => {
   const type = req.body?.ticket_type === 'work' ? 'work' : 'bid';
+  if (type === 'bid' && pipelineTicketsClosed()) return res.status(403).json({ error: PIPELINE_TICKETS_CLOSED });
   const tf = ticketFields(req.body);
   if (!tf.opportunity_title) return res.status(400).json({ error: type === 'work' ? 'Title is required' : 'Opportunity title is required' });
   const fields = type === 'work' ? { ...tf, pipeline_status: null, value: null } : tf;
   const assign = type === 'bid' ? bidAssignment(req.body, req.user.id, fields.account_type) : NO_ASSIGNMENT;
-  // A bid can start on any pipeline, in one of that pipeline's stages.
+  // A pipeline ticket can start on any pipeline, in one of that pipeline's stages.
   const pipeline = type === 'bid' ? listPipelines().find((p) => p.id === (Number(req.body?.pipeline_id) || null)) || listPipelines()[0] : null;
   if (pipeline && fields.pipeline_status && !pipeline.statuses.includes(fields.pipeline_status)) fields.pipeline_status = null;
   const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by,
@@ -191,7 +199,7 @@ r.post('/', (req, res) => {
 /** What a work ticket (which has no director, territory or win date) is created with. */
 export const NO_ASSIGNMENT = { bd_director_id: null, territory_id: null, projected_win_date: null, win_date_undetermined: 0 };
 
-/** A bid ticket's BD director, territory and projected win date from a request body; defaults for a missing director or territory. */
+/** A pipeline ticket's BD director, territory and projected win date from a request body; defaults for a missing director or territory. */
 export function bidAssignment(body = {}, userId, accountType) {
   const d = defaultAssignment(userId, accountType);
   const has = (k) => body[k] !== undefined && body[k] !== '';
@@ -205,13 +213,13 @@ export function bidAssignment(body = {}, userId, accountType) {
 }
 
 /**
- * Body: { bd_director_id?, territory_id?, projected_win_date?, win_date_undetermined? } (null clears). Who a bid ticket
+ * Body: { bd_director_id?, territory_id?, projected_win_date?, win_date_undetermined? } (null clears). Who a pipeline ticket
  * belongs to and when it's expected to be won. Marking the date undetermined clears the date, and setting a date clears it.
  */
 r.put('/:id/assignment', (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only bid tickets have a BD director and territory' });
+  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets have a BD director and territory' });
   const b = req.body || {};
   const sets = [];
   const vals = { id: t.id };
@@ -287,8 +295,8 @@ r.put('/:id/assessment', (req, res) => {
 
 /**
  * Swim lane changes. Body may hold:
- *   lane     move it to that lane (a bid ticket moved by hand is locked there)
- *   locked   lock a bid ticket in `lane`, or unlock it so it moves on its own again
+ *   lane     move it to that lane (a pipeline ticket moved by hand is locked there)
+ *   locked   lock a pipeline ticket in `lane`, or unlock it so it moves on its own again
  *   archived archive a Done ticket now, or restore an archived one to Done
  * None of this counts as activity, so it doesn't reset the ticket's timer.
  */
@@ -302,7 +310,7 @@ r.put('/:id/lane', (req, res) => {
 
   if (lane) {
     if (t.ticket_type === 'bid' && ['Awarded', 'Lost'].includes(t.pipeline_status) && lane !== 'done') {
-      return res.status(400).json({ error: `This bid is ${t.pipeline_status}, so it stays in Done. Change its pipeline stage to reopen it.` });
+      return res.status(400).json({ error: `This pipeline ticket is ${t.pipeline_status}, so it stays in Done. Change its pipeline stage to reopen it.` });
     }
     set(`lane = ?, lane_locked = ?, archived_at = NULL, archive_set_id = NULL,
       done_at = CASE WHEN ? = 'done' THEN COALESCE(done_at, datetime('now')) ELSE NULL END`, lane, t.ticket_type === 'bid' ? 1 : 0, lane);
@@ -584,6 +592,20 @@ r.post('/:id/files', upload.single('file'), (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?)`).run(t.id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id).lastInsertRowid;
   recordWork(req.user, { kind: 'file', ticket_id: t.id, ref_id: id, summary: req.file.originalname });
   res.json({ file: { id, name: req.file.originalname, size: req.file.size, mime_type: req.file.mimetype } });
+});
+
+/** Only here, in KIT. A Pipedrive file isn't imported again, and goes from Pipedrive with an admin's send if that's turned on. */
+r.delete('/files/:id', (req, res) => {
+  const f = db.prepare('SELECT * FROM ticket_files WHERE id = ?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Not found' });
+  if (f.uploaded_by !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the person who added this file can delete it' });
+  const deal = db.prepare('SELECT pipedrive_id FROM tickets WHERE id = ?').get(f.ticket_id)?.pipedrive_id;
+  db.prepare("DELETE FROM work_log WHERE kind = 'file' AND ref_id = ?").run(f.id);
+  db.prepare('DELETE FROM ticket_files WHERE id = ?').run(f.id);
+  queueDelete('file', f.pipedrive_id, deal);
+  queueDelete('note', f.pipedrive_note_id, deal); // a linked document went as a note with its link
+  if (f.stored_name && !f.url) fs.rmSync(path.join(uploadDir, f.stored_name), { force: true });
+  res.json({ ok: true });
 });
 
 r.get('/files/:id', (req, res) => {

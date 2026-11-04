@@ -6,7 +6,7 @@ import { bdDashboard, scopeFrom } from '../bdDashboard.js';
 
 const r = Router();
 
-/** Whether someone is a BD director: on the BD team, or the director on any bid. */
+/** Whether someone is a BD director: on the BD team, or the director on any pipeline ticket. */
 const isDirector = (id) => !!db.prepare(`SELECT 1 FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE ut.user_id = ? AND t.name = 'BD'
   UNION SELECT 1 FROM tickets WHERE bd_director_id = ?`).get(id, id);
 

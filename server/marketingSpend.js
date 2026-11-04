@@ -1,10 +1,10 @@
 // Marketing spend: what was spent, and who or what it was for, as specifically as it's known. An entry can name an
-// event, a bid ticket, a person, a territory and an account (organization), or none of them. What's missing is filled
+// event, a pipeline ticket, a person, a territory and an account (organization), or none of them. What's missing is filled
 // in from what's there:
-//   Person: the one named, else the bid ticket's BD director, else (for event spend) split evenly between the people
+//   Person: the one named, else the pipeline ticket's BD director, else (for event spend) split evenly between the people
 //     from the company attending the event. Otherwise nobody: company-wide spend.
-//   Territory: the one named, else the bid ticket's, else the person's (when they cover exactly one).
-//   Account: the organization named, else the bid ticket's.
+//   Territory: the one named, else the pipeline ticket's, else the person's (when they cover exactly one).
+//   Account: the organization named, else the pipeline ticket's.
 import { db } from './db.js';
 
 export const SPEND_CATEGORIES = ['Event sponsorship', 'Booth & exhibit', 'Advertising', 'Digital & web', 'Collateral & print',
@@ -52,7 +52,7 @@ export function spendFor(entries, people = null) {
   return sum(entries, (s) => sum(s.shares.filter((x) => set.has(x.user_id)), (x) => x.amount));
 }
 
-/** Spend grouped by account, territory, bid ticket, person and event, largest first. */
+/** Spend grouped by account, territory, pipeline ticket, person and event, largest first. */
 export function spendBreakdown(entries) {
   const group = (keyOf) => {
     const m = new Map();
@@ -69,7 +69,7 @@ export function spendBreakdown(entries) {
     entries: entries.length,
     byAccount: group((s) => [[s.account || '', s.account || 'No account', s.amount]]),
     byTerritory: group((s) => [[s.resolved_territory_id || 0, s.resolved_territory || 'No territory', s.amount]]),
-    byTicket: group((s) => [[s.ticket_id || 0, s.ticket_title || 'No bid ticket', s.amount]]),
+    byTicket: group((s) => [[s.ticket_id || 0, s.ticket_title || 'No pipeline ticket', s.amount]]),
     byPerson: group((s) => (s.shares.length ? s.shares.map((x) => [x.user_id, x.name, x.amount]) : [[0, 'Company-wide', s.amount]])),
     byEvent: group((s) => [[s.event_id || 0, s.event_name || 'No event', s.amount]]),
     byCategory: group((s) => [[s.category || '', s.category || 'No category', s.amount]]),

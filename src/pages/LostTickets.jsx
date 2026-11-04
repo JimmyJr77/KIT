@@ -13,7 +13,7 @@ import TicketTimeline from './TicketTimeline.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 
-/** Switches between the BD Pipeline board and the list of every lost bid. */
+/** Switches between the BD Pipeline board and the list of every lost pipeline ticket. */
 export function PipelineViewToggle() {
   const link = ({ isActive }) => `flex items-center rounded px-3 ${isActive ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`;
   return (
@@ -24,7 +24,7 @@ export function PipelineViewToggle() {
   );
 }
 
-/** Every lost bid, on every pipeline, including the ones long since archived. Newest losses first. */
+/** Every lost pipeline ticket, on every pipeline, including the ones long since archived. Newest losses first. */
 export default function LostTickets() {
   const meta = useApi('/priorities/meta');
   const [tickets, setTickets] = useState(null);
@@ -77,7 +77,7 @@ export default function LostTickets() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Lost bids" subtitle="Every bid marked Lost, on every pipeline, including archived ones. Select one for its timeline.">
+      <PageHeader title="Lost pipeline tickets" subtitle="Every pipeline ticket marked Lost, on every pipeline, including archived ones. Select one for its timeline.">
         <PipelineViewToggle />
       </PageHeader>
 
@@ -99,7 +99,7 @@ export default function LostTickets() {
         </select>
         <TagFilter value={tags} onChange={setTags} className="w-64" />
         <div className="ml-auto text-right">
-          <div className="text-xs text-slate-500 uppercase">{rows.length.toLocaleString()} lost bid{rows.length === 1 ? '' : 's'} · value</div>
+          <div className="text-xs text-slate-500 uppercase">{rows.length.toLocaleString()} lost pipeline ticket{rows.length === 1 ? '' : 's'} · value</div>
           <div className="text-xl font-bold text-red-700">{money(total)}</div>
         </div>
       </div>
@@ -107,7 +107,7 @@ export default function LostTickets() {
       {tickets && !rows.length ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <XCircle size={28} className="mx-auto mb-2 text-slate-300" />
-          {tickets.length ? 'No lost bids match.' : 'No lost bids.'}
+          {tickets.length ? 'No lost pipeline tickets match.' : 'No lost pipeline tickets.'}
         </div>
       ) : tickets && (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">

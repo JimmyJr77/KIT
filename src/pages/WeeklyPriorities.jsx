@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X, Archive, Target } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X, Archive, Target, ListChecks } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, pointerWithin, useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, horizontalListSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -14,6 +14,7 @@ import MultiSelect from '../components/MultiSelect.jsx';
 import PriorityPanel from './PriorityPanel.jsx';
 import PriorityCard from './PriorityCard.jsx';
 import StrategicPriorities from '../components/StrategicPriorities.jsx';
+import TaskView from '../components/TaskView.jsx';
 import CommentPanel from './CommentPanel.jsx';
 import SupportPanel from './SupportPanel.jsx';
 import { ViewSwitcher, TicketsView, TasksView, ThreadsView, SupportView, WorkEntry } from './LaneViews.jsx';
@@ -43,6 +44,8 @@ export default function WeeklyPriorities() {
   const [mode, setModeState] = useState(() => readPref('kit.priorities.mode', 'weekly'));
   const setMode = (m) => { setModeState(m); writePref('kit.priorities.mode', m); };
   const strategic = mode === 'strategic';
+  const tasks = mode === 'tasks';
+  const weekly = !strategic && !tasks;
   const [orientation, setOrientation] = useState(readPref('kit.priorities.orientation', 'rows'));
   const [panel, setPanel] = useState(null); // { card } | { newFor: userId }
   const [thread, setThread] = useState(null); // { id } | { options } for a new question or comment
@@ -192,9 +195,10 @@ export default function WeeklyPriorities() {
   return (
     <div className="flex h-full flex-col">
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
-        <PageHeader title={strategic ? 'Strategic Priorities' : 'Weekly Priorities'}
-          subtitle={strategic ? 'Priority accounts and priority tickets: the agencies and bids that matter most, for the team or each member.' : "Set the week's priorities at check-in. Left-most (or top) card is the top priority."}>
-          {!strategic && <>
+        <PageHeader title={strategic ? 'Strategic Priorities' : tasks ? 'Tasks' : 'Weekly Priorities'}
+          subtitle={strategic ? 'Priority accounts and priority tickets: the agencies and pipeline tickets that matter most, for the team or each member.'
+            : tasks ? 'How the team’s tasks stand. Choose a member for their full list, by this week, due date and strategic priority.' : "Set the week's priorities at check-in. Left-most (or top) card is the top priority."}>
+          {weekly && <>
           <button className="btn" onClick={() => { const o = orientation === 'rows' ? 'columns' : 'rows'; setOrientation(o); writePref('kit.priorities.orientation', o); }}>
             <ArrowLeftRight size={15} /> {orientation === 'rows' ? 'Members as columns' : 'Members as rows'}
           </button>
@@ -207,7 +211,7 @@ export default function WeeklyPriorities() {
           <div>
             <span className="label">View</span>
             <div className="flex h-[38px] rounded-lg bg-white p-0.5 ring-1 ring-slate-200" role="radiogroup" aria-label="Priorities view">
-              {[['strategic', 'Strategic', Target], ['weekly', 'Weekly', CalendarDays]].map(([k, label, Icon]) => (
+              {[['strategic', 'Strategic', Target], ['weekly', 'Weekly', CalendarDays], ['tasks', 'Task', ListChecks]].map(([k, label, Icon]) => (
                 <button key={k} type="button" role="radio" aria-checked={mode === k} onClick={() => setMode(k)}
                   className={`flex items-center gap-1.5 rounded-md px-3 text-sm ${mode === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>
                   <Icon size={14} /> {label}
@@ -233,9 +237,9 @@ export default function WeeklyPriorities() {
           </div>
         </div>
 
-        {board && !strategic && <WeekStrip weekStart={board.weekStart} current={board.currentWeekStart} onPick={setWeekDate} />}
+        {board && weekly && <WeekStrip weekStart={board.weekStart} current={board.currentWeekStart} onPick={setWeekDate} />}
 
-        {!strategic && <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
+        {weekly && <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-brand-600 bg-white ring-1 ring-slate-200" /> Priority (planned)</span>
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-amber-500 bg-amber-50 ring-1 ring-amber-200" /> Work (added after planning closed)</span>
           {board && !editable && <span className="flex items-center gap-1 text-slate-600"><Lock size={12} /> Past week — read only</span>}
@@ -257,7 +261,7 @@ export default function WeeklyPriorities() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
-        {strategic ? (board && <StrategicPriorities members={members} me={user.id} />) : <>
+        {strategic ? (board && <StrategicPriorities members={members} me={user.id} />) : tasks ? (board && <TaskView members={members} teamSize={board.members.length} onPick={(id) => setFilter(id ? [id] : [])} />) : <>
         {board && !members.length && <p className="py-16 text-center text-slate-400">No members on this team yet. Assign people to the team from their Profile.</p>}
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={({ active }) => setActiveId(active.id)} onDragEnd={onDragEnd} onDragCancel={() => setActiveId(null)}>
           <div className={orientation === 'rows' ? 'inline-flex min-w-full flex-col gap-3' : 'flex items-start gap-4'}>

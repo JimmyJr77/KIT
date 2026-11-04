@@ -1,4 +1,4 @@
-// The archive: tickets (bid and work) and priority cards taken off the boards, one by one or all at once as a dataset.
+// The archive: tickets (pipeline and work) and priority cards taken off the boards, one by one or all at once as a dataset.
 // Anyone can archive and restore single items; archiving everything, loading a dataset back and deleting for good are
 // for admins, and only what's already archived can be deleted.
 import fs from 'node:fs';
@@ -8,6 +8,7 @@ import { db, json } from '../db.js';
 import { laneFor, isArchived } from '../../src/lib/lanes.js';
 import { archiveRows, restoreRows, deleteRows, archivedRowCounts } from '../sample/registry.js';
 import { resetSample } from '../sample/index.js';
+import { queueDelete } from '../services/pipedrive.js';
 
 const r = Router();
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
@@ -17,14 +18,15 @@ const ids = (xs) => [...new Set((Array.isArray(xs) ? xs : []).map(Number).filter
 function archivedTickets() {
   return db.prepare(`SELECT t.*, u.first_name AS owner_first, u.last_name AS owner_last,
       (SELECT COUNT(*) FROM priority_cards c WHERE c.ticket_id = t.id) AS card_count,
-      (SELECT COUNT(*) FROM ticket_files f WHERE f.ticket_id = t.id) AS file_count
+      (SELECT COUNT(*) FROM ticket_files f WHERE f.ticket_id = t.id) AS file_count,
+      (SELECT COUNT(*) FROM delivery_programs p WHERE p.ticket_id = t.id) AS contract_count
     FROM tickets t LEFT JOIN users u ON u.id = COALESCE(t.bd_director_id, t.created_by) WHERE t.archive_set_id IS NULL`).all()
     // Only Done tickets age into the archive, and whether one is Done doesn't depend on recent activity.
     .filter((t) => isArchived(t, laneFor({ ...t, last_activity: t.updated_at })))
     .map((t) => ({
       id: t.id, ticket_type: t.ticket_type, opportunity_title: t.opportunity_title, organization: t.organization,
       pipeline_status: t.pipeline_status, value: t.value, archived_at: t.archived_at, done_at: t.done_at,
-      owner: t.owner_first ? `${t.owner_first} ${t.owner_last}` : null, card_count: t.card_count, file_count: t.file_count,
+      owner: t.owner_first ? `${t.owner_first} ${t.owner_last}` : null, card_count: t.card_count, file_count: t.file_count, contract_count: t.contract_count,
     }));
 }
 
@@ -173,7 +175,8 @@ r.post('/restore', (req, res) => {
 
 /**
  * Body: { tickets: [ids], cards: [ids] }. Deletes them for good: admins only, archived items only. A ticket takes its
- * priority cards, comments, documents (and their files), tasks and history with it.
+ * priority cards, comments, documents (and their files), tasks, history, won contract and forecast lines with it. A ticket
+ * linked to a Pipedrive deal stays out of KIT: pulls skip that deal from now on (and the deal itself is left alone in Pipedrive).
  */
 r.post('/delete', (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can delete permanently' });
@@ -184,10 +187,15 @@ r.post('/delete', (req, res) => {
   if (c.length && db.prepare('SELECT COUNT(*) AS n FROM priority_cards WHERE archived_at IS NOT NULL AND id IN (SELECT value FROM json_each(?))').get(JSON.stringify(c)).n !== c.length) {
     return res.status(400).json({ error: 'Archive a priority card before deleting it' });
   }
-  res.json({ deleted: removeForGood(t, c) });
+  const linked = t.length ? db.prepare('SELECT pipedrive_id FROM tickets WHERE pipedrive_id IS NOT NULL AND id IN (SELECT value FROM json_each(?))').all(JSON.stringify(t)) : [];
+  const deleted = removeForGood(t, c);
+  // Unless a live copy of the deal is still here (Archive all followed by a pull makes one).
+  linked.filter((l) => !db.prepare('SELECT 1 FROM tickets WHERE pipedrive_id = ? AND archive_set_id IS NULL').get(l.pipedrive_id))
+    .forEach((l) => queueDelete('deal', l.pipedrive_id));
+  res.json({ deleted });
 });
 
-/** Deletes tickets (with their priority cards, comments, documents and their files, tasks and history) and cards. */
+/** Deletes tickets (with their priority cards, comments, documents and their files, tasks, history, contracts and forecast lines) and cards. */
 function removeForGood(t, c) {
   const files = t.length ? db.prepare('SELECT stored_name FROM ticket_files WHERE ticket_id IN (SELECT value FROM json_each(?))').all(JSON.stringify(t)) : [];
   let cardsDeleted = 0;
@@ -196,6 +204,9 @@ function removeForGood(t, c) {
     cardsDeleted += delCard.run(JSON.stringify(c)).changes;
     // A ticket's cards aren't removed by the database on their own, so they go first.
     cardsDeleted += db.prepare('DELETE FROM priority_cards WHERE ticket_id IN (SELECT value FROM json_each(?))').run(JSON.stringify(t)).changes;
+    // These would outlive the ticket with an empty link, still counted as money: contracts (their funding, billing and team go with them) and forecast lines.
+    db.prepare('DELETE FROM delivery_programs WHERE ticket_id IN (SELECT value FROM json_each(?))').run(JSON.stringify(t));
+    db.prepare('DELETE FROM forecast_snapshots WHERE ticket_id IN (SELECT value FROM json_each(?))').run(JSON.stringify(t));
     db.prepare('DELETE FROM tickets WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(t));
   })();
   files.forEach((f) => fs.rmSync(path.join(uploadDir, f.stored_name), { force: true }));

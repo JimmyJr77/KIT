@@ -20,8 +20,8 @@ const outcomeOf = (t) => (t.ticket_type === 'work' ? 'Done' : t.pipeline_status 
 const OUTCOME_STYLE = { Awarded: 'bg-emerald-50 text-emerald-700', Lost: 'bg-red-50 text-red-700', Done: 'bg-slate-100 text-slate-600' };
 
 /**
- * Every ticket in the Tickets page's Done lane: awarded and lost bids, and finished work tickets. Done tickets leave
- * the Tickets page 14 days after reaching Done (that's only this view; bids stay where they are in BD Pipeline), and
+ * Every ticket in the Tickets page's Done lane: awarded and lost pipeline tickets, and finished work tickets. Done tickets leave
+ * the Tickets page 14 days after reaching Done (that's only this view; pipeline tickets stay where they are in BD Pipeline), and
  * this is where they can all still be found, sorted and filtered. Newest first.
  */
 export default function DoneTickets() {
@@ -74,11 +74,11 @@ export default function DoneTickets() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Done archive" subtitle="Every ticket that reached Done: awarded and lost bids, and finished work. Select one for its timeline.">
+      <PageHeader title="Done archive" subtitle="Every ticket that reached Done: awarded and lost pipeline tickets, and finished work. Select one for its timeline.">
         <Link to="/tickets" className="btn h-9"><ArrowLeft size={15} /> Tickets</Link>
       </PageHeader>
       <p className="-mt-2 text-xs text-slate-500">
-        Done tickets leave the Tickets page {ARCHIVE_AFTER_DAYS} days after reaching Done. That only tidies the Tickets page: bids stay where they are in BD Pipeline.
+        Done tickets leave the Tickets page {ARCHIVE_AFTER_DAYS} days after reaching Done. That only tidies the Tickets page: pipeline tickets stay where they are in BD Pipeline.
         {tickets && ` ${onBoard} of ${tickets.length} are still on the Tickets page.`}
       </p>
 
@@ -88,8 +88,8 @@ export default function DoneTickets() {
           <input className="input pl-9" placeholder="Search by ticket or organization…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <select className="input w-36" value={type} onChange={(e) => setType(e.target.value)} aria-label="Ticket type">
-          <option value="">Bid and work</option>
-          <option value="bid">Bid tickets</option>
+          <option value="">PL and work</option>
+          <option value="bid">PL tickets</option>
           <option value="work">Work tickets</option>
         </select>
         <select className="input w-36" value={outcome} onChange={(e) => setOutcome(e.target.value)} aria-label="Outcome">

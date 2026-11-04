@@ -1,8 +1,9 @@
-// Delivery: contracts we've won. Each program is copied from an Awarded bid ticket (see the delivery_on_award
+// Delivery: contracts we've won. Each program is copied from an Awarded pipeline ticket (see the delivery_on_award
 // triggers in db.js), then assigned a Program Manager and a delivery team. Funding received and revenue billed are
 // recorded against it as entries, which make up its funded / unfunded backlog and the "bill" side of book-to-bill.
 import { Router } from 'express';
 import { db } from '../db.js';
+import { inBooks } from '../financials.js';
 
 const r = Router();
 const STATUSES = ['Active', 'Complete'];
@@ -37,13 +38,13 @@ function money(p, entries) {
     })),
   };
 }
-// The BD director and territory come from the bid ticket the contract was won from.
+// The BD director and territory come from the pipeline ticket the contract was won from.
 const SELECT = `SELECT p.*, u.first_name AS pm_first, u.last_name AS pm_last, t.opportunity_title AS ticket_title,
     t.bd_director_id, d.first_name AS dir_first, d.last_name AS dir_last, tr.name AS territory_name
   FROM delivery_programs p LEFT JOIN users u ON u.id = p.program_manager_id LEFT JOIN tickets t ON t.id = p.ticket_id
   LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id`;
-// A contract won from a bid that's in an archived dataset is archived with it, until the dataset is loaded back.
-const LIVE = '(t.id IS NULL OR t.archive_set_id IS NULL)';
+// A contract is listed while its pipeline ticket is in the books: archiving the ticket takes the contract with it until the ticket is restored.
+const LIVE = `t.id IS NOT NULL AND ${inBooks()}`;
 const one = (id) => programsOut(db.prepare(`${SELECT} WHERE p.id = ?`).all(id))[0] || null;
 
 /** Tell someone they've been put on a won contract: as its Program Manager, or on its delivery team (with their role). */

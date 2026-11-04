@@ -1,5 +1,5 @@
 // Forecast snapshots, for the BD report card's forecast reliability measure: early in each quarter, record what every
-// open bid expected to close that quarter was forecast to bring in (value × PWIN). Bookings at the end of the quarter
+// open pipeline ticket expected to close that quarter was forecast to bring in (value × PWIN). Bookings at the end of the quarter
 // are then compared with that.
 import { db, json, getSetting, setSetting } from './db.js';
 import { quarterFor } from '../src/lib/travelCalc.js';
@@ -18,8 +18,8 @@ export function quarterRange(quarter) {
 }
 
 /**
- * Snapshot the forecast for the quarter containing `date`, once. It waits until at least one open bid has a projected
- * win date in that quarter, so a quarter isn't marked done with nothing in it. Returns how many bids it recorded.
+ * Snapshot the forecast for the quarter containing `date`, once. It waits until at least one open pipeline ticket has a projected
+ * win date in that quarter, so a quarter isn't marked done with nothing in it. Returns how many pipeline tickets it recorded.
  */
 export function snapshotForecast(date = localToday()) {
   const quarter = quarterFor(date);

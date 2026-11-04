@@ -16,7 +16,7 @@ function summary(r) {
   return [
     r.pipelines && plural(r.pipelines, 'new pipeline'), part(r.dealsAdded, r.dealsUpdated, 'deal'), part(r.contactsAdded, r.contactsUpdated, 'contact'),
     part(r.activitiesAdded, r.activitiesUpdated, 'activity', 'activities'), part(r.notesAdded, r.notesUpdated, 'note'),
-    r.filesAdded && plural(r.filesAdded, 'new file'),
+    r.filesAdded && plural(r.filesAdded, 'new file'), r.filesDeleted && plural(r.filesDeleted, 'file') + ' deleted in Pipedrive',
   ].filter(Boolean).join(' · ');
 }
 
@@ -62,7 +62,7 @@ export function PipedrivePull({ scope, status }) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
-        Brings {p.what} into KIT: deals as bid tickets, with their people, activities, notes and files. Pipedrive wins on the fields it holds,
+        Brings {p.what} into KIT: deals as pipeline tickets, with their people, activities, notes and files. Pipedrive wins on the fields it holds,
         except ones changed in KIT that an admin hasn&apos;t sent yet. KIT&apos;s own work on a ticket is kept.
         {scope === 'all' ? ' Everything is also pulled every night.' : ' Everything is pulled every night anyway; pull here to get today’s changes now.'}
       </p>
@@ -275,7 +275,8 @@ export function PipedriveSend({ status }) {
   const last = s?.lastSend;
   const auto = s?.auto;
   useEffect(() => { if (s?.modes && !modes) { setModes(s.modes); setDraft(s.modes); } }, [s]); // eslint-disable-line react-hooks/exhaustive-deps
-  const kinds = useMemo(() => KINDS.map((k) => k.key).filter((k) => modes && modes[k] !== 'off'), [modes]);
+  const deletesOn = !!s?.fileDeletes?.to_pipedrive;
+  const kinds = useMemo(() => [...KINDS.map((k) => k.key).filter((k) => modes && modes[k] !== 'off'), ...(deletesOn ? ['fileDeletes'] : [])], [modes, deletesOn]);
   const autoKinds = KINDS.filter((k) => modes?.[k.key] === 'auto');
   // While anything is on Auto, check every 30 seconds so its latest run shows.
   useEffect(() => {
@@ -426,6 +427,48 @@ export function PipedriveSend({ status }) {
   );
 }
 
+const FILE_DELETES = [
+  { key: 'to_pipedrive', label: 'Files deleted in KIT are deleted in Pipedrive', hint: 'They go when you push to Pipedrive, after the preview. Never automatically.',
+    ask: 'Delete files in Pipedrive when they’re deleted in KIT? They’ll go with your next push, and the preview lists how many.' },
+  { key: 'to_kit', label: 'Files deleted in Pipedrive are deleted in KIT', hint: 'They go on the next pull or live update, for everyone, and can’t be restored from KIT.',
+    ask: 'Delete files in KIT when they’re deleted in Pipedrive? This happens on the next pull or live update, and includes files deleted there before now. KIT can’t restore them.' },
+];
+
+/** Admins: whether a file deleted on one side is deleted on the other. Each direction is its own choice. */
+function PipedriveFileDeletes({ status }) {
+  const saved = status.data?.fileDeletes;
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { if (saved && !draft) setDraft(saved); }, [saved]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!draft) return <p className="text-sm text-slate-400">Loading…</p>;
+  const changed = FILE_DELETES.filter((o) => draft[o.key] !== saved[o.key]);
+  const save = async () => {
+    if (changed.filter((o) => draft[o.key]).some((o) => !confirm(o.ask))) return;
+    setError(''); setBusy(true);
+    try { setDraft((await api.put('/pipedrive/file-deletes', draft)).fileDeletes); status.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="space-y-3">
+      {FILE_DELETES.map((o) => (
+        <label key={o.key} className="flex items-start gap-2 text-sm text-slate-700">
+          <input type="checkbox" className="mt-0.5" checked={draft[o.key]} disabled={busy} onChange={(e) => setDraft({ ...draft, [o.key]: e.target.checked })} />
+          <span><span className="font-medium">{o.label}</span><span className="block text-xs text-slate-500">{o.hint}</span></span>
+        </label>
+      ))}
+      {changed.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn-primary text-xs" onClick={save} disabled={busy}>
+            {busy && <Loader2 size={13} className="animate-spin" />} Save changes
+          </button>
+          <button type="button" className="btn text-xs" onClick={() => setDraft(saved)} disabled={busy}>Discard</button>
+        </div>
+      )}
+      {error && <p className="text-sm text-red-600">{error}</p>}
+    </div>
+  );
+}
+
 /** Admins: pull everything from Pipedrive, and send chosen KIT changes to it. */
 export default function PipedrivePanel() {
   const status = usePipedrive();
@@ -443,6 +486,10 @@ export default function PipedrivePanel() {
       <section className="space-y-2 border-t border-slate-100 pt-4">
         <h3 className="text-sm font-semibold text-slate-800">Send to Pipedrive</h3>
         <PipedriveSend status={status} />
+      </section>
+      <section className="space-y-2 border-t border-slate-100 pt-4">
+        <h3 className="text-sm font-semibold text-slate-800">Deleted files</h3>
+        <PipedriveFileDeletes status={status} />
       </section>
     </div>
   );
