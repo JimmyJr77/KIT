@@ -7,6 +7,7 @@ import { compact } from './Charts.jsx';
 import SidePanel from './SidePanel.jsx';
 import YearBasisToggle from './YearBasisToggle.jsx';
 import { useYearBasis, trailingLabel } from '../lib/yearBasis.js';
+import ReportTrends from '../pages/ReportTrends.jsx';
 
 // Status is never color alone: each carries an icon and a word.
 export const STATUS = {
@@ -106,7 +107,7 @@ function ConfigDialog({ measures, thresholds, period, onClose }) {
             <div className="mb-1.5 font-semibold text-slate-800">Statuses</div>
             <p className="mb-2">Every measure gets one of four statuses, always shown with an icon and a word. Where each threshold sits is listed under each measure.</p>
             <div className="flex flex-wrap gap-2">{['good', 'watch', 'behind', 'none'].map((k) => <StatusChip key={k} status={k} />)}</div>
-            <p className="mt-2">Periods: this or last quarter, or this or last year. A year can be the calendar year or the trailing four quarters (the last four finished quarters, or the four before those). A period still running is judged against how much of it has passed. Pipeline figures (coverage, stalled pipeline tickets) are as of today.</p>
+            <p className="mt-2">Periods: this or last quarter, this or last year, or the last 12 months through today (its target takes the share of each quarter that falls inside it). A year can be the calendar year or the trailing four quarters (the last four finished quarters, or the four before those). A period still running is judged against how much of it has passed. Pipeline figures (coverage, stalled pipeline tickets) are as of today.</p>
           </section>
           {measures.map((m, i) => {
             const e = explain(m.key, thresholds);
@@ -154,6 +155,7 @@ export function periods(basis = 'calendar') {
     { key: 'q', label: `This quarter (${y} Q${q})`, kind: 'quarter', value: `${y} Q${q}` },
     { key: 'lq', label: `Last quarter (${last})`, kind: 'quarter', value: last },
     ...years,
+    { key: 'l12', label: 'Last 12 months', kind: 'last12', value: 'Last 12 months' },
   ];
 }
 
@@ -176,12 +178,14 @@ export function StatusChip({ status, compactLabel }) {
 
 /**
  * The BD report card. With `director`, that director's card; without, the team's card and a row per director.
- * `title` overrides the heading.
+ * `title` overrides the heading, and `who` names the line in Change over time.
  */
-export default function ReportCard({ director, title }) {
+export default function ReportCard({ director, title, who }) {
   const [basis] = useYearBasis();
   const options = periods(basis);
   const [choice, setChoice] = useState('q');
+  const [view, setView] = useState('card'); // card | trends
+  const [weeks, setWeeks] = useState(13);
   const p = options.find((o) => o.key === choice);
   const qs = periodQuery(p);
   if (director) qs.set('director', director);
@@ -198,12 +202,27 @@ export default function ReportCard({ director, title }) {
           aria-haspopup="dialog" title="How each measure is worked out, and its thresholds">
           <Info size={14} /> How it's configured
         </button>
-        {isYearChoice(choice) && <YearBasisToggle />}
-        <select className="input h-8 w-72 py-0 text-sm" value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Report card period">
-          {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-        </select>
+        <div className="flex h-8 rounded-md bg-white p-0.5 text-xs ring-1 ring-slate-200" role="radiogroup" aria-label="Report card view">
+          {[['card', 'Report card'], ['trends', 'Change over time']].map(([k, l]) => (
+            <button key={k} type="button" role="radio" aria-checked={view === k} onClick={() => setView(k)}
+              className={`rounded px-2 ${view === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
+          ))}
+        </div>
+        {view === 'trends' ? (
+          <select className="input h-8 w-40 py-0 text-sm" value={weeks} onChange={(e) => setWeeks(Number(e.target.value))} aria-label="Timeline">
+            {[13, 26, 52].map((n) => <option key={n} value={n}>Last {n} weeks</option>)}
+          </select>
+        ) : (
+          <>
+            {isYearChoice(choice) && <YearBasisToggle />}
+            <select className="input h-8 w-72 py-0 text-sm" value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Report card period">
+              {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </>
+        )}
       </div>
-      {!data ? <p className="text-sm text-slate-400">Loading…</p> : (
+      {view === 'trends' ? <ReportTrends embedded weeks={weeks} director={director} who={who || (director ? 'This director' : 'BD team')} />
+        : !data ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className={`space-y-4 ${data ? '' : 'opacity-50'}`}>
           <Measures card={data.card} />
           <StalledByStage measure={data.card.measures.find((m) => m.key === 'progression')} showDirector={!director} />

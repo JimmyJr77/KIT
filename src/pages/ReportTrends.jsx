@@ -29,25 +29,31 @@ function change(values) {
 
 /**
  * Change over time: the report card's measures week by week, each with its growth or shrinkage over the timeline.
- * For one BD director, each chart also shows the team's high, median and low among directors.
+ * For one BD director, each chart also shows the team's high, median and low among directors. `embedded` leaves out the
+ * report's title block, for use inside the BD report card.
  */
-export default function ReportTrends({ weeks, director, who }) {
+export default function ReportTrends({ weeks, director, who, embedded }) {
   const qs = new URLSearchParams({ weeks: String(weeks) });
   if (director) qs.set('director', director);
   const { data } = useApi(`/financials/report-trends?${qs}`);
   if (!data) return <p className="text-sm text-slate-400">Loading…</p>;
   const labels = data.weeks.map((d) => shortDate(d));
+  const about = (
+    <>
+      Each week shows the trailing 13 weeks ending that week. Pipeline coverage is the qualified pipeline that week against
+      that quarter’s target; forecast reliability is the latest finished quarter.
+      {director ? ' Dashed lines are the BD team’s high, median and low among directors.' : ''}
+    </>
+  );
   return (
-    <article className="mx-auto max-w-6xl space-y-4 print:max-w-none">
-      <header className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm print:border-0 print:p-0 print:shadow-none">
-        <div className="text-xs font-semibold tracking-wide text-brand-700 uppercase">KIT · Change over time</div>
-        <h1 className="mt-1 text-xl font-bold text-slate-900">{who} · last {weeks} weeks</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Each week shows the trailing 13 weeks ending that week. Pipeline coverage is the qualified pipeline that week against
-          that quarter’s target; forecast reliability is the latest finished quarter.
-          {director ? ' Dashed lines are the BD team’s high, median and low among directors.' : ''}
-        </p>
-      </header>
+    <article className={embedded ? 'space-y-3' : 'mx-auto max-w-6xl space-y-4 print:max-w-none'}>
+      {embedded ? <p className="text-xs text-slate-500">{about}</p> : (
+        <header className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm print:border-0 print:p-0 print:shadow-none">
+          <div className="text-xs font-semibold tracking-wide text-brand-700 uppercase">KIT · Change over time</div>
+          <h1 className="mt-1 text-xl font-bold text-slate-900">{who} · last {weeks} weeks</h1>
+          <p className="mt-1 text-sm text-slate-500">{about}</p>
+        </header>
+      )}
       <div className="grid gap-4 lg:grid-cols-2 print:grid-cols-2">
         {data.measures.map((m) => <Trend key={m.key} m={m} labels={labels} weeks={weeks} individual={!!director} who={who} />)}
       </div>

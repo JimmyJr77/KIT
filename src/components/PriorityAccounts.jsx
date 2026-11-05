@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDroppable, closestCorners } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Building2, Plus, Pencil, Trash2, Star, X, Search, GripVertical, Check } from 'lucide-react';
+import { Building2, Plus, Pencil, Trash2, Star, X, Search, GripVertical, Check, Sparkles } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { usd } from '../lib/travelCalc.js';
 import SidePanel from './SidePanel.jsx';
@@ -52,7 +52,7 @@ export default function PriorityAccounts({ userId, name }) {
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <div className="mr-auto">
             <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Building2 size={17} className="text-brand-600" /> {edit ? 'Priority accounts' : `${name}'s priority accounts`}</h2>
-            <p className="text-xs text-slate-500">Agencies, departments and organizations in tiers.{edit ? ' Drag them between tiers; click one to choose its priority pipeline tickets.' : ''}</p>
+            <p className="text-xs text-slate-500">Agencies, departments and organizations in tiers.{edit ? ' Click a tier’s name to rename it, drag accounts between tiers, and click an account to choose its priority pipeline tickets.' : ''}</p>
           </div>
           {edit && <AddTier onAdd={(n) => save(api.post('/priority-accounts/tiers', { name: n }))} />}
         </div>
@@ -65,10 +65,9 @@ export default function PriorityAccounts({ userId, name }) {
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <div className="mr-auto">
             <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Star size={17} className="fill-amber-400 text-amber-500" /> Priority tickets</h2>
-            <p className="text-xs text-slate-500">Picked from the pipeline tickets under the accounts above{edit ? ', in whatever order you like. Drag to reorder.' : '.'}</p>
+            <p className="text-xs text-slate-500">From the accounts above or anywhere in the pipeline{edit ? ', in whatever order you like. Drag to reorder.' : '.'}</p>
           </div>
-          {edit && <button type="button" className="btn" disabled={!inTiers.length} title={inTiers.length ? '' : 'Add pipeline tickets to an account first'}
-            onClick={() => setPicking(true)}><Plus size={15} /> Choose tickets</button>}
+          {edit && <button type="button" className="btn" onClick={() => setPicking(true)}><Plus size={15} /> Choose tickets</button>}
         </div>
         {list.length ? (
           <PriorityList list={list} edit={edit}
@@ -77,7 +76,7 @@ export default function PriorityAccounts({ userId, name }) {
             onOpen={(t, step) => { setTicketStep(step); setTicketId(t.id); }} />
         ) : (
           <p className="rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
-            {edit ? (inTiers.length ? 'No priority tickets yet. Choose them from the tickets under your accounts.' : 'Add accounts to your tiers and give them pipeline tickets, then choose your priority tickets from those.') : 'No priority tickets yet.'}
+            {edit ? 'No priority tickets yet. Choose them from your accounts or anywhere in the pipeline.' : 'No priority tickets yet.'}
           </p>
         )}
       </div>
@@ -87,7 +86,7 @@ export default function PriorityAccounts({ userId, name }) {
           onOpenTicket={(id) => { setTicketStep(undefined); setTicketId(id); }} />
       )}
       {picking && (
-        <PickList tickets={inTiers} chosen={data.list} onClose={() => setPicking(false)}
+        <PickList tickets={inTiers} cards={list} chosen={data.list} onClose={() => setPicking(false)}
           onSave={(ids) => save(api.put('/priority-accounts/list', { ticket_ids: ids })).then(() => setPicking(false))} />
       )}
       {ticketId && <TicketTimeline key={`${ticketId}-${ticketStep}`} ticketId={ticketId} activityId={ticketStep} onClose={() => { setTicketId(null); load(); loadCards(); }} onChanged={loadCards} />}
@@ -171,7 +170,7 @@ function Tier({ tier, ids, accounts, edit, organizations, save, onOpen }) {
   const [adding, setAdding] = useState('');
   const remove = () => {
     const n = tier.accounts.length;
-    if (n && !window.confirm(`Remove ${tier.name} and its ${n} account${n === 1 ? '' : 's'}? Their tickets come off your priority tickets.`)) return;
+    if (n && !window.confirm(`Remove ${tier.name} and its ${n} account${n === 1 ? '' : 's'}? Tickets picked from under them come off your priority tickets.`)) return;
     save(api.del(`/priority-accounts/tiers/${tier.id}`));
   };
   const add = (e) => {
@@ -188,7 +187,9 @@ function Tier({ tier, ids, accounts, edit, organizations, save, onOpen }) {
           </form>
         ) : (
           <>
-            <h3 className="mr-auto text-sm font-semibold text-slate-800">{tier.name} <span className="font-normal text-slate-400">{tier.accounts.length}</span></h3>
+            <h3 className="mr-auto text-sm font-semibold text-slate-800">
+              {edit ? <button type="button" className="text-left hover:underline" title="Rename" onClick={() => setRenaming(tier.name)}>{tier.name}</button> : tier.name}
+            </h3>
             {edit && <button type="button" className="btn-ghost p-1 text-slate-400" onClick={() => setRenaming(tier.name)} aria-label={`Rename ${tier.name}`}><Pencil size={13} /></button>}
             {edit && <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-red-600" onClick={remove} aria-label={`Remove ${tier.name}`}><Trash2 size={13} /></button>}
           </>
@@ -262,7 +263,7 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
     .filter((t) => !q || `${t.opportunity_title} ${t.organization || ''}`.toLowerCase().includes(q.toLowerCase()))
     .slice(0, 60), [all, chosen, everyOrg, q, forAccount]);
   const remove = () => {
-    if (!window.confirm(`Remove ${account.name}? Its tickets come off your priority tickets unless another account has them.`)) return;
+    if (!window.confirm(`Remove ${account.name}? Tickets picked from under it come off your priority tickets unless another account has them.`)) return;
     save(api.del(`/priority-accounts/accounts/${account.id}`)).then(onClose);
   };
   const moveTo = (tierId) => save(api.put('/priority-accounts/layout', {
@@ -346,8 +347,40 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
             )}
           </div>
         )}
+        <AccountStrategy account={account} edit={edit} save={save} />
+        {edit && (
+          <div className="rounded-lg border-2 border-dashed border-slate-200 px-4 py-4">
+            <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><Sparkles size={15} className="text-brand-600" /> AI strategy session</h3>
+            <p className="mt-1 mb-3 text-xs text-slate-500">Coming soon: work through a foothold strategy for {account.name} with AI.</p>
+            <button type="button" className="btn text-xs" disabled>Start AI strategy session</button>
+          </div>
+        )}
       </div>
     </SidePanel>
+  );
+}
+
+/** The owner's strategy for gaining a foothold at the account. Saved on leaving the box, like the account's name. */
+function AccountStrategy({ account, edit, save }) {
+  const saved = account.strategy || '';
+  const [text, setText] = useState(saved);
+  const [state, setState] = useState('');
+  const title = <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Foothold strategy</h3>;
+  if (!edit) return <div>{title}{saved ? <p className="text-sm whitespace-pre-wrap text-slate-700">{saved}</p> : <p className="text-sm text-slate-400">No strategy yet.</p>}</div>;
+  const leave = async () => {
+    if (text.trim() === saved) return;
+    setState('saving');
+    const d = await save(api.put(`/priority-accounts/accounts/${account.id}/strategy`, { strategy: text }));
+    setState(d ? 'saved' : 'failed');
+  };
+  return (
+    <div>
+      {title}
+      <textarea rows={6} className="input resize-y text-sm" maxLength={10000} aria-label={`Foothold strategy for ${account.name}`} value={text}
+        placeholder={`How will you gain a foothold at ${account.name}? Who to reach, where to start, what would open the door…`}
+        onChange={(e) => { setText(e.target.value); setState(''); }} onBlur={leave} />
+      {state && <p className={`mt-1 text-xs ${state === 'failed' ? 'text-red-600' : 'text-slate-400'}`}>{{ saving: 'Saving…', saved: 'Saved', failed: 'Couldn’t save. Try again.' }[state]}</p>}
+    </div>
   );
 }
 
@@ -393,31 +426,59 @@ function SortableTicket({ n, ticket, edit, onRemove, onOpen }) {
   );
 }
 
-/** Choose which of the tickets under your accounts are priority tickets. New picks go to the end of the list. */
-function PickList({ tickets, chosen, onClose, onSave }) {
+/** Choose priority tickets: from under your accounts, or search any open pipeline ticket. New picks go to the end of the list. */
+function PickList({ tickets, cards, chosen, onClose, onSave }) {
   const [picked, setPicked] = useState(chosen);
+  const [all, setAll] = useState(null); // every open pipeline ticket, for searching
+  const [q, setQ] = useState('');
+  const [everyOrg, setEveryOrg] = useState(false);
+  useEffect(() => {
+    api.get('/tickets?scope=all&kind=bid').then((d) => setAll(d.tickets.filter((t) => !t.archived && !CLOSED.includes(t.pipeline_status))));
+  }, []);
   const toggle = (id) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
+  const rows = useMemo(() => {
+    const m = new Map(tickets.map((t) => [t.id, t]));
+    [...cards, ...(all || [])].filter((t) => picked.includes(t.id) && !m.has(t.id)).forEach((t) => m.set(t.id, t));
+    const matches = (t) => !q || `${t.opportunity_title} ${t.organization || ''}`.toLowerCase().includes(q.toLowerCase());
+    const yours = [...m.values()].filter(matches);
+    const others = everyOrg || q ? (all || []).filter((t) => !m.has(t.id) && matches(t)).slice(0, 60) : [];
+    return [...yours, ...others];
+  }, [tickets, cards, all, picked, q, everyOrg]);
   return (
-    <SidePanel title="Choose priority tickets" subtitle="From the pipeline tickets under your priority accounts" onClose={onClose}
+    <SidePanel title="Choose priority tickets" subtitle="From your priority accounts, or search any open pipeline ticket" onClose={onClose}
       footer={(
         <div className="flex justify-end gap-2">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
           <button type="button" className="btn-primary" onClick={() => onSave(picked)}>Save</button>
         </div>
       )}>
-      <ul className="-mx-2 divide-y divide-slate-100">
-        {tickets.map((t) => (
-          <li key={t.id}>
-            <label className="flex cursor-pointer items-start gap-2.5 rounded px-2 py-2 hover:bg-slate-50">
-              <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-600" checked={picked.includes(t.id)} onChange={() => toggle(t.id)} />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium text-slate-800">{t.opportunity_title}</span>
-                <span className="block text-xs text-slate-500">{[t.accounts.join(', '), t.pipeline_status, money(t.value)].filter(Boolean).join(' · ')}</span>
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
+      <div className="mb-2 flex flex-wrap items-center gap-3">
+        <div className="relative min-w-48 flex-1">
+          <Search size={14} className="absolute top-2.5 left-2.5 text-slate-400" />
+          <input className="input h-9 pl-8 text-sm" placeholder="Search open pipeline tickets" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+          <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={everyOrg} onChange={(e) => setEveryOrg(e.target.checked)} />
+          Every organization
+        </label>
+      </div>
+      {rows.length ? (
+        <ul className="-mx-2 divide-y divide-slate-100">
+          {rows.map((t) => (
+            <li key={t.id}>
+              <label className="flex cursor-pointer items-start gap-2.5 rounded px-2 py-2 hover:bg-slate-50">
+                <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-600" checked={picked.includes(t.id)} onChange={() => toggle(t.id)} />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-slate-800">{t.opportunity_title}</span>
+                  <span className="block text-xs text-slate-500">{[t.accounts?.join(', ') || t.organization, t.pipeline_status, money(t.value)].filter(Boolean).join(' · ')}</span>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-slate-400">{(q || everyOrg) && !all ? 'Loading…' : q || everyOrg ? 'No matching open pipeline tickets.' : 'No tickets under your accounts yet. Search, or tick Every organization.'}</p>
+      )}
     </SidePanel>
   );
 }

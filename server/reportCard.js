@@ -3,7 +3,7 @@
 // (or "none" when there isn't enough to judge). Thresholds are below so they're easy to tune.
 import { db } from './db.js';
 import { bids, contracts, forecastLines, targets, quartersTarget, trailingQuarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES } from './financials.js';
-import { quarterFor } from '../src/lib/travelCalc.js';
+import { quarterFor, addDays } from '../src/lib/travelCalc.js';
 
 export const THRESHOLDS = {
   coverage: { good: 3, watch: 2 }, // qualified pipeline ÷ remaining target
@@ -15,14 +15,29 @@ export const THRESHOLDS = {
 const DAY = 864e5;
 
 /**
- * A period: { kind: 'quarter' | 'year' | 't4q', label: '2026 Q4' | '2026' | '2025 Q4 – 2026 Q3', start, end, quarters },
- * plus how much of it has passed. A 't4q' (trailing four quarters) is the four finished quarters before the quarter
- * containing `label` (an ISO date, default today), or `back` sets of four before those.
+ * A period: { kind: 'quarter' | 'year' | 't4q' | 'last12', label: '2026 Q4' | '2026' | '2025 Q4 – 2026 Q3' | 'Last 12 months',
+ * start, end, quarters }, plus how much of it has passed. A 't4q' (trailing four quarters) is the four finished quarters
+ * before the quarter containing `label` (an ISO date, default today), or `back` sets of four before those. A 'last12' is
+ * the 365 days through today: it cuts across quarters, so `shares` says how much of each falls inside it (for the target),
+ * and `quarters` leaves out the part-quarter at its start (a forecast is for a whole quarter).
  */
 export function period(kind = 'quarter', label, back = 0) {
   const today = localToday();
   let p;
-  if (kind === 't4q') {
+  if (kind === 'last12') {
+    const start = addDays(today, -364);
+    const span = (a, b) => (Date.parse(b) - Date.parse(a)) / DAY + 1;
+    const shares = [];
+    for (let q = quarterFor(start); ;) {
+      const r = quarterRange(q);
+      const from = r.start > start ? r.start : start;
+      const to = r.end < today ? r.end : today;
+      shares.push({ quarter: q, share: span(from, to) / span(r.start, r.end), partStart: r.start < start });
+      if (r.end >= today) break;
+      q = quarterFor(addDays(r.end, 1));
+    }
+    p = { kind, noun: 'period', label: 'Last 12 months', start, end: today, shares: shares.map(({ quarter, share }) => ({ quarter, share })), quarters: shares.filter((s) => !s.partStart).map((s) => s.quarter) };
+  } else if (kind === 't4q') {
     const t = trailingQuarters(back, label || today);
     p = { kind, noun: 'period', ...t };
   } else if (kind === 'year') {
@@ -75,7 +90,8 @@ export function reportCard(director, p) {
 
   // 1. Bookings against target. During the period, judged against pace (the share of the period that has passed).
   const booked = sum(deals.filter((d) => within(d.awarded_on)), (d) => d.value);
-  const target = p.kind === 'year' ? targets(Number(p.label), director).total : quartersTarget(p.quarters, director);
+  const target = p.kind === 'year' ? targets(Number(p.label), director).total
+    : p.shares ? sum(p.shares, (s) => quartersTarget([s.quarter], director) * s.share) : quartersTarget(p.quarters, director);
   const attainment = target ? booked / target : null;
   const pace = p.done ? 1 : Math.max(p.elapsed, 0.05);
   const bookings = {

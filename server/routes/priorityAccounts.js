@@ -1,27 +1,28 @@
 // Priority accounts, at the top of My dashboard: each person sorts the agencies, departments and organizations that
 // matter most into tiers (Tier 1, Tier 2, …; tiers, not a ranking), picks the pipeline tickets that matter at each, and keeps
-// one ordered list of priority tickets chosen from those. A ticket on anyone's list carries a "Priority" tag.
+// one ordered list of priority tickets, from those or any other pipeline ticket. A ticket on anyone's list carries a "Priority" tag.
 import { Router } from 'express';
 import { db } from '../db.js';
 
 const r = Router();
 const DEFAULT_TIERS = ['Tier 1', 'Tier 2', 'Tier 3'];
+const STRATEGY_MAX = 10000;
 const name = (v) => String(v ?? '').trim().slice(0, 120);
 
 const ownTier = (id, me) => db.prepare('SELECT * FROM priority_tiers WHERE id = ? AND user_id = ?').get(id, me);
 const ownAccount = (id, me) => db.prepare(`SELECT a.* FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
   WHERE a.id = ? AND t.user_id = ?`).get(id, me);
 
-/** A ticket stays on the list only while it's under one of the person's accounts. */
+/** A ticket picked from under an account leaves the list when no account has it. One chosen for itself stays. */
 function prune(userId) {
-  db.prepare(`DELETE FROM priority_list_tickets WHERE user_id = ? AND ticket_id NOT IN (SELECT pt.ticket_id FROM priority_account_tickets pt
+  db.prepare(`DELETE FROM priority_list_tickets WHERE user_id = ? AND direct = 0 AND ticket_id NOT IN (SELECT pt.ticket_id FROM priority_account_tickets pt
     JOIN priority_accounts a ON a.id = pt.account_id JOIN priority_tiers t ON t.id = a.tier_id WHERE t.user_id = ?)`).run(userId, userId);
 }
 
 /** Someone's tiers, accounts, account tickets and priority list. Pipeline tickets archived (by hand or with Archive all) are left out. */
 export function priorityAccounts(userId) {
   const tiers = db.prepare('SELECT id, name, position FROM priority_tiers WHERE user_id = ? ORDER BY position, id').all(userId);
-  const accounts = db.prepare(`SELECT a.id, a.tier_id, a.name, a.position FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
+  const accounts = db.prepare(`SELECT a.id, a.tier_id, a.name, a.position, a.strategy FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
     WHERE t.user_id = ? ORDER BY a.position, a.id`).all(userId);
   const tickets = db.prepare(`SELECT pt.account_id, pt.position, t.id, t.opportunity_title, t.organization, t.pipeline_status, t.value
     FROM priority_account_tickets pt JOIN priority_accounts a ON a.id = pt.account_id JOIN priority_tiers tr ON tr.id = a.tier_id
@@ -131,6 +132,14 @@ r.delete('/accounts/:id', (req, res) => {
   res.json(priorityAccounts(req.user.id));
 });
 
+/** Body: { strategy }: how the owner plans to gain a foothold at this account. */
+r.put('/accounts/:id/strategy', (req, res) => {
+  if (!ownAccount(req.params.id, req.user.id)) return res.status(404).json({ error: 'Account not found' });
+  const strategy = String(req.body?.strategy ?? '').trim().slice(0, STRATEGY_MAX) || null;
+  db.prepare('UPDATE priority_accounts SET strategy = ? WHERE id = ?').run(strategy, req.params.id);
+  res.json(priorityAccounts(req.user.id));
+});
+
 /** Body: { ticket_ids: [] }, in order: the account's priority pipeline tickets. Tickets dropped from every account leave the list. */
 r.put('/accounts/:id/tickets', (req, res) => {
   if (!ownAccount(req.params.id, req.user.id)) return res.status(404).json({ error: 'Account not found' });
@@ -145,15 +154,17 @@ r.put('/accounts/:id/tickets', (req, res) => {
   res.json(priorityAccounts(req.user.id));
 });
 
-/** Body: { ticket_ids: [] }, in order: your priority tickets, picked from the tickets under your accounts. */
+/** Body: { ticket_ids: [] }, in order: your priority tickets, from under your accounts or any other pipeline ticket. */
 r.put('/list', (req, res) => {
-  const allowed = new Set(db.prepare(`SELECT pt.ticket_id FROM priority_account_tickets pt JOIN priority_accounts a ON a.id = pt.account_id
+  const underAccounts = new Set(db.prepare(`SELECT pt.ticket_id FROM priority_account_tickets pt JOIN priority_accounts a ON a.id = pt.account_id
     JOIN priority_tiers t ON t.id = a.tier_id WHERE t.user_id = ?`).all(req.user.id).map((x) => x.ticket_id));
-  const ids = [...new Set((Array.isArray(req.body?.ticket_ids) ? req.body.ticket_ids : []).map(Number))].filter((id) => allowed.has(id));
+  const direct = new Set(db.prepare('SELECT ticket_id FROM priority_list_tickets WHERE user_id = ? AND direct = 1').all(req.user.id).map((x) => x.ticket_id));
+  const ids = [...new Set((Array.isArray(req.body?.ticket_ids) ? req.body.ticket_ids : []).map(Number).filter(Boolean))]
+    .filter((id) => db.prepare("SELECT 1 FROM tickets WHERE id = ? AND ticket_type = 'bid'").get(id));
   db.transaction(() => {
     db.prepare('DELETE FROM priority_list_tickets WHERE user_id = ?').run(req.user.id);
-    const add = db.prepare('INSERT INTO priority_list_tickets (user_id, ticket_id, position) VALUES (?, ?, ?)');
-    ids.forEach((id, i) => add.run(req.user.id, id, i));
+    const add = db.prepare('INSERT INTO priority_list_tickets (user_id, ticket_id, position, direct) VALUES (?, ?, ?, ?)');
+    ids.forEach((id, i) => add.run(req.user.id, id, i, direct.has(id) || !underAccounts.has(id) ? 1 : 0));
   })();
   res.json(priorityAccounts(req.user.id));
 });

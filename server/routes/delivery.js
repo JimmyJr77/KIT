@@ -1,28 +1,50 @@
 // Delivery: contracts we've won. Each program is copied from an Awarded pipeline ticket (see the delivery_on_award
 // triggers in db.js), then assigned a Program Manager and a delivery team. Funding received and revenue billed are
 // recorded against it as entries, which make up its funded / unfunded backlog and the "bill" side of book-to-bill.
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Router } from 'express';
+import multer from 'multer';
 import { db } from '../db.js';
 import { inBooks } from '../financials.js';
+import { CONTRACT_DOC_TYPES, ADDITIONAL_DOCS } from '../../src/lib/process.js';
 
 const r = Router();
 const STATUSES = ['Active', 'Complete'];
+
+const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
+fs.mkdirSync(uploadDir, { recursive: true });
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: uploadDir,
+    filename: (req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname).slice(0, 12)}`),
+  }),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
 
 function programsOut(rows) {
   const team = db.prepare(`SELECT m.*, u.first_name, u.last_name, u.title FROM delivery_team m
     LEFT JOIN users u ON u.id = m.user_id ORDER BY m.created_at, m.id`).all();
   const entries = db.prepare(`SELECT e.*, u.first_name, u.last_name FROM program_entries e
     LEFT JOIN users u ON u.id = e.created_by ORDER BY e.entry_date DESC, e.id DESC`).all();
+  const files = db.prepare(`SELECT f.*, u.first_name, u.last_name FROM delivery_files f
+    LEFT JOIN users u ON u.id = f.uploaded_by ORDER BY f.created_at, f.id`).all();
   return rows.map((p) => ({
     id: p.id, ticket_id: p.ticket_id, ticket_exists: !!p.ticket_title, name: p.name, organization: p.organization,
     account_type: p.account_type, value: p.value, awarded_at: p.awarded_at, status: p.status, notes: p.notes, updated_at: p.updated_at,
     bd_director: p.dir_first ? { id: p.bd_director_id, first_name: p.dir_first, last_name: p.dir_last } : null, territory_name: p.territory_name,
     ...money(p, entries.filter((e) => e.program_id === p.id)),
     program_manager: p.pm_first ? { id: p.program_manager_id, first_name: p.pm_first, last_name: p.pm_last } : null,
+    technical_lead: p.tl_first ? { id: p.technical_lead_id, first_name: p.tl_first, last_name: p.tl_last } : null,
     team: team.filter((m) => m.program_id === p.id).map((m) => ({
       id: m.id, role: m.role,
       user: m.user_id && m.first_name ? { id: m.user_id, first_name: m.first_name, last_name: m.last_name, title: m.title } : null,
       name: m.user_id && m.first_name ? `${m.first_name} ${m.last_name}` : m.name,
+    })),
+    files: files.filter((f) => f.program_id === p.id).map((f) => ({
+      id: f.id, doc_type: f.doc_type, name: f.original_name, size: f.size, created_at: f.created_at,
+      uploaded_by: f.first_name ? { id: f.uploaded_by, first_name: f.first_name, last_name: f.last_name } : null,
     })),
   }));
 }
@@ -39,15 +61,15 @@ function money(p, entries) {
   };
 }
 // The BD director and territory come from the pipeline ticket the contract was won from.
-const SELECT = `SELECT p.*, u.first_name AS pm_first, u.last_name AS pm_last, t.opportunity_title AS ticket_title,
+const SELECT = `SELECT p.*, u.first_name AS pm_first, u.last_name AS pm_last, l.first_name AS tl_first, l.last_name AS tl_last, t.opportunity_title AS ticket_title,
     t.bd_director_id, d.first_name AS dir_first, d.last_name AS dir_last, tr.name AS territory_name
-  FROM delivery_programs p LEFT JOIN users u ON u.id = p.program_manager_id LEFT JOIN tickets t ON t.id = p.ticket_id
+  FROM delivery_programs p LEFT JOIN users u ON u.id = p.program_manager_id LEFT JOIN users l ON l.id = p.technical_lead_id LEFT JOIN tickets t ON t.id = p.ticket_id
   LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id`;
 // A contract is listed while its pipeline ticket is in the books: archiving the ticket takes the contract with it until the ticket is restored.
 const LIVE = `t.id IS NOT NULL AND ${inBooks()}`;
 const one = (id) => programsOut(db.prepare(`${SELECT} WHERE p.id = ?`).all(id))[0] || null;
 
-/** Tell someone they've been put on a won contract: as its Program Manager, or on its delivery team (with their role). */
+/** Tell someone they've been put on a won contract: as its Program Manager or Technical Lead, or on its delivery team (with their role). */
 function alertAssigned(userId, actor, programId, kind, role) {
   db.prepare('INSERT INTO alerts (user_id, actor_id, kind, program_id, excerpt) VALUES (?, ?, ?, ?, ?)').run(userId, actor.id, kind, programId, role || null);
 }
@@ -59,16 +81,17 @@ r.get('/', (req, res) => {
   res.json({ programs: programsOut(rows) });
 });
 
-/** Body may hold: program_manager_id (null to clear), status, notes, value (the contract value; null to clear). */
+/** Body may hold: program_manager_id and technical_lead_id (null to clear), status, notes, value (the contract value; null to clear). */
 r.put('/:id', (req, res) => {
   const p = db.prepare('SELECT * FROM delivery_programs WHERE id = ?').get(req.params.id);
   if (!p) return res.status(404).json({ error: 'Program not found' });
   const b = req.body || {};
   const next = { ...p };
-  if ('program_manager_id' in b) {
-    const id = Number(b.program_manager_id) || null;
+  for (const field of ['program_manager_id', 'technical_lead_id']) {
+    if (!(field in b)) continue;
+    const id = Number(b[field]) || null;
     if (id && !db.prepare('SELECT 1 FROM users WHERE id = ? AND active = 1').get(id)) return res.status(400).json({ error: 'Unknown person' });
-    next.program_manager_id = id;
+    next[field] = id;
   }
   if ('status' in b) {
     if (!STATUSES.includes(b.status)) return res.status(400).json({ error: 'Status must be Active or Complete' });
@@ -79,9 +102,10 @@ r.put('/:id', (req, res) => {
     next.value = b.value === '' || b.value == null ? null : Number(b.value);
     if (next.value != null && !(next.value >= 0)) return res.status(400).json({ error: 'Contract value must be a positive number' });
   }
-  db.prepare("UPDATE delivery_programs SET program_manager_id = ?, status = ?, notes = ?, value = ?, updated_at = datetime('now') WHERE id = ?")
-    .run(next.program_manager_id, next.status, next.notes, next.value, p.id);
+  db.prepare("UPDATE delivery_programs SET program_manager_id = ?, technical_lead_id = ?, status = ?, notes = ?, value = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(next.program_manager_id, next.technical_lead_id, next.status, next.notes, next.value, p.id);
   if (next.program_manager_id && next.program_manager_id !== p.program_manager_id) alertAssigned(next.program_manager_id, req.user, p.id, 'delivery_pm');
+  if (next.technical_lead_id && next.technical_lead_id !== p.technical_lead_id) alertAssigned(next.technical_lead_id, req.user, p.id, 'delivery_tl');
   res.json({ program: one(p.id) });
 });
 
@@ -107,6 +131,37 @@ r.delete('/team/:memberId', (req, res) => {
   if (!m) return res.status(404).json({ error: 'Not found' });
   db.prepare('DELETE FROM delivery_team WHERE id = ?').run(m.id);
   res.json({ program: one(m.program_id) });
+});
+
+/** Add a document. Form fields: file, doc_type (one of CONTRACT_DOC_TYPES, or Additional). */
+r.post('/:id/files', upload.single('file'), (req, res) => {
+  const refuse = (status, error) => {
+    if (req.file) fs.rmSync(req.file.path, { force: true });
+    res.status(status).json({ error });
+  };
+  if (!req.file) return refuse(400, 'Choose a file to upload');
+  if (!db.prepare('SELECT 1 FROM delivery_programs WHERE id = ?').get(req.params.id)) return refuse(404, 'Program not found');
+  const type = req.body?.doc_type;
+  if (type !== ADDITIONAL_DOCS && !CONTRACT_DOC_TYPES.includes(type)) return refuse(400, 'Choose a document type');
+  db.prepare('INSERT INTO delivery_files (program_id, doc_type, original_name, stored_name, mime_type, size, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(req.params.id, type, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id);
+  db.prepare("UPDATE delivery_programs SET updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+  res.json({ program: one(req.params.id) });
+});
+
+r.get('/files/:id', (req, res) => {
+  const f = db.prepare('SELECT * FROM delivery_files WHERE id = ?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Not found' });
+  res.download(path.join(uploadDir, f.stored_name), f.original_name);
+});
+
+r.delete('/files/:id', (req, res) => {
+  const f = db.prepare('SELECT * FROM delivery_files WHERE id = ?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Not found' });
+  if (f.uploaded_by !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the person who added this file can delete it' });
+  db.prepare('DELETE FROM delivery_files WHERE id = ?').run(f.id);
+  fs.rmSync(path.join(uploadDir, f.stored_name), { force: true });
+  res.json({ program: one(f.program_id) });
 });
 
 /** Record funding received or revenue billed. Body: { kind: 'funding' | 'billing', amount, entry_date, note? }. */

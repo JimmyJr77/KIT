@@ -164,10 +164,10 @@ function useTip(ref) {
 /**
  * Horizontal bars, one series: rows [{ key, label, value, sub? }]. Sorted as given. The value is printed at each bar's end.
  */
-export function BarList({ rows, format = compact, color = SERIES[0], empty = 'Nothing yet.' }) {
+export function BarList({ rows, format = compact, color = SERIES[0], empty = 'Nothing yet.', scale }) {
   const ref = useRef(null);
   const [tip, show, hide] = useTip(ref);
-  const max = Math.max(...rows.map((r) => r.value), 0);
+  const max = scale ?? Math.max(...rows.map((r) => r.value), 0); // `scale`: share one across lists, so their bars compare
   if (!rows.length) return <p className="py-6 text-center text-sm text-slate-400">{empty}</p>;
   return (
     <div ref={ref} className="relative space-y-2" onPointerLeave={hide}>

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, BriefcaseBusiness, Ticket, Trash2, UserPlus, AlertTriangle, Landmark, ReceiptText, Plus, MapPin, LayoutGrid, Table2, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { Search, BriefcaseBusiness, Ticket, Trash2, UserPlus, AlertTriangle, Landmark, ReceiptText, Plus, MapPin, LayoutGrid, Table2, ChevronUp, ChevronDown, ChevronsUpDown, Upload, FileText, Loader2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullName, shortDate, parseUtc, todayIso } from '../lib/format.js';
+import { CONTRACT_DOC_TYPES, ADDITIONAL_DOCS } from '../lib/process.js';
+import { useAuth } from '../lib/auth.jsx';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
@@ -40,7 +42,7 @@ export default function Delivery() {
 
   const shown = (programs || []).filter((p) => {
     const s = q.trim().toLowerCase();
-    return !s || [p.name, p.organization, p.account_type, fullName(p.program_manager), ...p.team.map((m) => m.name)].filter(Boolean).join(' ').toLowerCase().includes(s);
+    return !s || [p.name, p.organization, p.account_type, fullName(p.program_manager), fullName(p.technical_lead), ...p.team.map((m) => m.name)].filter(Boolean).join(' ').toLowerCase().includes(s);
   });
   const open = programs?.find((p) => p.id === openId);
   const replace = (p) => setPrograms((xs) => xs.map((x) => (x.id === p.id ? p : x)));
@@ -119,7 +121,7 @@ export default function Delivery() {
   );
 }
 
-/** One won contract: its Program Manager, delivery team, status, and notes. Changes save as they're made. */
+/** One won contract: its Program Manager, Technical Lead, delivery team, status, and notes. Changes save as they're made. */
 function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
   const [error, setError] = useState('');
   const [notes, setNotes] = useState(p.notes || '');
@@ -187,6 +189,12 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
         </section>
 
         <section>
+          <h3 className="label">Technical Lead</h3>
+          <UserCombobox users={users} teams={teams} value={p.technical_lead?.id ?? null}
+            onChange={(id) => update({ technical_lead_id: id || null })} placeholder="Assign a Technical Lead…" />
+        </section>
+
+        <section>
           <h3 className="label">Delivery team</h3>
           {p.team.length ? (
             <ul className="mb-3 space-y-1.5">
@@ -222,6 +230,8 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
           </div>
         </section>
 
+        <ContractDocuments program={p} onChange={onChange} onError={setError} />
+
         <section>
           <h3 className="label">Notes</h3>
           <textarea className="input min-h-24 text-sm" placeholder="Period of performance, kickoff date, key deliverables…" value={notes} onChange={(e) => setNotes(e.target.value)} />
@@ -234,6 +244,107 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
         </section>
       </div>
     </SidePanel>
+  );
+}
+
+const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+/** A file's type, from its name: "PDF", "DOCX". */
+const fileType = (name) => (/\.([a-z0-9]+)$/i.exec(name)?.[1] || 'File').toUpperCase();
+
+/** Upload to one kind of document. Several files can be chosen at once; they go one at a time. */
+function UploadButton({ programId, docType, label, onChange, onError }) {
+  const [busy, setBusy] = useState(false);
+  const pick = async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    setBusy(true);
+    onError('');
+    try {
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append('doc_type', docType);
+        fd.append('file', file);
+        onChange((await api.post(`/delivery/${programId}/files`, fd)).program);
+      }
+    } catch (err) { onError(err.message); } finally { setBusy(false); }
+  };
+  return (
+    <label className={`btn cursor-pointer px-2 py-1 text-xs ${busy ? 'pointer-events-none opacity-60' : ''}`}>
+      {busy ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} Upload
+      <input type="file" multiple className="sr-only" aria-label={`Upload ${label}`} onChange={pick} />
+    </label>
+  );
+}
+
+function FileRow({ file, showType, onChange, onError }) {
+  const { user } = useAuth();
+  const remove = async () => {
+    if (!confirm(`Delete “${file.name}”?`)) return;
+    onError('');
+    try { onChange((await api.del(`/delivery/files/${file.id}`)).program); } catch (e) { onError(e.message); }
+  };
+  return (
+    <li className="flex items-center gap-1">
+      <a href={`/api/delivery/files/${file.id}`} className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs hover:border-brand-500"
+        title={`Added ${shortDate(parseUtc(file.created_at).toLocaleDateString('en-CA'), { month: 'short', day: 'numeric', year: 'numeric' })}${file.uploaded_by ? ` by ${fullName(file.uploaded_by)}` : ''}`}>
+        <FileText size={13} className="shrink-0 text-emerald-600" />
+        <span className="min-w-0 flex-1 truncate text-slate-800">{file.name}</span>
+        {showType && <span className="shrink-0 rounded bg-slate-100 px-1 text-[10px] font-medium text-slate-500">{fileType(file.name)}</span>}
+        {file.size != null && <span className="shrink-0 text-[11px] text-slate-400">{bytes(file.size)}</span>}
+      </a>
+      {(file.uploaded_by?.id === user.id || user.role === 'admin') && (
+        <button type="button" className="btn-ghost shrink-0 p-1 text-slate-400 hover:text-red-600" onClick={remove} aria-label={`Delete ${file.name}`} title="Delete file"><Trash2 size={13} /></button>
+      )}
+    </li>
+  );
+}
+
+/** A contract's documents: a place for each kind, then Additional documents, sortable by file name or type. */
+function ContractDocuments({ program: p, onChange, onError }) {
+  const [sort, setSort] = useState({ by: 'name', dir: 1 });
+  const props = { onChange, onError };
+  const name = (f) => f.name.toLowerCase();
+  const additional = p.files.filter((f) => f.doc_type === ADDITIONAL_DOCS).sort((a, b) => sort.dir * (sort.by === 'type'
+    ? fileType(a.name).localeCompare(fileType(b.name)) || name(a).localeCompare(name(b))
+    : name(a).localeCompare(name(b))));
+  const sortButton = (by, label) => {
+    const on = sort.by === by;
+    const Arrow = !on ? ChevronsUpDown : sort.dir > 0 ? ChevronUp : ChevronDown;
+    return (
+      <button type="button" className={`flex items-center gap-0.5 text-xs ${on ? 'font-medium text-slate-700' : 'text-slate-500 hover:text-slate-700'}`}
+        aria-pressed={on} onClick={() => setSort({ by, dir: on ? -sort.dir : 1 })}>{label} <Arrow size={12} /></button>
+    );
+  };
+  return (
+    <>
+      <section>
+        <h3 className="label">Documents</h3>
+        <div className="grid gap-x-4 gap-y-2.5 sm:grid-cols-2">
+          {CONTRACT_DOC_TYPES.map((type) => {
+            const files = p.files.filter((f) => f.doc_type === type);
+            return (
+              <div key={type}>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-slate-700">{type}</span>
+                  <UploadButton programId={p.id} docType={type} label={type} {...props} />
+                </div>
+                {files.length > 0 && <ul className="space-y-1">{files.map((f) => <FileRow key={f.id} file={f} {...props} />)}</ul>}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+      <section>
+        <div className="mb-1 flex flex-wrap items-center gap-3">
+          <h3 className="label mb-0 mr-auto">Additional documents</h3>
+          {additional.length > 1 && <>{sortButton('name', 'File name')}{sortButton('type', 'Type')}</>}
+          <UploadButton programId={p.id} docType={ADDITIONAL_DOCS} label="additional documents" {...props} />
+        </div>
+        {additional.length
+          ? <ul className="space-y-1">{additional.map((f) => <FileRow key={f.id} file={f} showType {...props} />)}</ul>
+          : <p className="text-xs text-slate-400">Anything that doesn’t fit above.</p>}
+      </section>
+    </>
   );
 }
 

@@ -23,3 +23,8 @@ export function cleanReviews(input) {
   });
   return out;
 }
+
+/** Where a contract's documents go, in the order the work usually happens. Anything else is an Additional document. */
+export const CONTRACT_DOC_TYPES = ['RFI', 'RFI Response', 'White Paper', 'RFP', 'Proposal', 'SOW', 'ROM', 'PO', 'Contract / Award', 'Modifications',
+  'Teaming Agreement', 'NDA', 'DD 254', 'Deliverables'];
+export const ADDITIONAL_DOCS = 'Additional';

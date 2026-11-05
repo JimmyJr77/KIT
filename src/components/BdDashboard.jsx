@@ -48,7 +48,7 @@ export default function BdDashboard({ director, team, territory, self = false, h
           <TopMetrics top={data.top} people={data.people} territory={territory} />
           <BdNumbers numbers={data.numbers} isTeam={isTeam} />
           <section className="space-y-3">
-            <ReportCard key={director || team} director={isTeam ? undefined : data.scope.director}
+            <ReportCard key={director || team} director={isTeam ? undefined : data.scope.director} who={data.scope.label}
               title={isTeam ? `${data.scope.label} report card` : self ? 'Your BD report card' : `${data.scope.label}'s BD report card`} />
           </section>
         </>
@@ -287,17 +287,7 @@ function BdNumbers({ numbers: n, isTeam }) {
           timeline={<LineChart points={rv.map((x) => x.quarter)} labels={rv.map((x) => shortQuarter(x.quarter))} height={180}
             series={[{ key: 'rev', label: 'Revenue', values: rv.map((x) => x.value) }]} />} />
 
-        <ViewCard title="Expected closings" subtitle="Qualified+ pipeline tickets by the quarter of their projected win date: how many, and their full value"
-          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'PL tickets', align: 'right' }, { key: 'value', label: 'Value', align: 'right', format: fullMoney },
-            { key: 'weighted', label: 'PWIN-adjusted', align: 'right', format: fullMoney }],
-            rows: [...cl.quarters, ...pools.map(([l, b]) => ({ quarter: l, ...b }))] }}
-          bar={<StackedColumns categories={cl.quarters.map((x) => `${shortQuarter(x.quarter)} · ${x.count}`)} height={150}
-            series={[{ key: 'value', label: 'Value', color: SERIES[0], values: cl.quarters.map((x) => x.value) }]} />}
-          timeline={<LineChart points={cl.quarters.map((x) => x.quarter)} labels={cl.quarters.map((x) => shortQuarter(x.quarter))} height={180}
-            series={[{ key: 'value', label: 'Value', values: cl.quarters.map((x) => x.value) }, { key: 'weighted', label: 'PWIN-adjusted', values: cl.quarters.map((x) => x.weighted) }]} />}
-          footer={pools.length > 0 && <p className="mt-3 text-xs text-slate-500">Not in a quarter: {pools.map(([l, b]) => `${l} ${compact(b.value)} (${b.count})`).join(' · ')}</p>} />
-
-        <ViewCard title="Qualified+ pipeline" subtitle={`Open pipeline tickets from Qualified onward that haven't been awarded: ${compact(ql.stages.reduce((s, x) => s + x.value, 0))} in all`}
+        <ViewCard className="lg:col-span-2" title="Qualified+ pipeline" subtitle={`Open pipeline tickets from Qualified onward that haven't been awarded: ${compact(ql.stages.reduce((s, x) => s + x.value, 0))} in all`}
           table={{ columns: [{ key: 'label', label: qualBy === 'stage' ? 'Stage' : qualBy === 'territory' ? 'Territory' : 'BD director' }, { key: 'count', label: 'PL tickets', align: 'right' },
             { key: 'value', label: 'Value', align: 'right', format: fullMoney }, { key: 'weighted', label: 'PWIN-adjusted', align: 'right', format: fullMoney }], rows: qualRows }}
           bar={(
@@ -309,6 +299,7 @@ function BdNumbers({ numbers: n, isTeam }) {
                 ))}
               </div>
               <BarList rows={qualRows.map((r) => ({ key: r.key, label: r.label, value: r.value, sub: `${r.count}` }))} empty="No Qualified+ pipeline tickets." />
+              {qualBy === 'stage' && ql.byDirector?.length > 0 && <DirectorStages directors={ql.byDirector} />}
             </div>
           )}
           timeline={<LineChart points={ql.trend.points} labels={ql.trend.points.map(trendLabel)} height={180}
@@ -317,21 +308,41 @@ function BdNumbers({ numbers: n, isTeam }) {
         <PipelineByPerson className="lg:col-span-2" data={ql.byPerson} />
 
         <ViewCard className="lg:col-span-2" title="Qualified+ expected bookings by quarter"
-          subtitle="By projected win quarter. Pipeline tickets with a PWIN count at value × PWIN; pipeline tickets without one count at full value and are shown apart."
-          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'PL tickets', align: 'right' }, { key: 'adjCount', label: 'With PWIN', align: 'right' },
-            { key: 'adj', label: 'PWIN-adjusted', align: 'right', format: fullMoney }, { key: 'adjRaw', label: '(their full value)', align: 'right', format: fullMoney },
+          subtitle="Qualified+ pipeline tickets by the quarter of their projected win date. Each column's full height is their full value; pipeline tickets with a PWIN count at value × PWIN, and those without one count at full value and are shown apart."
+          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'count', label: 'PL tickets', align: 'right' }, { key: 'value', label: 'Full value', align: 'right', format: fullMoney },
+            { key: 'adjCount', label: 'With PWIN', align: 'right' }, { key: 'adj', label: 'PWIN-adjusted', align: 'right', format: fullMoney }, { key: 'adjRaw', label: '(their full value)', align: 'right', format: fullMoney },
             { key: 'rawCount', label: 'No PWIN', align: 'right' }, { key: 'raw', label: 'No-PWIN value', align: 'right', format: fullMoney }, { key: 'total', label: 'Expected', align: 'right', format: fullMoney }],
-            rows: cl.quarters.map((x) => ({ quarter: x.quarter, count: x.count, adjCount: x.adjusted.count, adj: x.adjusted.weighted, adjRaw: x.adjusted.value,
-              rawCount: x.unadjusted.count, raw: x.unadjusted.value, total: x.weighted })) }}
-          bar={<StackedColumns categories={cl.quarters.map((x) => shortQuarter(x.quarter))} height={150}
+            rows: [...cl.quarters.map((x) => [x.quarter, x]), ...pools].map(([quarter, x]) => ({ quarter, count: x.count, value: x.value, adjCount: x.adjusted.count, adj: x.adjusted.weighted,
+              adjRaw: x.adjusted.value, rawCount: x.unadjusted.count, raw: x.unadjusted.value, total: x.weighted })) }}
+          bar={<StackedColumns categories={cl.quarters.map((x) => `${shortQuarter(x.quarter)} · ${x.count}`)} height={150}
             series={[{ key: 'adj', label: 'PWIN-adjusted (value × PWIN)', color: SERIES[0], values: cl.quarters.map((x) => x.adjusted.weighted) },
-              { key: 'raw', label: 'No PWIN yet (full value)', color: SERIES[1], values: cl.quarters.map((x) => x.unadjusted.value) }]} />}
+              { key: 'raw', label: 'No PWIN yet (full value)', color: SERIES[1], values: cl.quarters.map((x) => x.unadjusted.value) },
+              { key: 'cut', label: 'Taken off by PWIN', color: '#cbd5e1', values: cl.quarters.map((x) => x.adjusted.value - x.adjusted.weighted) }]} />}
           timeline={<LineChart points={cl.quarters.map((x) => x.quarter)} labels={cl.quarters.map((x) => shortQuarter(x.quarter))} height={180}
-            series={[{ key: 'adj', label: 'PWIN-adjusted', values: cl.quarters.map((x) => x.adjusted.weighted) }, { key: 'raw', label: 'No PWIN (full value)', values: cl.quarters.map((x) => x.unadjusted.value) },
-              { key: 'all', label: 'Unadjusted total', values: cl.quarters.map((x) => x.value) }]} />} />
+            series={[{ key: 'all', label: 'Full value', values: cl.quarters.map((x) => x.value) }, { key: 'total', label: 'Expected', values: cl.quarters.map((x) => x.weighted) },
+              { key: 'adj', label: 'PWIN-adjusted', values: cl.quarters.map((x) => x.adjusted.weighted) }, { key: 'raw', label: 'No PWIN (full value)', values: cl.quarters.map((x) => x.unadjusted.value) }]} />}
+          footer={pools.length > 0 && <p className="mt-3 text-xs text-slate-500">Not in a quarter: {pools.map(([l, b]) => `${l} ${compact(b.value)} (${b.count})`).join(' · ')}</p>} />
       </div>
       <BookToBill b2b={n.bookToBill} />
     </section>
+  );
+}
+
+/** Each BD director's Qualified+ pipeline stage by stage, in small cards on one scale so they compare. */
+function DirectorStages({ directors }) {
+  const scale = Math.max(...directors.flatMap((d) => d.stages.map((s) => s.value)), 0);
+  return (
+    <div className="mt-4 grid gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2 xl:grid-cols-3">
+      {directors.map((d) => (
+        <div key={d.id ?? 'none'} className="rounded-lg border border-slate-200 p-3">
+          <div className="mb-2 flex items-baseline justify-between gap-2">
+            <h4 className="truncate text-sm font-semibold text-slate-800">{d.name}</h4>
+            <span className="shrink-0 text-xs font-semibold text-slate-900 tabular-nums">{compact(d.value)}<span className="ml-1 font-normal text-slate-400">{d.count}</span></span>
+          </div>
+          <BarList scale={scale} rows={d.stages.map((s) => ({ key: s.stage, label: s.stage, value: s.value, sub: `${s.count}` }))} />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -374,12 +385,12 @@ export function BookToBill({ b2b }) {
             reference={1} referenceLabel="1.0×" ceiling={4}
             series={[{ key: 'conv', label: 'Conventional', values: q.map((x) => x.conventional) }, { key: 'ttm', label: 'Trailing 12 months', values: q.map((x) => x.ttm) },
               { key: 'funded', label: 'Funded backlog', values: q.map((x) => x.fundedRatio) }]} />} />
-        <ViewCard title="What goes into it" subtitle="Bookings, funding obligated and revenue billed each quarter" initial="bar"
-          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'booked', label: 'Booked', align: 'right', format: fullMoney }, { key: 'funded', label: 'Funded', align: 'right', format: fullMoney },
+        <ViewCard title="What goes into it" subtitle="Booked each quarter, and billed: how much was realized in revenue that quarter" initial="bar"
+          table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'booked', label: 'Booked', align: 'right', format: fullMoney },
             { key: 'billed', label: 'Billed', align: 'right', format: fullMoney }, { key: 'ttmBooked', label: 'TTM booked', align: 'right', format: fullMoney }, { key: 'ttmBilled', label: 'TTM billed', align: 'right', format: fullMoney }], rows: q }}
           bar={(
             <div className="space-y-4">
-              {[['booked', 'Booked', SERIES[0]], ['funded', 'Funding obligated', SERIES[3]], ['billed', 'Billed', SERIES[2]]].map(([k, l, c]) => (
+              {[['booked', 'Booked', SERIES[0]], ['billed', 'Billed', SERIES[2]]].map(([k, l, c]) => (
                 <div key={k}>
                   <div className="mb-1 text-xs font-medium text-slate-600">{l}</div>
                   <StackedColumns categories={q.map((x) => shortQuarter(x.quarter))} height={60} series={[{ key: k, label: l, color: c, values: q.map((x) => x[k]) }]} />
@@ -388,8 +399,7 @@ export function BookToBill({ b2b }) {
             </div>
           )}
           timeline={<LineChart points={q.map((x) => x.quarter)} labels={q.map((x) => shortQuarter(x.quarter))} height={200}
-            series={[{ key: 'booked', label: 'Booked', values: q.map((x) => x.booked) }, { key: 'funded', label: 'Funding obligated', values: q.map((x) => x.funded) },
-              { key: 'billed', label: 'Billed', values: q.map((x) => x.billed) }]} />} />
+            series={[{ key: 'booked', label: 'Booked', values: q.map((x) => x.booked) }, { key: 'billed', label: 'Billed', values: q.map((x) => x.billed) }]} />} />
       </div>
       {!q.some((x) => x.billed) && (
         <p className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">

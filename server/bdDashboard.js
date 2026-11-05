@@ -4,7 +4,7 @@
 //     open account objectives, and upcoming events (who from the scope is going, and the events nobody is going to).
 //   Top-level metrics: Qualified+ pipeline, booked and revenue this quarter and year, PWIN-adjusted expected bookings,
 //     and expenses (actual travel and marketing) against revenue.
-//   BD numbers: bookings, revenue and expected closings over time, the Qualified+ pipeline, and book-to-bill three ways.
+//   BD numbers: bookings, revenue and expected bookings over time, the Qualified+ pipeline, and book-to-bill three ways.
 //   (The BD report card is its own endpoint: /financials/report-card.)
 // Bookings are contracts won, on their award date; revenue is what's billed on them; both follow the pipeline ticket's BD director.
 import { db, json } from './db.js';
@@ -17,6 +17,7 @@ import { spendEntries, spendFor } from './marketingSpend.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
 
 const sum = (xs, f) => xs.reduce((s, x) => s + (f(x) || 0), 0);
+const weighted = (t) => (t.value || 0) * (t.pwin ?? 1);
 const inList = (ids) => JSON.stringify(ids);
 
 /**
@@ -119,7 +120,6 @@ export function bdDashboard(s, basis = 'calendar') {
   const qr = quarterRange(thisQ);
   const { list, deals } = money(s);
   const qualified = list.filter((t) => QUALIFIED_STAGES.includes(t.pipeline_status));
-  const weighted = (t) => (t.value || 0) * (t.pwin ?? 1);
   const t = targets(year, s.director);
   const booked = (start, end = today) => sum(deals.filter((p) => p.awarded_on >= start && p.awarded_on <= end), (p) => p.value);
   const billed = (start, end = today) => bookToBill(deals, start, end).billed;
@@ -174,9 +174,9 @@ export function bdDashboard(s, basis = 'calendar') {
         later: exp.later, overdue: exp.overdue, undetermined: exp.undetermined, unscheduled: exp.unscheduled,
       },
       qualified: {
-        stages: byStage(qualified, QUALIFIED_STAGES).map((x) => ({ ...x, weighted: sum(qualified.filter((k) => k.pipeline_status === x.stage), weighted) })),
+        stages: stageRows(qualified),
         byTerritory: qualifiedBy(list, 'territory'),
-        byDirector: s.kind === 'team' ? qualifiedBy(list, 'director') : null,
+        byDirector: s.kind === 'team' ? qualifiedBy(list, 'director').map((g) => ({ ...g, stages: stageRows(qualified.filter((k) => k.bd_director_id === g.id)) })) : null,
         trend: { points: tr.points, values: qualTrend },
         // Week to week, each person's own line (one line for a person's dashboard).
         byPerson: pipelineByPerson({ ids: s.director ? [s.director] : s.people, f: { territory: s.territory } }),
@@ -191,6 +191,9 @@ export function bdDashboard(s, basis = 'calendar') {
     },
   };
 }
+
+/** Qualified+ pipeline tickets stage by stage: how many, their full value, and PWIN-adjusted. */
+const stageRows = (xs) => byStage(xs, QUALIFIED_STAGES).map((x) => ({ ...x, weighted: sum(xs.filter((k) => k.pipeline_status === x.stage), weighted) }));
 
 /** For a team: each person's travel and marketing spend, bookings and revenue over a period. */
 function spendByPerson(s, entries, deals, start, end) {

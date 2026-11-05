@@ -769,6 +769,22 @@ END;
 `);
 // Alerts telling someone they've been put on a won contract.
 addColumn('alerts', 'program_id', 'INTEGER REFERENCES delivery_programs(id) ON DELETE CASCADE');
+addColumn('delivery_programs', 'technical_lead_id', 'INTEGER REFERENCES users(id)');
+db.exec(`
+-- A contract's documents: RFI, proposal, PO and so on, or Additional. Kept apart from ticket_files, which can go to Pipedrive.
+CREATE TABLE IF NOT EXISTS delivery_files (
+  id INTEGER PRIMARY KEY,
+  program_id INTEGER NOT NULL REFERENCES delivery_programs(id) ON DELETE CASCADE,
+  doc_type TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  mime_type TEXT,
+  size INTEGER,
+  uploaded_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS delivery_files_program ON delivery_files(program_id);
+`);
 // Travel request alerts: a lead has one to approve (travel_request), or the traveler's was decided (travel_decision).
 addColumn('alerts', 'trip_id', 'INTEGER REFERENCES trips(id) ON DELETE CASCADE');
 
@@ -1033,6 +1049,8 @@ CREATE TABLE IF NOT EXISTS priority_list_tickets (
   PRIMARY KEY (user_id, ticket_id)
 );
 `);
+addColumn('priority_accounts', 'strategy', 'TEXT'); // the owner's strategy for gaining a foothold at this account
+addColumn('priority_list_tickets', 'direct', 'INTEGER NOT NULL DEFAULT 0'); // chosen for itself, so it stays when accounts change
 
 function migrateToActivities() {
   const hasTable = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);

@@ -63,7 +63,7 @@ function liveItems() {
 // and their funding and billing, actual travel spend, booking targets, account objectives, forecasts, marketing and its spend, alerts, work logs and priority account lists.
 // People, teams, territories and settings stay.
 const RESET_TABLES = ['contacts', 'contact_interactions', 'ticket_contacts', 'task_participants', 'events', 'event_attendees', 'event_reps', 'event_support_requests', 'support_needs', 'support_need_tickets',
-  'trips', 'travel_actuals', 'delivery_programs', 'delivery_team', 'program_entries', 'booking_targets', 'account_objectives', 'forecast_snapshots',
+  'trips', 'travel_actuals', 'delivery_programs', 'delivery_team', 'delivery_files', 'program_entries', 'booking_targets', 'account_objectives', 'forecast_snapshots',
   'marketing_assets', 'marketing_copy', 'marketing_spend', 'alerts', 'work_log',
   'priority_tiers', 'priority_accounts', 'priority_account_tickets', 'priority_list_tickets'];
 
@@ -197,7 +197,8 @@ r.post('/delete', (req, res) => {
 
 /** Deletes tickets (with their priority cards, comments, documents and their files, tasks, history, contracts and forecast lines) and cards. */
 function removeForGood(t, c) {
-  const files = t.length ? db.prepare('SELECT stored_name FROM ticket_files WHERE ticket_id IN (SELECT value FROM json_each(?))').all(JSON.stringify(t)) : [];
+  const files = t.length ? db.prepare(`SELECT stored_name FROM ticket_files WHERE ticket_id IN (SELECT value FROM json_each(@t))
+    UNION ALL SELECT f.stored_name FROM delivery_files f JOIN delivery_programs p ON p.id = f.program_id WHERE p.ticket_id IN (SELECT value FROM json_each(@t))`).all({ t: JSON.stringify(t) }) : [];
   let cardsDeleted = 0;
   db.transaction(() => {
     const delCard = db.prepare('DELETE FROM priority_cards WHERE id IN (SELECT value FROM json_each(?))');

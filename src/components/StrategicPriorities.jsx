@@ -96,9 +96,10 @@ function TeamRollup({ people }) {
       col.positions.push(i);
       t.accounts.forEach((a) => {
         const ak = a.name.trim().toLowerCase();
-        if (!col.accounts.has(ak)) col.accounts.set(ak, { key: `${key}|${ak}`, name: a.name, tier: t.name, people: [], tickets: new Map() });
+        if (!col.accounts.has(ak)) col.accounts.set(ak, { key: `${key}|${ak}`, name: a.name, tier: t.name, people: [], strategies: [], tickets: new Map() });
         const acc = col.accounts.get(ak);
         acc.people.push({ member: p.member, extra: t.name });
+        if (a.strategy) acc.strategies.push({ member: p.member, text: a.strategy });
         a.tickets.forEach((k) => {
           if (!acc.tickets.has(k.id)) acc.tickets.set(k.id, { ...k, people: [] });
           acc.tickets.get(k.id).people.push({ member: p.member });
@@ -144,7 +145,7 @@ function TeamRollup({ people }) {
         <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(15rem,1fr))]">
           {tiers.map((t) => (
             <div key={t.key} className="flex flex-col rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-              <h3 className="mb-2 text-sm font-semibold text-slate-800">{t.name} <span className="font-normal text-slate-400">{t.accounts.length}</span></h3>
+              <h3 className="mb-2 text-sm font-semibold text-slate-800">{t.name}</h3>
               <div className="flex flex-col gap-1.5">
                 {t.accounts.map((a) => {
                   const open = a.tickets.filter((k) => !CLOSED.includes(k.pipeline_status));
@@ -209,6 +210,17 @@ function TeamRollup({ people }) {
               ))}
             </ul>
           ) : <p className="text-sm text-slate-400">No pipeline tickets chosen for this account.</p>}
+          <h3 className="mt-5 mb-1.5 text-sm font-semibold text-slate-800">Foothold strategy</h3>
+          {account.strategies.length ? (
+            <div className="space-y-3">
+              {account.strategies.map((s) => (
+                <div key={s.member.id}>
+                  <div className="text-xs font-medium text-slate-500">{fullName(s.member)}</div>
+                  <p className="text-sm whitespace-pre-wrap text-slate-700">{s.text}</p>
+                </div>
+              ))}
+            </div>
+          ) : <p className="text-sm text-slate-400">No strategy yet.</p>}
         </SidePanel>
       )}
       {ticketId && <TicketTimeline key={`${ticketId}-${ticketStep}`} ticketId={ticketId} activityId={ticketStep} onClose={() => { setTicketId(null); loadCards(); }} onChanged={loadCards} />}

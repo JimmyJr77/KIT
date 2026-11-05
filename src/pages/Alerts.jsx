@@ -18,7 +18,7 @@ const isSupport = (a) => a.kind === 'support_request' || a.kind === 'support_acc
 const supportSubject = (a) => (a.event_id ? a.event_name : a.request_title || (a.request_id ? 'a request' : 'a deleted request'));
 /** Support asked for on Weekly Priorities: you were asked (support_need), or a ticket was made from yours (support_ticket). */
 const isAsk = (a) => a.kind === 'support_need' || a.kind === 'support_ticket';
-const isDelivery = (a) => a.kind === 'delivery_pm' || a.kind === 'delivery_team';
+const isDelivery = (a) => a.kind === 'delivery_pm' || a.kind === 'delivery_tl' || a.kind === 'delivery_team';
 const isTravel = (a) => a.kind === 'travel_request' || a.kind === 'travel_decision';
 /** What a travel request is for: its event, or where it goes. */
 const tripSubject = (a) => (!a.trip_id ? 'a deleted trip' : a.trip_event_name || [a.trip_destination?.city, a.trip_destination?.state].filter(Boolean).join(', ') || 'a trip');
@@ -94,6 +94,7 @@ export default function Alerts() {
                       : a.kind === 'support_request' ? <>requested marketing support{a.event_id ? ' for' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>
                       : a.kind === 'support_accepted' ? <>created a work ticket for your marketing support request{a.event_id ? ' on' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>
                         : a.kind === 'delivery_pm' ? <>made you Program Manager for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
+                          : a.kind === 'delivery_tl' ? <>made you Technical Lead for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
                           : a.kind === 'delivery_team' ? <>added you to the delivery team for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
                           : a.kind === 'travel_request' ? <>submitted a travel request for <span className="font-semibold">{tripSubject(a)}</span></>
                           : a.kind === 'travel_decision' ? <>{DECISION[a.trip_approval] || 'decided'} your travel request for <span className="font-semibold">{tripSubject(a)}</span></>

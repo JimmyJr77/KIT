@@ -134,6 +134,7 @@ function removeRows(seed, { dryRun = false, finish } = {}) {
 
   const files = [
     ...db.prepare('SELECT stored_name FROM ticket_files WHERE rowid IN (SELECT value FROM json_each(?))').all(JSON.stringify([...doomed.get('ticket_files') || []])),
+    ...db.prepare('SELECT stored_name FROM delivery_files WHERE rowid IN (SELECT value FROM json_each(?))').all(JSON.stringify([...doomed.get('delivery_files') || []])),
     ...db.prepare('SELECT stored_name FROM marketing_assets WHERE rowid IN (SELECT value FROM json_each(?))').all(JSON.stringify([...doomed.get('marketing_assets') || []])),
   ];
   db.transaction(() => {

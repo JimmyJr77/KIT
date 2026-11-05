@@ -98,11 +98,11 @@ r.get('/teams', (req, res) => {
 
 /**
  * The BD report card. ?kind=quarter|year&label=2026 Q4|2026 (default: this quarter), or ?kind=t4q&back=0|1 for the
- * last four finished quarters (or the four before them). With ?director=<id>, that director's card; without, the
+ * last four finished quarters (or the four before them), or ?kind=last12 for the last 12 months through today. With ?director=<id>, that director's card; without, the
  * team's card and each director's.
  */
 r.get('/report-card', (req, res) => {
-  const kind = ['year', 't4q'].includes(req.query.kind) ? req.query.kind : 'quarter';
+  const kind = ['year', 't4q', 'last12'].includes(req.query.kind) ? req.query.kind : 'quarter';
   const label = kind === 'year' ? (/^\d{4}$/.test(req.query.label || '') ? req.query.label : undefined)
     : kind === 'quarter' && /^\d{4} Q[1-4]$/.test(req.query.label || '') ? req.query.label : undefined;
   const p = period(kind, label, kind === 't4q' ? Math.min(Math.max(Number(req.query.back) || 0, 0), 4) : 0);
