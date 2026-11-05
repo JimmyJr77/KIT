@@ -29,7 +29,7 @@ const team = (id) => db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
 // A priority leaves the board when it's archived, or when its ticket is (by hand, or with Archive all); restoring the
 // ticket brings it back.
 function loadCards(teamId, weekStart) {
-  const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.value, t.ticket_type,
+  const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.work_team_id, t.value, t.ticket_type,
       COALESCE((SELECT k.waiting_client FROM ticket_tasks k WHERE k.id = c.activity_id), 0) AS waiting_client
     FROM priority_cards c JOIN tickets t ON t.id = c.ticket_id
     WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL AND t.archived_at IS NULL ORDER BY c.id`).all(teamId, weekStart);
@@ -66,7 +66,7 @@ function loadCard(id) {
   return c ? loadCards(c.team_id, c.week_start).find((x) => x.id === Number(id)) : null;
 }
 
-r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES, pipelines: listPipelines(), accountTypes: ACCOUNT_TYPES, pipelineTicketsClosed: pipelineTicketsClosed() }));
+r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES, pipelines: listPipelines(), teams: db.prepare('SELECT id, name FROM teams ORDER BY name').all(), pipelineTicketsClosed: pipelineTicketsClosed() }));
 
 /**
  * Every active user across all teams. The strip runs on Monday weeks; each team's cards
@@ -194,6 +194,7 @@ export function ticketFields(t = {}) {
     organization: t.organization?.trim() || null,
     pipeline_status: allStatuses().includes(t.pipeline_status) ? t.pipeline_status : null,
     account_type: ACCOUNT_TYPES.includes(t.account_type) ? t.account_type : null,
+    work_team_id: db.prepare('SELECT id FROM teams WHERE id = ?').get(Number(t.work_team_id) || null)?.id ?? null,
     value: t.value === '' || t.value == null ? null : Number(t.value),
   };
 }
@@ -239,7 +240,7 @@ r.post('/cards', (req, res) => {
       if (b.ticket) {
         const tf = ticketFields(b.ticket);
         if (tf.opportunity_title) db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
-          pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type,
+          pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type, work_team_id=CASE WHEN ticket_type = 'work' THEN @work_team_id END,
           value=CASE WHEN ticket_type = 'work' THEN NULL ELSE @value END, updated_at=datetime('now') WHERE id=@id`).run({ ...tf, id: ticketId });
       }
     } else {
@@ -248,11 +249,11 @@ r.post('/cards', (req, res) => {
       // The ticket type is chosen once, when the ticket is created. Work tickets have no value or pipeline status.
       const ticketType = b.ticket?.ticket_type === 'work' ? 'work' : 'bid';
       if (ticketType === 'bid' && pipelineTicketsClosed()) throw new Error(PIPELINE_TICKETS_CLOSED);
-      const fields = ticketType === 'work' ? { ...tf, pipeline_status: null, value: null } : tf;
+      const fields = ticketType === 'work' ? { ...tf, pipeline_status: null, value: null } : { ...tf, work_team_id: null };
       const assign = ticketType === 'bid' ? bidAssignment(b.ticket, req.user.id, fields.account_type) : NO_ASSIGNMENT;
-      ticketId = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by,
+      ticketId = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, work_team_id, value, ticket_type, created_by,
           bd_director_id, territory_id, projected_win_date, win_date_undetermined)
-        VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @value, @ticket_type, @created_by,
+        VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @work_team_id, @value, @ticket_type, @created_by,
           @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined)`)
         .run({ ...fields, ...assign, ticket_type: ticketType, created_by: req.user.id }).lastInsertRowid;
     }
@@ -312,7 +313,7 @@ r.put('/cards/:id', (req, res) => {
     saveToActivity(activityFor(card, req.user), b, req.user);
     if (b.ticket) {
       db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
-        pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type,
+        pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type, work_team_id=CASE WHEN ticket_type = 'work' THEN @work_team_id END,
         value=CASE WHEN ticket_type = 'work' THEN NULL ELSE @value END, updated_at=datetime('now') WHERE id=@id`).run({ ...tf, id: card.ticket_id });
     }
     if (Array.isArray(b.assignees) && b.assignees.length) setAssignees(card.id, b.assignees, card.team_id, card.week_start);

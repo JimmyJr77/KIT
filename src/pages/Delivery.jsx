@@ -27,7 +27,8 @@ export default function Delivery() {
   const [view, setViewState] = useState(() => { try { return localStorage.getItem('kit.delivery.view') || 'cards'; } catch { return 'cards'; } });
   const setView = (v) => { setViewState(v); try { localStorage.setItem('kit.delivery.view', v); } catch { /* not saved */ } };
 
-  const load = () => api.get(`/delivery?status=${status}`).then((d) => setPrograms(d.programs));
+  const [held, setHeld] = useState(0);
+  const load = () => api.get(`/delivery?status=${status}`).then((d) => { setPrograms(d.programs); setHeld(d.held); });
   useEffect(() => { load(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Links from alerts land here with ?open=<program id>; show every status so the contract is found.
@@ -51,7 +52,7 @@ export default function Delivery() {
     <div className="space-y-5 p-8">
       <PageHeader title="Delivery" subtitle="Contracts we’ve won. Each one lands here when its pipeline ticket is marked Awarded.">
         <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
-          {[['active', 'Active'], ['complete', 'Complete'], ['all', 'All']].map(([k, l]) => (
+          {[['active', 'Active'], ['complete', 'Complete'], ['held', `On hold${held ? ` (${held})` : ''}`], ['all', 'All']].map(([k, l]) => (
             <button key={k} type="button" onClick={() => setStatus(k)}
               className={`rounded px-3 ${status === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
           ))}
@@ -73,10 +74,16 @@ export default function Delivery() {
         </div>
       </div>
 
+      {status === 'held' && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Contracts with information on them whose pipeline ticket is no longer Awarded. They’re saved as they were, but left out of bookings, backlog and revenue until an admin decides. If the ticket is Awarded again, the contract comes back on its own.
+        </p>
+      )}
+
       {programs && !shown.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <BriefcaseBusiness size={28} className="mx-auto mb-2 text-slate-300" />
-          {q ? 'Nothing matches your search.' : status === 'complete' ? 'No completed contracts yet.' : 'No won contracts yet. Move a pipeline ticket to Awarded on BD Pipeline and it shows up here.'}
+          {q ? 'Nothing matches your search.' : status === 'held' ? 'No contracts on hold.' : status === 'complete' ? 'No completed contracts yet.' : 'No won contracts yet. Move a pipeline ticket to Awarded on BD Pipeline and it shows up here.'}
         </div>
       )}
 
@@ -91,7 +98,8 @@ export default function Delivery() {
                 <div className="font-semibold leading-snug text-slate-900">{p.name}</div>
                 <div className="truncate text-xs text-slate-500">{[p.organization, p.account_type].filter(Boolean).join(' · ') || 'Customer not set'}</div>
               </div>
-              {p.status === 'Complete' && <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">Complete</span>}
+              {p.held_at ? <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">On hold · {p.ticket_stage || 'No stage'}</span>
+                : p.status === 'Complete' && <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">Complete</span>}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
               {p.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-700">{money(p.value)}</span>}
@@ -115,14 +123,18 @@ export default function Delivery() {
 
       {open && (
         <ProgramPanel key={open.id} program={open} users={users.data?.users || []} teams={teams.data?.teams || []}
-          onChange={replace} onClose={() => { setOpenId(null); load(); }} />
+          onChange={replace} onClose={() => { setOpenId(null); load(); }} onDecided={(p) => {
+            if (p && status !== 'held') replace(p);
+            else setOpenId(null);
+            load();
+          }} />
       )}
     </div>
   );
 }
 
 /** One won contract: its Program Manager, Technical Lead, delivery team, status, and notes. Changes save as they're made. */
-function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
+function ProgramPanel({ program: p, users, teams, onChange, onClose, onDecided }) {
   const [error, setError] = useState('');
   const [notes, setNotes] = useState(p.notes || '');
   const [member, setMember] = useState({ user_id: null, name: '', role: '' });
@@ -156,6 +168,8 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
       subtitle={[p.organization, p.value != null ? money(p.value) : null, `Won ${wonOn(p.awarded_at)}`].filter(Boolean).join(' · ')}>
       <div className="space-y-5">
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+
+        {p.held_at && <HoldDecision program={p} onDecided={onDecided} onError={setError} />}
 
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 p-3">
           {p.ticket_exists ? (
@@ -244,6 +258,32 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose }) {
         </section>
       </div>
     </SidePanel>
+  );
+}
+
+/** A contract on hold: why, and (for admins) the two ways to settle it. */
+function HoldDecision({ program: p, onDecided, onError }) {
+  const { user } = useAuth();
+  const keep = async () => {
+    if (!confirm(`Keep “${p.name}” as a contract? It goes back into bookings, backlog and revenue, even though its pipeline ticket is ${p.ticket_stage || 'not Awarded'}.`)) return;
+    try { onDecided((await api.post(`/delivery/${p.id}/keep`)).program); } catch (e) { onError(e.message); }
+  };
+  const remove = async () => {
+    const parts = [p.team.length && `${p.team.length} on the team`, p.funded > 0 && `${money(p.funded)} funding`, p.billed > 0 && `${money(p.billed)} billing`, p.files.length && `${p.files.length} document${p.files.length === 1 ? '' : 's'}`].filter(Boolean);
+    if (!confirm(`Delete “${p.name}” for good?${parts.length ? ` This also deletes ${parts.join(', ')}.` : ''} Its pipeline ticket stays. This can’t be undone.`)) return;
+    try { await api.del(`/delivery/${p.id}`); onDecided(null); } catch (e) { onError(e.message); }
+  };
+  return (
+    <section className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+      <p className="flex items-start gap-1.5 font-medium"><AlertTriangle size={15} className="mt-0.5 shrink-0" /> On hold since {wonOn(p.held_at)}: its pipeline ticket is now {p.ticket_stage || 'without a stage'}.</p>
+      <p className="mt-1 text-xs">Everything here is saved, but it isn’t counted in bookings, backlog or revenue. If the ticket is Awarded again, this comes back on its own.</p>
+      {user.role === 'admin' ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button type="button" className="btn-primary text-xs" onClick={keep}>Keep as a contract</button>
+          <button type="button" className="btn text-xs text-red-700" onClick={remove}><Trash2 size={13} /> Delete contract</button>
+        </div>
+      ) : <p className="mt-1 text-xs">An admin decides whether to keep or delete it.</p>}
+    </section>
   );
 }
 
@@ -398,7 +438,7 @@ function ProgramTable({ programs, openId, onOpen }) {
                   : <span className="flex items-center gap-1 text-xs font-medium text-amber-700"><AlertTriangle size={12} /> Needs a PM</span>}
               </td>
               <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{p.team.length}</td>
-              <td className="px-4 py-3"><span className={`rounded px-1.5 py-0.5 text-xs font-medium ${p.status === 'Complete' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-50 text-emerald-700'}`}>{p.status}</span></td>
+              <td className="px-4 py-3"><span className={`rounded px-1.5 py-0.5 text-xs font-medium ${p.held_at ? 'bg-amber-100 text-amber-900' : p.status === 'Complete' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-50 text-emerald-700'}`}>{p.held_at ? 'On hold' : p.status}</span></td>
             </tr>
           ))}
         </tbody>

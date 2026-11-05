@@ -10,6 +10,21 @@ const TYPES = [
   ['work', 'Work Ticket', 'Any other work. No value or pipeline status.'],
 ];
 
+/** A ticket's team: chosen on a work ticket; a pipeline ticket always belongs to BD. */
+export function TeamField({ isWork, value, onChange, teams, disabled }) {
+  return (
+    <div>
+      <label className="label">Team</label>
+      {isWork ? (
+        <select className="input" value={value ?? ''} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
+          <option value="">—</option>
+          {(teams || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      ) : <input className="input" value="BD" disabled aria-label="Team" />}
+    </div>
+  );
+}
+
 export const PIPELINE_CLOSED_HINT = 'An admin has turned off creating new pipeline tickets.';
 
 /** Choosing a new ticket's type. With `pipelineClosed` (an admin's setting) Pipeline Ticket is greyed out. */
@@ -40,7 +55,7 @@ export function TicketTypeChoice({ value, onChange, pipelineClosed }) {
 export default function NewTicketPanel({ bidOnly, stage = '', pipeline = null, onClose, onCreated }) {
   const meta = useApi('/priorities/meta');
   const { user } = useAuth();
-  const [form, setForm] = useState({ ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', pipeline_status: stage, value: '' });
+  const [form, setForm] = useState({ ticket_type: 'bid', opportunity_title: '', organization: '', work_team_id: user.teams?.length === 1 ? user.teams[0].id : '', pipeline_status: stage, value: '' });
   // A BD director creating a pipeline ticket directs it by default, in their territory when they cover just one.
   const [assign, setAssign] = useState({
     bd_director_id: user.teams?.some((t) => t.name === 'BD') ? user.id : '',
@@ -90,13 +105,7 @@ export default function NewTicketPanel({ bidOnly, stage = '', pipeline = null, o
             <label className="label">Organization</label>
             <input className="input" value={form.organization} onChange={(e) => set('organization', e.target.value)} />
           </div>
-          <div>
-            <label className="label">Account type</label>
-            <select className="input" value={form.account_type} onChange={(e) => set('account_type', e.target.value)}>
-              <option value="">—</option>
-              {(meta.data?.accountTypes || []).map((a) => <option key={a}>{a}</option>)}
-            </select>
-          </div>
+          <TeamField isWork={isWork} value={form.work_team_id} onChange={(v) => set('work_team_id', v)} teams={meta.data?.teams} />
         </div>
         {!isWork && (
           <div className="grid grid-cols-2 gap-3">

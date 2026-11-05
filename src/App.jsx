@@ -22,6 +22,7 @@ import Reports from './pages/Reports.jsx';
 import Archive from './pages/Archive.jsx';
 import DoneTickets from './pages/DoneTickets.jsx';
 import LostTickets from './pages/LostTickets.jsx';
+import ClosedDeals from './pages/ClosedDeals.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="/pipeline" element={<Pipeline />} />
         <Route path="/pipeline/lost" element={<LostTickets />} />
         <Route path="/delivery" element={<Delivery />} />
+        <Route path="/closed-deals" element={<ClosedDeals />} />
         <Route path="/crm" element={<Crm />} />
         <Route path="/solutions" element={<TechnicalSolutions />} />
         <Route path="/marketing" element={<Marketing />} />

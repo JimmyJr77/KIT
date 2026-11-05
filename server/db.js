@@ -477,6 +477,7 @@ CREATE TABLE IF NOT EXISTS user_territories (
 // Each pipeline ticket belongs to one BD director and one territory.
 addColumn('tickets', 'bd_director_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 addColumn('tickets', 'territory_id', 'INTEGER REFERENCES territories(id) ON DELETE SET NULL');
+addColumn('tickets', 'work_team_id', 'INTEGER REFERENCES teams(id) ON DELETE SET NULL'); // the team a work ticket is for; pipeline tickets are always BD's
 // Territories are the options of Pipedrive's "Account" deal field, named as Pipedrive names them (the sync keeps them so).
 addColumn('territories', 'pipedrive_id', 'INTEGER');
 export const TERRITORY_RENAMES = {
@@ -784,6 +785,31 @@ CREATE TABLE IF NOT EXISTS delivery_files (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS delivery_files_program ON delivery_files(program_id);
+`);
+// A contract whose pipeline ticket leaves Awarded is deleted if nothing was added to it. Otherwise it's held: kept with
+// everything on it, but out of the numbers, until an admin keeps it (kept_at) or deletes it. Awarded again, it comes back
+// on its own (or, if it was deleted, is made anew).
+addColumn('delivery_programs', 'held_at', 'TEXT');
+addColumn('delivery_programs', 'kept_at', 'TEXT');
+addColumn('delivery_programs', 'completed_at', 'TEXT'); // when delivery finished: set by marking the contract Complete
+const NOTHING_ADDED = `program_manager_id IS NULL AND technical_lead_id IS NULL AND status = 'Active' AND TRIM(COALESCE(notes, '')) = ''
+    AND id NOT IN (SELECT program_id FROM delivery_team) AND id NOT IN (SELECT program_id FROM program_entries) AND id NOT IN (SELECT program_id FROM delivery_files)`;
+db.exec(`
+DROP TRIGGER IF EXISTS delivery_hold_on_unaward;
+CREATE TRIGGER delivery_hold_on_unaward AFTER UPDATE OF pipeline_status ON tickets
+WHEN OLD.pipeline_status = 'Awarded' AND NEW.pipeline_status IS NOT 'Awarded' AND NEW.ticket_type = 'bid'
+BEGIN
+  DELETE FROM delivery_programs WHERE ticket_id = NEW.id AND ${NOTHING_ADDED};
+  UPDATE delivery_programs SET held_at = datetime('now'), kept_at = NULL WHERE ticket_id = NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS delivery_release_on_award AFTER UPDATE OF pipeline_status ON tickets
+WHEN NEW.pipeline_status = 'Awarded' AND OLD.pipeline_status IS NOT 'Awarded' AND NEW.ticket_type = 'bid'
+BEGIN
+  UPDATE delivery_programs SET held_at = NULL, kept_at = NULL WHERE ticket_id = NEW.id;
+END;
+UPDATE delivery_programs SET held_at = datetime('now') WHERE held_at IS NULL AND kept_at IS NULL
+  AND ticket_id IN (SELECT id FROM tickets WHERE ticket_type = 'bid' AND pipeline_status IS NOT 'Awarded');
+DELETE FROM delivery_programs WHERE held_at IS NOT NULL AND ${NOTHING_ADDED};
 `);
 // Travel request alerts: a lead has one to approve (travel_request), or the traveler's was decided (travel_decision).
 addColumn('alerts', 'trip_id', 'INTEGER REFERENCES trips(id) ON DELETE CASCADE');

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
@@ -16,6 +16,7 @@ const NAV = [
   { to: '/tickets', label: 'Tickets', icon: Ticket },
   { to: '/pipeline', label: 'BD Pipeline', icon: SquareKanban },
   { to: '/delivery', label: 'Delivery', icon: BriefcaseBusiness },
+  { to: '/closed-deals', label: 'Closed deals', icon: FolderArchive },
   { to: '/crm', label: 'CRM', icon: ContactRound },
   { to: '/solutions', label: 'Technical Solutions', icon: Blocks },
   { to: '/marketing', label: 'Marketing', icon: Megaphone },

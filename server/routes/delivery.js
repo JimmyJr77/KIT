@@ -7,6 +7,7 @@ import path from 'node:path';
 import { Router } from 'express';
 import multer from 'multer';
 import { db } from '../db.js';
+import { requireAdmin } from '../auth.js';
 import { inBooks } from '../financials.js';
 import { CONTRACT_DOC_TYPES, ADDITIONAL_DOCS } from '../../src/lib/process.js';
 
@@ -33,6 +34,7 @@ function programsOut(rows) {
   return rows.map((p) => ({
     id: p.id, ticket_id: p.ticket_id, ticket_exists: !!p.ticket_title, name: p.name, organization: p.organization,
     account_type: p.account_type, value: p.value, awarded_at: p.awarded_at, status: p.status, notes: p.notes, updated_at: p.updated_at,
+    held_at: p.held_at, ticket_stage: p.ticket_stage,
     bd_director: p.dir_first ? { id: p.bd_director_id, first_name: p.dir_first, last_name: p.dir_last } : null, territory_name: p.territory_name,
     ...money(p, entries.filter((e) => e.program_id === p.id)),
     program_manager: p.pm_first ? { id: p.program_manager_id, first_name: p.pm_first, last_name: p.pm_last } : null,
@@ -61,7 +63,7 @@ function money(p, entries) {
   };
 }
 // The BD director and territory come from the pipeline ticket the contract was won from.
-const SELECT = `SELECT p.*, u.first_name AS pm_first, u.last_name AS pm_last, l.first_name AS tl_first, l.last_name AS tl_last, t.opportunity_title AS ticket_title,
+const SELECT = `SELECT p.*, u.first_name AS pm_first, u.last_name AS pm_last, l.first_name AS tl_first, l.last_name AS tl_last, t.opportunity_title AS ticket_title, t.pipeline_status AS ticket_stage,
     t.bd_director_id, d.first_name AS dir_first, d.last_name AS dir_last, tr.name AS territory_name
   FROM delivery_programs p LEFT JOIN users u ON u.id = p.program_manager_id LEFT JOIN users l ON l.id = p.technical_lead_id LEFT JOIN tickets t ON t.id = p.ticket_id
   LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id`;
@@ -74,11 +76,59 @@ function alertAssigned(userId, actor, programId, kind, role) {
   db.prepare('INSERT INTO alerts (user_id, actor_id, kind, program_id, excerpt) VALUES (?, ?, ?, ?, ?)').run(userId, actor.id, kind, programId, role || null);
 }
 
-/** status: active (default) | complete | all. Newest wins first. */
+/** status: active (default) | complete | held | all. Newest wins first. Held contracts are only in held and all. */
 r.get('/', (req, res) => {
   const status = { active: 'Active', complete: 'Complete' }[req.query.status];
-  const rows = db.prepare(`${SELECT} WHERE ${LIVE} ${status ? 'AND p.status = ?' : ''} ORDER BY p.awarded_at DESC, p.id DESC`).all(...(status ? [status] : []));
-  res.json({ programs: programsOut(rows) });
+  const held = req.query.status === 'held';
+  const rows = db.prepare(`${SELECT} WHERE ${LIVE} ${held ? 'AND p.held_at IS NOT NULL' : ''} ${status ? 'AND p.held_at IS NULL AND p.status = ?' : ''}
+    ORDER BY p.awarded_at DESC, p.id DESC`).all(...(status ? [status] : []));
+  const { n } = db.prepare(`SELECT COUNT(*) AS n FROM delivery_programs p LEFT JOIN tickets t ON t.id = p.ticket_id WHERE ${LIVE} AND p.held_at IS NOT NULL`).get();
+  res.json({ programs: programsOut(rows), held: n });
+});
+
+/** Which Closed deals group a pipeline ticket is in, or null if it's still open (a held contract's ticket stays open until it's decided). */
+function closedGroup(t) {
+  if (t.pipeline_status === 'Lost') return 'lost';
+  if (t.archived_at) return 'other'; // taken off the board by hand, which also takes any contract out of Delivery
+  if (t.program_id && !t.held_at) return t.program_status === 'Complete' ? 'executed' : 'execution';
+  return t.pipeline_status === 'Awarded' ? 'execution' : null;
+}
+
+/** Every closed pipeline deal: lost, in execution (awarded and in delivery), executed (delivery finished), or other (archived from the board). */
+r.get('/closed', (req, res) => {
+  const rows = db.prepare(`SELECT t.id, t.opportunity_title, t.organization, t.value, t.pipeline_status, t.lost_reason, t.done_at, t.archived_at,
+      t.bd_director_id, d.first_name AS director_first_name, d.last_name AS director_last_name, tr.name AS territory_name,
+      p.id AS program_id, p.status AS program_status, p.held_at, p.value AS contract_value, p.awarded_at, COALESCE(p.completed_at, p.updated_at) AS completed_at
+    FROM tickets t LEFT JOIN delivery_programs p ON p.ticket_id = t.id
+    LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id
+    WHERE t.ticket_type = 'bid' AND t.archive_set_id IS NULL`).all();
+  const closedOn = { lost: (t) => t.done_at, execution: (t) => t.awarded_at || t.done_at, executed: (t) => t.completed_at, other: (t) => t.archived_at };
+  res.json({
+    deals: rows.flatMap((t) => {
+      const group = closedGroup(t);
+      return group ? [{ ...t, group, closed_on: closedOn[group](t), amount: t.contract_value ?? t.value }] : [];
+    }),
+  });
+});
+
+/** A held contract is a real one after all: back in the numbers, even though its pipeline ticket isn't Awarded. */
+r.post('/:id/keep', requireAdmin, (req, res) => {
+  const p = db.prepare('SELECT * FROM delivery_programs WHERE id = ?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Program not found' });
+  if (!p.held_at) return res.status(400).json({ error: 'This contract isn’t on hold' });
+  db.prepare("UPDATE delivery_programs SET held_at = NULL, kept_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(p.id);
+  res.json({ program: one(p.id) });
+});
+
+/** A held contract was never real: gone for good, with its team, funding, billing and documents. Its pipeline ticket stays. */
+r.delete('/:id', requireAdmin, (req, res) => {
+  const p = db.prepare('SELECT * FROM delivery_programs WHERE id = ?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Program not found' });
+  if (!p.held_at) return res.status(400).json({ error: 'Only a contract on hold can be deleted' });
+  const files = db.prepare('SELECT stored_name FROM delivery_files WHERE program_id = ?').all(p.id);
+  db.prepare('DELETE FROM delivery_programs WHERE id = ?').run(p.id);
+  files.forEach((f) => fs.rmSync(path.join(uploadDir, f.stored_name), { force: true }));
+  res.json({ ok: true });
 });
 
 /** Body may hold: program_manager_id and technical_lead_id (null to clear), status, notes, value (the contract value; null to clear). */
@@ -102,8 +152,9 @@ r.put('/:id', (req, res) => {
     next.value = b.value === '' || b.value == null ? null : Number(b.value);
     if (next.value != null && !(next.value >= 0)) return res.status(400).json({ error: 'Contract value must be a positive number' });
   }
-  db.prepare("UPDATE delivery_programs SET program_manager_id = ?, technical_lead_id = ?, status = ?, notes = ?, value = ?, updated_at = datetime('now') WHERE id = ?")
-    .run(next.program_manager_id, next.technical_lead_id, next.status, next.notes, next.value, p.id);
+  db.prepare(`UPDATE delivery_programs SET program_manager_id = ?, technical_lead_id = ?, status = ?, notes = ?, value = ?, updated_at = datetime('now'),
+    completed_at = CASE WHEN ? = 'Active' THEN NULL WHEN status = 'Active' THEN datetime('now') ELSE completed_at END WHERE id = ?`)
+    .run(next.program_manager_id, next.technical_lead_id, next.status, next.notes, next.value, next.status, p.id);
   if (next.program_manager_id && next.program_manager_id !== p.program_manager_id) alertAssigned(next.program_manager_id, req.user, p.id, 'delivery_pm');
   if (next.technical_lead_id && next.technical_lead_id !== p.technical_lead_id) alertAssigned(next.technical_lead_id, req.user, p.id, 'delivery_tl');
   res.json({ program: one(p.id) });

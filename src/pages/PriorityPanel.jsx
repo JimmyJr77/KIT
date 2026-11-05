@@ -6,10 +6,10 @@ import { fullName, shortDate, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import MultiSelect from '../components/MultiSelect.jsx';
 import CardNotes from './CardNotes.jsx';
-import { TicketTypeChoice } from './NewTicketPanel.jsx';
+import { TicketTypeChoice, TeamField } from './NewTicketPanel.jsx';
 import { useApi } from '../lib/data.js';
 
-const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', pipeline_status: '', value: '' };
+const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', work_team_id: '', territory_id: '', pipeline_status: '', value: '' };
 
 /** Slide-out panel for creating or editing a priority card (and its ticket). */
 /**
@@ -19,6 +19,7 @@ const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: 
 export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, teamChoices, readOnly, asWork, onBack: back, onClose: close, onSaved, onNotesChanged }) {
   const { user } = useAuth();
   const meta = useApi('/priorities/meta');
+  const territories = useApi('/territories').data?.territories || [];
   const isNew = !card;
   const [ticketMode, setTicketMode] = useState(isNew ? 'existing' : 'new'); // 'new' | 'existing' (new cards only)
   const [ticketId, setTicketId] = useState(card?.ticket_id ?? null);
@@ -26,7 +27,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   const [openSteps, setOpenSteps] = useState([]);
   const [activityId, setActivityId] = useState(null);
   const [ticket, setTicket] = useState(card ? {
-    ticket_type: card.ticket_type || 'bid', opportunity_title: card.opportunity_title, organization: card.organization || '', account_type: card.account_type || '', pipeline_status: card.pipeline_status || '', value: card.value ?? '',
+    ticket_type: card.ticket_type || 'bid', opportunity_title: card.opportunity_title, organization: card.organization || '', account_type: card.account_type || '', work_team_id: card.work_team_id ?? '', pipeline_status: card.pipeline_status || '', value: card.value ?? '',
   } : EMPTY_TICKET);
   const [form, setForm] = useState({
     title: card?.title || '',
@@ -182,7 +183,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
             {isNew && ticketMode === 'existing' && !ticketId ? (
               <TicketSearch onPick={(t) => {
                 setTicketId(t.id);
-                setTicket({ ticket_type: t.ticket_type || 'bid', opportunity_title: t.opportunity_title, organization: t.organization || '', account_type: t.account_type || '', pipeline_status: t.pipeline_status || '', value: t.value ?? '' });
+                setTicket({ ticket_type: t.ticket_type || 'bid', opportunity_title: t.opportunity_title, organization: t.organization || '', account_type: t.account_type || '', work_team_id: t.work_team_id ?? '', pipeline_status: t.pipeline_status || '', value: t.value ?? '' });
               }} />
             ) : (
               <>
@@ -200,13 +201,16 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
                   <Field label="Organization">
                     <input className="input" value={ticket.organization} onChange={(e) => setT('organization', e.target.value)} disabled={ro} />
                   </Field>
-                  <Field label="Account type">
-                    <select className="input" value={ticket.account_type} onChange={(e) => setT('account_type', e.target.value)} disabled={ro}>
-                      <option value="">—</option>
-                      {(meta.data?.accountTypes || []).map((a) => <option key={a}>{a}</option>)}
+                  <TeamField isWork={isWork} value={ticket.work_team_id} onChange={(v) => setT('work_team_id', v)} teams={meta.data?.teams} disabled={ro} />
+                </div>
+                {creatingTicket && !isWork && (
+                  <Field label="Territory">
+                    <select className="input" value={ticket.territory_id} onChange={(e) => setT('territory_id', e.target.value)}>
+                      <option value="">Default for this person</option>
+                      {territories.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                     </select>
                   </Field>
-                </div>
+                )}
                 {!isWork && (
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Pipeline status">

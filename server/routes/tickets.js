@@ -182,14 +182,14 @@ r.post('/', (req, res) => {
   if (type === 'bid' && pipelineTicketsClosed()) return res.status(403).json({ error: PIPELINE_TICKETS_CLOSED });
   const tf = ticketFields(req.body);
   if (!tf.opportunity_title) return res.status(400).json({ error: type === 'work' ? 'Title is required' : 'Opportunity title is required' });
-  const fields = type === 'work' ? { ...tf, pipeline_status: null, value: null } : tf;
+  const fields = type === 'work' ? { ...tf, pipeline_status: null, value: null } : { ...tf, work_team_id: null };
   const assign = type === 'bid' ? bidAssignment(req.body, req.user.id, fields.account_type) : NO_ASSIGNMENT;
   // A pipeline ticket can start on any pipeline, in one of that pipeline's stages.
   const pipeline = type === 'bid' ? listPipelines().find((p) => p.id === (Number(req.body?.pipeline_id) || null)) || listPipelines()[0] : null;
   if (pipeline && fields.pipeline_status && !pipeline.statuses.includes(fields.pipeline_status)) fields.pipeline_status = null;
-  const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, value, ticket_type, created_by,
+  const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, work_team_id, value, ticket_type, created_by,
       bd_director_id, territory_id, projected_win_date, win_date_undetermined, pipeline_id)
-    VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @value, @ticket_type, @created_by,
+    VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @work_team_id, @value, @ticket_type, @created_by,
       @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined, @pipeline_id)`)
     .run({ ...fields, ...assign, ticket_type: type, created_by: req.user.id, pipeline_id: pipeline?.id ?? null }).lastInsertRowid;
   recordWork(req.user, { kind: 'ticket', ticket_id: id, summary: fields.opportunity_title });
@@ -341,11 +341,12 @@ r.put('/:id/stage', (req, res) => {
 // ---- Full timeline of a master ticket, newest first
 
 r.get('/:id/timeline', (req, res) => {
-  const t = db.prepare(`SELECT t.*, u.first_name, u.last_name, e.name AS event_name FROM tickets t
-    LEFT JOIN users u ON u.id = t.created_by LEFT JOIN events e ON e.id = t.event_id WHERE t.id = ?`).get(req.params.id);
+  const t = db.prepare(`SELECT t.*, u.first_name, u.last_name, e.name AS event_name, m.name AS work_team_name FROM tickets t
+    LEFT JOIN users u ON u.id = t.created_by LEFT JOIN events e ON e.id = t.event_id LEFT JOIN teams m ON m.id = t.work_team_id WHERE t.id = ?`).get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const ticket = { id: t.id, ticket_type: t.ticket_type, owner_id: t.created_by, opportunity_title: t.opportunity_title, organization: t.organization, pipeline_status: t.pipeline_status, value: t.value, created_at: t.created_at,
     pwin: ticketPwin(t), event_id: t.event_id ?? null, event_name: t.event_name ?? null,
+    team_name: t.ticket_type === 'bid' ? 'BD' : t.work_team_name ?? null,
     // Whether it has left the board: archived by hand, or Done long enough (being Done doesn't depend on recent activity).
     archived: isArchived(t, laneFor({ ...t, last_activity: t.updated_at })),
     bd_director_id: t.bd_director_id ?? null, territory_id: t.territory_id ?? null,

@@ -123,11 +123,11 @@ export function qualifiedBy(list, key) {
   return [...groups.values()].sort((a, b) => b.value - a.value);
 }
 
-/** Won contracts with their director, territory, funding and billing (filtered like pipeline tickets). A contract counts only while its pipeline ticket is in the books. */
+/** Won contracts with their director, territory, funding and billing (filtered like pipeline tickets). A contract counts only while its pipeline ticket is in the books, and not while it's on hold. */
 export function contracts(f = {}) {
   const rows = db.prepare(`SELECT p.*, t.bd_director_id, t.territory_id, d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
     FROM delivery_programs p JOIN tickets t ON t.id = p.ticket_id LEFT JOIN users d ON d.id = t.bd_director_id
-    LEFT JOIN territories tr ON tr.id = t.territory_id WHERE ${inBooks()}`).all().filter((p) => matches(p, f));
+    LEFT JOIN territories tr ON tr.id = t.territory_id WHERE ${inBooks()} AND p.held_at IS NULL`).all().filter((p) => matches(p, f));
   const entries = db.prepare('SELECT * FROM program_entries').all();
   return rows.map((p) => {
     const mine = entries.filter((e) => e.program_id === p.id);
