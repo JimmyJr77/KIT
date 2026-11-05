@@ -20,7 +20,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   const { user } = useAuth();
   const meta = useApi('/priorities/meta');
   const isNew = !card;
-  const [ticketMode, setTicketMode] = useState('new'); // 'new' | 'existing' (new cards only)
+  const [ticketMode, setTicketMode] = useState(isNew ? 'existing' : 'new'); // 'new' | 'existing' (new cards only)
   const [ticketId, setTicketId] = useState(card?.ticket_id ?? null);
   // On an existing ticket, the priority can be one of its open next steps (activities) instead of a new one.
   const [openSteps, setOpenSteps] = useState([]);
