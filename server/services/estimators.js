@@ -10,6 +10,7 @@ import { Type } from '@google/genai';
 import { callMcpTool, callMcpToolKeepAlive } from './mcp.js';
 import { airportCodes } from './airports.js';
 import { generateJson, geminiConfigured } from './gemini.js';
+import { flightPrefs, hourLabel } from '../../src/lib/travelCalc.js';
 
 const prompt = (f) => fs.readFileSync(new URL(`../prompts/${f}`, import.meta.url), 'utf8');
 const AIRFARE_PROMPT = prompt('airfare.md');
@@ -31,7 +32,7 @@ const time12 = (t = '10:00') => {
 const daysBetween = (a, b) => Math.max(1, Math.round((new Date(b) - new Date(a)) / 86400000));
 
 export const mcpStatus = () => ({
-  airfare: !!process.env.AIRFARE_MCP_URL,
+  airfare: !!(skiplaggedUrl() || process.env.AIRFARE_MCP_URL),
   rentalCar: !!process.env.RENTALCAR_MCP_URL,
   gemini: geminiConfigured(),
 });
@@ -39,7 +40,7 @@ export const mcpStatus = () => ({
 // ---------------------------------------------------------------- Airfare
 
 // Estimates assume a normal business trip: direct flights leaving between 10am and 8pm local time, on full-service
-// airlines. Budget and ultra-low-cost carriers (IATA codes) are used only when no full-service airline flies direct.
+// airlines, unless the trip sets its own departure window and layover limit (see flightPrefs). Budget and ultra-low-cost carriers (IATA codes) are used only when no full-service airline flies direct.
 export const BUDGET_AIRLINES = [
   'NK', 'F9', 'G4', 'SY', 'XP', 'MX', 'WN', 'F8', 'Y4', 'VB', // North America
   'FR', 'RK', 'U2', 'EC', 'DS', 'W6', 'W4', 'W9', 'VY', 'V7', 'HV', 'TO', 'DY', 'D8', 'EW', 'PC', 'LS', 'BY', // Europe
@@ -47,16 +48,19 @@ export const BUDGET_AIRLINES = [
   'G9', 'FZ', 'XY', 'J9', 'JA', 'H2', 'G3', // Middle East, Latin America
 ];
 const BUDGET = new Set(BUDGET_AIRLINES);
-export const FLIGHT_HOURS = { from: 10, to: 20 };
 const hm = (iso) => Number(iso.slice(11, 13)) + Number(iso.slice(14, 16)) / 60;
-const isDaytime = (iso) => !!iso && hm(iso) >= FLIGHT_HOURS.from && hm(iso) <= FLIGHT_HOURS.to;
-const FLIGHT_RULE = 'direct flights on full-service airlines, departing 10am–8pm';
-const BUDGET_RULE = 'direct flights on budget airlines, departing 10am–8pm (no full-service direct flights found)';
-const NO_DIRECT = 'No direct flights departing 10am–8pm on these dates';
+const inWindow = (iso, p) => !!iso && hm(iso) >= p.earliestDepart && hm(iso) <= p.latestDepart;
+const layovers = (n) => `${n} layover${n > 1 ? 's' : ''}`;
+const stopsText = (p) => (p.maxLayovers ? `flights with up to ${layovers(p.maxLayovers)}` : 'direct flights');
+const hoursText = (p) => `${hourLabel(p.earliestDepart)}–${hourLabel(p.latestDepart)}`;
+const flightRule = (p) => `${stopsText(p)} on full-service airlines, departing ${hoursText(p)}`;
+const budgetRule = (p) => `${stopsText(p)} on budget airlines, departing ${hoursText(p)} (no full-service ${p.maxLayovers ? 'flights' : 'direct flights'} found)`;
+const noFlights = (p) => `No ${stopsText(p)} departing ${hoursText(p)} on these dates`;
 
-export function flightQuery({ tripType = 'round-trip', origin, destination, departDate, returnDate }) {
+export function flightQuery({ tripType = 'round-trip', origin, destination, departDate, returnDate, ...limits }) {
   const rt = tripType !== 'one-way';
-  return `Find a ${rt ? 'round-trip' : 'one-way'} flight from ${origin} to ${destination} departing on ${longDate(departDate)}${rt && returnDate ? ` and returning on ${longDate(returnDate)}` : ''}, direct (non-stop) only, departing between 10am and 8pm local time each way, on full-service airlines, or on budget airlines if no full-service airline flies direct.`;
+  const p = flightPrefs(limits);
+  return `Find a ${rt ? 'round-trip' : 'one-way'} flight from ${origin} to ${destination} departing on ${longDate(departDate)}${rt && returnDate ? ` and returning on ${longDate(returnDate)}` : ''}, ${p.maxLayovers ? `with up to ${layovers(p.maxLayovers)} each way` : 'direct (non-stop) only'}, departing between ${hourLabel(p.earliestDepart)} and ${hourLabel(p.latestDepart)} local time each way, on full-service airlines, or on budget airlines if no full-service airline flies ${p.maxLayovers ? 'this route' : 'direct'}.`;
 }
 
 const FLIGHT_SCHEMA = {
@@ -81,7 +85,8 @@ const ddmmyyyy = (iso) => iso.split('-').reverse().join('/');
 // location resolves (see airports.js); otherwise just the city name.
 const kiwiPlace = (s) => String(s).split(',')[0].trim();
 
-export function kiwiArgs({ tripType = 'round-trip', origin, destination, originPlace, destinationPlace, departDate, returnDate }) {
+export function kiwiArgs({ tripType = 'round-trip', origin, destination, originPlace, destinationPlace, departDate, returnDate, ...limits }) {
+  const p = flightPrefs(limits);
   return {
     flyFrom: airportCodes(originPlace ?? origin) || kiwiPlace(origin),
     flyTo: airportCodes(destinationPlace ?? destination) || kiwiPlace(destination),
@@ -91,12 +96,12 @@ export function kiwiArgs({ tripType = 'round-trip', origin, destination, originP
     cabinClass: 'M',
     currency: 'USD',
     locale: 'en',
-    // Direct daytime departures only, both ways, on full-service airlines (see budgetFallback for the search without them).
-    max_sector_stopovers: 0,
+    // The trip's layover limit and departure window, both ways, on full-service airlines (see budgetFallback for the search without them).
+    max_sector_stopovers: p.maxLayovers,
     exclude_airlines: BUDGET_AIRLINES.join(','),
-    dtime_from: FLIGHT_HOURS.from,
-    dtime_to: FLIGHT_HOURS.to,
-    ...(tripType !== 'one-way' && returnDate ? { ret_dtime_from: FLIGHT_HOURS.from, ret_dtime_to: FLIGHT_HOURS.to } : {}),
+    dtime_from: p.earliestDepart,
+    dtime_to: p.latestDepart,
+    ...(tripType !== 'one-way' && returnDate ? { ret_dtime_from: p.earliestDepart, ret_dtime_to: p.latestDepart } : {}),
   };
 }
 
@@ -106,13 +111,14 @@ const budgetFallback = ({ exclude_airlines, ...args }) => args;
 const legsOf = (i) => [i.outbound, i.inbound].filter(Boolean);
 
 /**
- * Priced itineraries, cheapest first, keeping only those where each leg (out and back) is direct and departs
- * 10:00–20:00 local time. Kiwi applies the same filters; this enforces them exactly (its hour filter lets 20:59 through).
+ * Priced itineraries, cheapest first, keeping only those where each leg (out and back) stays within the layover
+ * limit and departs in the window. Kiwi applies the same filters; this enforces them exactly (its hour filter lets
+ * 20:59 through a window ending at 8pm).
  */
-const kiwiItineraries = ({ text, structured }) =>
+const kiwiItineraries = ({ text, structured }, p) =>
   ((structured?.itineraries ? structured : JSON.parse(text)).itineraries || [])
     .filter((i) => Number.isFinite(i.price))
-    .filter((i) => legsOf(i).length && legsOf(i).every((l) => l.stops === 0 && isDaytime(l.departureTime)))
+    .filter((i) => legsOf(i).length && legsOf(i).every((l) => l.stops <= p.maxLayovers && inWindow(l.departureTime, p)))
     .sort((a, b) => a.price - b.price);
 
 const isFullService = (i) => legsOf(i).every((l) => l.segments.every((s) => !BUDGET.has(s.carrier)));
@@ -121,11 +127,11 @@ const isFullService = (i) => legsOf(i).every((l) => l.segments.every((s) => !BUD
  * Lowest fare, the middle-50% price band and airlines, per the Airfare prompt. Uses the full-service flights in
  * `result`, or if there are none, the flights in `budgetResult` (the same search on any airline).
  */
-export function summarizeKiwi(result, tripType, budgetResult) {
-  const fullService = kiwiItineraries(result).filter(isFullService);
-  const its = fullService.length ? fullService : budgetResult ? kiwiItineraries(budgetResult) : [];
-  if (!its.length) throw new Error(NO_DIRECT);
-  const rule = fullService.length ? FLIGHT_RULE : BUDGET_RULE;
+export function summarizeKiwi(result, tripType, budgetResult, p = flightPrefs()) {
+  const fullService = kiwiItineraries(result, p).filter(isFullService);
+  const its = fullService.length ? fullService : budgetResult ? kiwiItineraries(budgetResult, p) : [];
+  if (!its.length) throw new Error(noFlights(p));
+  const rule = fullService.length ? flightRule(p) : budgetRule(p);
   const prices = its.map((i) => i.price);
   const pct = (p) => prices[Math.round(p * (prices.length - 1))];
   const cheapest = its[0];
@@ -137,7 +143,7 @@ export function summarizeKiwi(result, tripType, budgetResult) {
     averageLow: pct(0.25),
     averageHigh: pct(0.75),
     airlines: [...new Set(its.flatMap((i) => legsOf(i).flatMap((l) => l.segments.map((s) => s.carrierName))))].slice(0, 6),
-    itinerary: 'non-stop',
+    itinerary: legsOf(cheapest).some((l) => l.stops > 0) ? 'layover' : 'non-stop',
     bookingUrl: cheapest.bookingUrl,
     resultsCount: its.length,
     rule,
@@ -146,11 +152,101 @@ export function summarizeKiwi(result, tripType, budgetResult) {
   };
 }
 
+// Skiplagged's public MCP server (no key) is tried first: unlike Kiwi it covers the traditional airlines. Leave
+// SKIPLAGGED_MCP_URL empty to turn it off. Its time filter applies only to the outbound leg, and a round trip comes back
+// paired with one cheapest return, so each direction is searched as its own one-way. Its airline exclusion doesn't work
+// either, so budget airlines are filtered here. Hidden-city and self-connected tickets stay off: travelers can't use them.
+function skiplaggedUrl() {
+  return process.env.SKIPLAGGED_MCP_URL ?? 'https://mcp.skiplagged.com/mcp';
+}
+const SKIPLAGGED_TOOL = 'sk_flights_search';
+const MAX_STOPS = ['none', 'one', 'many'];
+
+export const skiplaggedArgs = (origin, destination, departureDate, p) => ({
+  origin,
+  destination,
+  departureDate,
+  limit: 100,
+  sort: 'price',
+  currency: 'USD',
+  adults: 1,
+  fareClass: 'economy',
+  includeHiddenCity: false,
+  includeVirtualInterlining: false,
+  maxStops: MAX_STOPS[Math.min(p.maxLayovers, MAX_STOPS.length - 1)],
+  departureTimeEarliest: p.earliestDepart * 60,
+  departureTimeLatest: p.latestDepart * 60,
+});
+
+// One airport by its code. A list of them only searches the first, but a city name covers all its airports.
+export function skiplaggedPlace(place, text) {
+  const codes = airportCodes(place ?? text);
+  if (codes && !codes.includes(',')) return codes;
+  return (typeof place === 'object' && place?.city) || kiwiPlace(text);
+}
+
+const price = (f) => f.price?.usdAmount;
+const skiplaggedFlights = ({ structured }, p) => (structured?.flights || [])
+  .filter((f) => Number.isFinite(price(f)) && (f.layovers ?? 0) <= p.maxLayovers && inWindow(f.departure?.dateTime, p))
+  .sort((a, b) => price(a) - price(b));
+
+// Results name airlines in full; the IATA codes are in the flight numbers of the link, e.g. #trip=UA123,UA456.
+const tripCarriers = (f) => (f.deepLink?.match(/#trip=([^&]+)/)?.[1] || '').split(',').map((n) => n.slice(0, 2)).filter(Boolean);
+const skiplaggedFullService = (f) => !tripCarriers(f).some((c) => BUDGET.has(c));
+
+/** Lowest fare, the middle-50% band and airlines from one direction's results, or from both added together on a round trip. */
+export function summarizeSkiplagged(results, { tripType, intl } = {}, p = flightPrefs()) {
+  const legs = results.map((r) => skiplaggedFlights(r, p));
+  if (legs.some((l) => !l.length)) throw new Error(noFlights(p));
+  const fullService = legs.map((l) => l.filter(skiplaggedFullService));
+  const chosen = legs.map((l, i) => (fullService[i].length ? fullService[i] : l));
+  const rule = fullService.every((l) => l.length) ? flightRule(p) : budgetRule(p);
+  const at = (q) => chosen.reduce((sum, l) => sum + price(l[Math.round(q * (l.length - 1))]), 0);
+  const cheapest = chosen.map((l) => l[0]);
+  const lowestPrice = at(0);
+  const route = cheapest.map((f) => `${f.departure.airport} → ${f.arrival.airport}`).join(' / ');
+  const [out, back] = cheapest;
+  const roundTrip = tripType !== 'one-way';
+  return {
+    lowestPrice,
+    averageLow: at(0.25),
+    averageHigh: at(0.75),
+    airlines: [...new Set(chosen.flat().flatMap((f) => f.airlines.split(',').map((a) => a.trim())))].slice(0, 6),
+    itinerary: cheapest.some((f) => f.layovers > 0) ? 'layover' : 'non-stop',
+    bookingUrl: `https://skiplagged.com/flights/${out.departure.airport}/${out.arrival.airport}/${out.departure.dateTime.slice(0, 10)}${back ? `/${back.departure.dateTime.slice(0, 10)}` : ''}`,
+    resultsCount: chosen.reduce((n, l) => n + l.length, 0),
+    rule,
+    summary: `Lowest ${roundTrip ? 'round-trip' : 'one-way'} economy fare on ${rule}: $${Math.round(lowestPrice).toLocaleString('en-US')} (${route})` +
+      `${roundTrip && intl ? '. Priced as two one-way fares, so a round-trip ticket may cost less' : ''}.`,
+  };
+}
+
+async function skiplaggedEstimate(input, p) {
+  const from = skiplaggedPlace(input.originPlace, input.origin);
+  const to = skiplaggedPlace(input.destinationPlace, input.destination);
+  const legs = [[from, to, input.departDate]];
+  if (input.tripType !== 'one-way' && input.returnDate) legs.push([to, from, input.returnDate]);
+  // One after the other on one connection: the server rate-limits by the request.
+  const results = [];
+  for (const [a, b, date] of legs) {
+    results.push(await callMcpToolKeepAlive({ url: skiplaggedUrl(), tool: SKIPLAGGED_TOOL, args: skiplaggedArgs(a, b, date, p) }));
+  }
+  return { provider: 'Skiplagged', searched: `${from} → ${to}`, ...summarizeSkiplagged(results, input, p) };
+}
+
 export async function estimateFlight(input) {
   const query = flightQuery(input);
+  const prefs = flightPrefs(input);
   const base = { query, updatedAt: new Date().toISOString() };
   const tool = process.env.AIRFARE_MCP_TOOL || 'search_flights';
 
+  if (skiplaggedUrl()) {
+    try {
+      return { ...base, source: 'mcp', ...await skiplaggedEstimate(input, prefs) };
+    } catch (e) {
+      console.warn(`Skiplagged estimate failed, trying the next source: ${e.message}`);
+    }
+  }
   if (process.env.AIRFARE_MCP_URL) {
     try {
       if (tool === KIWI_TOOL) {
@@ -165,7 +261,7 @@ export async function estimateFlight(input) {
           source: 'mcp',
           provider: 'Kiwi.com',
           searched: `${args.flyFrom} → ${args.flyTo}`,
-          ...summarizeKiwi(result, input.tripType, budgetResult),
+          ...summarizeKiwi(result, input.tripType, budgetResult, prefs),
         };
       }
       // Any other server: send the natural-language blueprint query and let Gemini
@@ -186,13 +282,13 @@ export async function estimateFlight(input) {
         FLIGHT_SCHEMA,
         { system: AIRFARE_PROMPT },
       );
-      return { ...base, source: 'mcp', rule: FLIGHT_RULE, ...est };
+      return { ...base, source: 'mcp', rule: flightRule(prefs), ...est };
     } catch (e) {
       return {
         ...base,
         ...placeholderFlight(input),
-        summary: e.message === NO_DIRECT
-          ? 'Placeholder estimate. Kiwi.com does not sell every airline, so check for a direct flight elsewhere or enter the fare under Booked.'
+        summary: e.message === noFlights(prefs)
+          ? `Placeholder estimate. Our fare sources don't cover every airline, so check for ${prefs.maxLayovers ? 'a flight' : 'a direct flight'} elsewhere, widen the times or layovers, or enter the fare under Booked.`
           : 'Live fare search returned nothing, so this is a placeholder. Try airport codes (e.g. DCA → DEN) in Origin / Destination.',
         error: e.message,
       };
@@ -201,7 +297,7 @@ export async function estimateFlight(input) {
   return { ...base, ...placeholderFlight(input) };
 }
 
-function placeholderFlight({ tripType, intl }) {
+function placeholderFlight({ tripType, intl, ...limits }) {
   const rt = tripType !== 'one-way';
   // Typical direct, full-service daytime economy fares, a little above the cheapest budget fares.
   const p = (intl ? 1300 : 550) * (rt ? 1 : 0.6);
@@ -212,7 +308,7 @@ function placeholderFlight({ tripType, intl }) {
     averageHigh: Math.round(p * 1.4),
     airlines: [],
     itinerary: 'unknown',
-    rule: FLIGHT_RULE,
+    rule: flightRule(flightPrefs(limits)),
     summary: 'Placeholder estimate — configure AIRFARE_MCP_URL for live fares.',
   };
 }

@@ -164,22 +164,27 @@ function Report({ r }) {
         </Section>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-2 print:grid-cols-2">
-        <Section title="Pipeline by stage">
-          <BarList rows={bd.stages.map((s) => ({ key: s.stage, label: s.stage, value: s.value, sub: `${s.count}` }))} />
+      <Section title="Pipeline by stage">
+        <BarList rows={bd.stages.map((s) => ({ key: s.stage, label: s.stage, value: s.value, sub: `${s.count}` }))} />
+      </Section>
+
+      {/* Each pair is its own block, so a row of two moves to the next sheet together. */}
+      <div className="grid gap-6 break-inside-avoid lg:grid-cols-2 print:grid-cols-2">
+        <Section title="Qualified pipeline by territory">
+          <BarList rows={bd.qualifiedByTerritory.map((t) => ({ key: t.name, label: t.name, value: t.value, sub: `${t.count}` }))} empty="No qualified pipeline tickets." />
         </Section>
+        <Section title="Qualified pipeline by BD director">
+          <BarList rows={bd.qualifiedByDirector.map((t) => ({ key: t.name, label: t.name, value: t.value, sub: `${t.count}` }))} empty="No qualified pipeline tickets." />
+        </Section>
+      </div>
+
+      <div className="grid gap-6 break-inside-avoid lg:grid-cols-2 print:grid-cols-2">
         <Section title="Projected bookings by quarter">
           <StackedColumns categories={q.map((x) => x.quarter)} height={130}
             series={[{ key: 'adj', label: 'PWIN-adjusted', color: SERIES[0], values: q.map((x) => x.adjusted.weighted) }, { key: 'raw', label: 'No PWIN (full value)', color: SERIES[1], values: q.map((x) => x.unadjusted.value) }]} />
           <p className="mt-2 text-xs text-slate-500">
             Not in a quarter: undetermined {compact(bd.expected.undetermined.value)} ({bd.expected.undetermined.count}) · later {compact(bd.expected.later.value)} · overdue {compact(bd.expected.overdue.value)} · no date {compact(bd.expected.unscheduled.value)}
           </p>
-        </Section>
-        <Section title="Qualified pipeline by territory">
-          <BarList rows={bd.qualifiedByTerritory.map((t) => ({ key: t.name, label: t.name, value: t.value, sub: `${t.count}` }))} empty="No qualified pipeline tickets." />
-        </Section>
-        <Section title="Qualified pipeline by BD director">
-          <BarList rows={bd.qualifiedByDirector.map((t) => ({ key: t.name, label: t.name, value: t.value, sub: `${t.count}` }))} empty="No qualified pipeline tickets." />
         </Section>
         <Section title="Bookings by quarter, funded and unfunded">
           <StackedColumns categories={bd.bookings.byQuarter.map((x) => shortQuarter(x.quarter))} height={130}
@@ -190,7 +195,7 @@ function Report({ r }) {
       <PipelineByPerson data={bd.qualifiedByPerson} className="break-inside-avoid" />
       <div className="break-inside-avoid"><BookToBill b2b={bd.bookToBill} /></div>
 
-      {stalled.length > 0 && <StalledByStage measure={m.progression} showDirector />}
+      {stalled.length > 0 && <div className="break-inside-avoid"><StalledByStage measure={m.progression} showDirector /></div>}
     </article>
   );
 }

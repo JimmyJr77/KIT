@@ -67,10 +67,10 @@ First name, last name, email, phone (formatted as `xxx-xxx-xxxx` while you type)
 - **General purpose:** multi-select. Options are Internal, Client, Partner, Conference, and Other.
 - **Locations:** domestic trips take City and State. International trips take City, State/Province, and Country.
 - **Quarter:** set automatically from Date From (calendar year), e.g. `2026 Q4`.
-- **Airfare:** choose Estimated (Airfare MCP), Booked, or No Air Travel. Estimates re-run when the route or dates change. Dates default to the trip dates and can be edited.
+- **Airfare:** choose Estimated (Airfare MCP), Booked, or No Air Travel. Estimates re-run when the route or dates change. Dates default to the trip dates and can be edited. Each trip can also set its earliest and latest departure (default 10am–8pm) and max layovers (default direct); these apply each way.
 - **Train/Tram:** a dollar amount.
 - **POV:** miles × the GSA mileage rate, with an optional round trip. The GSA rate already covers fuel, so gas isn't reimbursed separately.
-- **Car rental:** estimated through the Rental Car MCP using the vehicle class, location, and dates/times, or entered as booked. Dates default to the trip dates and can be edited.
+- **Car rental:** estimated through the Rental Car MCP using the vehicle class, location, and dates/times, or entered as booked. Dates default to the trip dates and can be edited. Each trip can also set its earliest and latest departure (default 10am–8pm) and max layovers (default direct); these apply each way.
 - **Lodging:** priced at the GSA FY2027 rate for each location, including seasonal rates. You can add several hotels to split a stay. Each hotel can override the nightly rate.
 - **M&IE:** the GSA daily rate for the location, with the first and last day at 75%. A daily breakdown and a manual override are available.
 - **Refresh:** every page load and every click of **Refresh estimates** re-prices all estimated airfare and rental cars on upcoming trips.
@@ -104,11 +104,13 @@ All integrations are configured in `.env`. **Profile → Integrations** shows wh
 | Integration | Env vars | Notes |
 |---|---|---|
 | Gemini | `GEMINI_API_KEY`, `GEMINI_MODEL` | Key from [Google AI Studio](https://aistudio.google.com/apikey). Turns raw MCP results into structured estimates; `/api/ai/ask` is a general endpoint. |
-| Airfare MCP | `AIRFARE_MCP_URL`, `AIRFARE_MCP_TOOL`, `AIRFARE_MCP_HEADERS` | **Configured by default:** Kiwi.com's official server (`https://mcp.kiwi.com`, tool `search-flight`). It's free and needs no key. Any other MCP server also works. |
+| Airfare MCP | `SKIPLAGGED_MCP_URL`, `AIRFARE_MCP_URL`, `AIRFARE_MCP_TOOL`, `AIRFARE_MCP_HEADERS` | **Used by default:** Skiplagged's public server (`https://mcp.skiplagged.com/mcp`) goes first, with no key; set `SKIPLAGGED_MCP_URL` empty to turn it off. **Backup:** Kiwi.com's official server (`https://mcp.kiwi.com`, tool `search-flight`), also free with no key. Any other MCP server also works as the backup. |
 | Rental Car MCP | `RENTALCAR_MCP_URL`, `RENTALCAR_MCP_TOOL`, `RENTALCAR_MCP_HEADERS` | **Not configured.** No free rental-car MCP with US coverage has been found yet (see below). |
 | GSA Per Diem API | `GSA_API_KEY` | Optional; the CSV import is enough on its own. |
 
-**How airfare is estimated (Kiwi.com):** the trip's cities are converted to airport codes. Denver, CO becomes DEN and its other airfields. Washington, DC and its suburbs (Arlington, Bethesda, Tysons and others) become DCA, IAD and BWI. London becomes LHR, LGW, STN and the rest. Cities with no airport of their own use the airports within 120 km. You can also type codes such as `DCA` into Origin/Destination. KIT runs two searches in parallel, the cheapest fares and non-stops only. It reports the lowest fare, the typical price band, airlines, non-stop vs layover, whether a carry-on is included, and a booking link. Kiwi doesn't sell every airline (for example, it lacks British Airways' IAD–LHR non-stops), so treat its non-stop price as a floor.
+**How airfare is estimated (Skiplagged):** KIT searches each direction as its own one-way, because Skiplagged's time filter only covers the outbound leg, and adds the two fares. Hidden-city and self-connected tickets are off, and budget airlines are used only when no full-service airline fits. On international trips the sum can run higher than a real round-trip ticket, and the estimate says so. Skiplagged rate-limits heavy use, so KIT moves to the backup when it's blocked or finds nothing.
+
+**How airfare is estimated (Kiwi.com, the backup):** the trip's cities are converted to airport codes. Denver, CO becomes DEN and its other airfields. Washington, DC and its suburbs (Arlington, Bethesda, Tysons and others) become DCA, IAD and BWI. London becomes LHR, LGW, STN and the rest. Cities with no airport of their own use the airports within 120 km. You can also type codes such as `DCA` into Origin/Destination. KIT runs two searches in parallel, the cheapest fares and non-stops only (or the trip's own departure times and layover limit). It reports the lowest fare, the typical price band, airlines, non-stop vs layover, whether a carry-on is included, and a booking link. Kiwi doesn't sell every airline (for example, it lacks British Airways' IAD–LHR non-stops), so treat its non-stop price as a floor.
 
 The airport data is `server/data/airports.json`, built from [mwgg/Airports](https://github.com/mwgg/Airports) (MIT) by `server/scripts/buildAirports.js`.
 

@@ -369,13 +369,13 @@ export function BookToBill({ b2b }) {
           <p><strong>Funded backlog:</strong> counts a booking only when the government obligates money (funding recorded on a contract under Delivery), ÷ billings. It's the most conservative view, because it ignores unfunded ceiling and option years.</p>
         </div>
       )}
-      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(13rem,1fr))]">
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(13rem,1fr))] print:grid-cols-4">
         <StatTile label="Conventional, this quarter to date" value={ratio(b2b.quarter.ratio)} sub={`${compact(b2b.quarter.booked)} booked ÷ ${compact(b2b.quarter.billed)} billed`} />
         <StatTile label="Trailing twelve months" value={ratio(b2b.ttm.ratio)} sub={`${compact(b2b.ttm.booked)} booked ÷ ${compact(b2b.ttm.billed)} billed`} />
         <StatTile label="Funded backlog, last 12 months" value={ratio(b2b.fundedTtm.ratio)} sub={`${compact(b2b.fundedTtm.funded)} funded ÷ ${compact(b2b.fundedTtm.billed)} billed`} />
         <StatTile label="Backlog" value={compact(bl.total)} sub={`${compact(bl.fundedBacklog)} funded · ${compact(bl.unfundedBacklog)} unfunded · ${plural(bl.contracts, 'active contract')}`} />
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2 print:grid-cols-2">
         <ViewCard title="Book-to-bill by quarter, three ways" subtitle="Ratios over the last eight quarters; the dashed line is 1.0×. Anything above 4× runs along the top (hover for the value)." initial="timeline"
           table={{ columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'conventional', label: 'Conventional', align: 'right', format: ratio },
             { key: 'ttm', label: 'TTM', align: 'right', format: ratio }, { key: 'fundedRatio', label: 'Funded', align: 'right', format: ratio }], rows: q }}

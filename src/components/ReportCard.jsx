@@ -60,7 +60,7 @@ function explain(key, t) {
     },
     progression: {
       assesses: 'Whether pursuits are moving forward and improving our position to win.',
-      how: `The number of pipeline tickets that moved forward at least one stage in the period. An open pipeline ticket is stalled if its stage hasn't changed in ${t.stalledDays} or more days, or its projected win date has passed; stalled pipeline tickets are listed below the cards.`,
+      how: `The number of pipeline tickets that moved forward at least one stage in the period. An open pipeline ticket is stalled if its stage hasn't changed in ${t.stalledDays} or more days, or its projected win date has passed; stalled pipeline tickets are rolled up by stage below the cards.`,
       scale: ['80% or more of open pipeline tickets are moving', '60% to 80% moving', 'Under 60% moving'],
       needs: 'Stage changes on pipeline tickets, and projected win dates.',
     },
@@ -275,7 +275,7 @@ export function StalledByStage({ measure, showDirector }) {
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
       <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-amber-900"><TriangleAlert size={14} /> Stalled pursuits ({list.length})</h3>
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 print:grid-cols-4">
         {stages.map((stage) => {
           const xs = list.filter((x) => x.stage === stage);
           return (

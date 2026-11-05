@@ -6,6 +6,22 @@ const MS_DAY = 86400000;
 const toDate = (iso) => new Date(`${iso}T00:00:00Z`);
 const toIso = (d) => d.toISOString().slice(0, 10);
 
+// A trip's flight search limits, set under Airfare: departure window (whole hours, local time, each way) and layovers per direction.
+export const FLIGHT_DEFAULTS = { earliestDepart: 10, latestDepart: 20, maxLayovers: 0 };
+export const MAX_LAYOVERS = 2;
+
+/** 10 -> "10am", 0 -> "12am", 12 -> "12pm". */
+export const hourLabel = (h) => `${h % 12 || 12}${h < 12 ? 'am' : 'pm'}`;
+
+/** The limits on `airfare`, falling back to the defaults for older trips and for anything out of range. */
+export function flightPrefs(airfare = {}) {
+  const pick = (v, min, max, d) => (v !== '' && v != null && Number.isInteger(Number(v)) && Number(v) >= min && Number(v) <= max ? Number(v) : d);
+  const earliestDepart = pick(airfare.earliestDepart, 0, 23, FLIGHT_DEFAULTS.earliestDepart);
+  const latestDepart = pick(airfare.latestDepart, 0, 23, FLIGHT_DEFAULTS.latestDepart);
+  const window = earliestDepart < latestDepart ? { earliestDepart, latestDepart } : { earliestDepart: FLIGHT_DEFAULTS.earliestDepart, latestDepart: FLIGHT_DEFAULTS.latestDepart };
+  return { ...window, maxLayovers: pick(airfare.maxLayovers, 0, MAX_LAYOVERS, FLIGHT_DEFAULTS.maxLayovers) };
+}
+
 export function addDays(iso, n) {
   return toIso(new Date(toDate(iso).getTime() + n * MS_DAY));
 }
@@ -131,7 +147,7 @@ export function tripCosts(trip = {}) {
 }
 
 /** The amounts someone can set by hand when they lock a trip's estimate. */
-export const LOCK_FIELDS = [['airfare', 'Airfare'], ['train', 'Train / Tram'], ['pov', 'POV'], ['car', 'Car rental'], ['lodging', 'Lodging'], ['mie', 'M&IE'], ['events', 'Event fees']];
+export const LOCK_FIELDS = [['airfare', 'Airfare'], ['train', 'Train / Tram'], ['pov', 'POV'], ['car', 'Car rental'], ['lodging', 'Lodging'], ['mie', 'M&IE'], ['events', 'Events & Other']];
 
 /** The sum of a locked estimate's amounts, to the cent. */
 export const lockSum = (costs = {}) => Math.round(LOCK_FIELDS.reduce((s, [k]) => s + (num(costs[k]) ?? 0), 0) * 100) / 100;

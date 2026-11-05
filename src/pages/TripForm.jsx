@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Plane, TrainFront, Car, CarFront, Hotel, Utensils, Plus, Trash2, RefreshCw, Info, CalendarDays, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { PURPOSES, quarterFor, tripCosts, lodgingSegmentCost, mieCost, usd, nightsBetween, DEFAULT_HOTEL_TAX_PCT, FEE_PER } from '../lib/travelCalc.js';
+import { PURPOSES, quarterFor, tripCosts, lodgingSegmentCost, mieCost, usd, nightsBetween, DEFAULT_HOTEL_TAX_PCT, FEE_PER, FLIGHT_DEFAULTS, MAX_LAYOVERS, flightPrefs, hourLabel } from '../lib/travelCalc.js';
 import UserCombobox from '../components/UserCombobox.jsx';
 import Money from '../components/Money.jsx';
 import { LockButton, EstimateLockPanel } from '../components/EstimateLock.jsx';
@@ -117,9 +117,12 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
     }
   }, [trip.lodging, destKey, trip.mie.ratesKey, trip.location_to]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---- Live airfare / rental car estimates; re-query whenever route, dates or class change.
+  // ---- Live airfare / rental car estimates; re-query whenever route, dates, flight limits or class change.
+  const flightLimits = flightPrefs(trip.airfare);
   const flightKey = trip.airfare.mode === 'estimated'
-    ? [trip.airfare.tripType, trip.airfare.origin || locationLabel(trip.location_from), trip.airfare.destination || locationLabel(trip.location_to), trip.airfare.departDate, trip.airfare.tripType === 'one-way' ? '' : trip.airfare.returnDate].join('|')
+    ? [trip.airfare.tripType, trip.airfare.origin || locationLabel(trip.location_from), trip.airfare.destination || locationLabel(trip.location_to), trip.airfare.departDate, trip.airfare.tripType === 'one-way' ? '' : trip.airfare.returnDate,
+      // Only when changed, so estimates saved before these limits existed still match and aren't re-priced on open.
+      ...(Object.keys(FLIGHT_DEFAULTS).some((k) => flightLimits[k] !== FLIGHT_DEFAULTS[k]) ? Object.values(flightLimits) : [])].join('|')
     : null;
   const carKey = trip.car.enabled && trip.car.mode === 'estimated'
     ? [trip.car.vehicleClass, trip.car.location || locationLabel(trip.location_to), trip.car.pickupDate, trip.car.pickupTime, trip.car.dropoffDate, trip.car.dropoffTime].join('|')
@@ -233,6 +236,7 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
                     )}
                     <ResetDates show={trip.airfare.datesCustom} onClick={() => patchIn('airfare', { datesCustom: false, departDate: trip.date_from, returnDate: trip.date_to })} />
                   </div>
+                  <FlightLimits limits={flightLimits} onChange={(v) => patchIn('airfare', v)} />
                   <EstimateCard loading={flightLoading} onRefresh={refreshFlight} estimate={trip.airfare.estimate}>
                     {(e) => (
                       <>
@@ -357,7 +361,7 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
               <Row k="Hotel taxes & fees" v={costs.lodgingTaxes} muted />
               {costs.lodgingFees > 0 && <Row k="Custom hotel fees" v={costs.lodgingFees} muted />}
               <Row k="M&IE" v={costs.mie} />
-              <Row k="Event fees" v={costs.events} />
+              <Row k="Events &amp; Other" v={costs.events} />
             </dl>
             <div className="flex items-center justify-between border-t border-slate-200 pt-3">
               <span className="font-semibold">Total</span>
@@ -606,7 +610,7 @@ function EventsSection({ rows, total, onChange }) {
   return (
     <section className="panel space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="flex items-center gap-2 text-lg font-semibold"><CalendarDays size={18} className="text-brand-600" /> Events</h2>
+        <h2 className="flex items-center gap-2 text-lg font-semibold"><CalendarDays size={18} className="text-brand-600" /> Events &amp; Other</h2>
         <span className="font-semibold">{usd(total)}</span>
       </div>
       <p className="-mt-2 text-xs text-slate-500">Registration and other fees for the events on this trip. Picking an event fills in the fee from the Events calendar.</p>
@@ -626,7 +630,7 @@ function EventsSection({ rows, total, onChange }) {
             aria-label={`Remove ${row.name || 'this event'}`}><Trash2 size={15} /></button>
         </div>
       ))}
-      <button type="button" className="btn" onClick={() => onChange([...rows, eventFee(null)])}><Plus size={15} /> Add event fee</button>
+      <button type="button" className="btn" onClick={() => onChange([...rows, eventFee(null)])}><Plus size={15} /> Add costs</button>
     </section>
   );
 }
@@ -674,6 +678,33 @@ function DateField({ label, value, onChange }) {
 function ResetDates({ show, onClick }) {
   if (!show) return null;
   return <button type="button" className="self-end pb-2 text-left text-xs text-brand-600 hover:underline" onClick={onClick}>Reset to trip dates</button>;
+}
+
+/** When the traveler is willing to leave and how many layovers they'll take. Moving Earliest past Latest pushes Latest out. */
+function FlightLimits({ limits, onChange }) {
+  const hours = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i).map((h) => <option key={h} value={h}>{hourLabel(h)}</option>);
+  const earliest = (h) => onChange({ earliestDepart: h, latestDepart: Math.max(limits.latestDepart, h + 1) });
+  return (
+    <div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <label className="label">Earliest departure</label>
+          <select className="input" value={limits.earliestDepart} onChange={(e) => earliest(Number(e.target.value))}>{hours(0, 22)}</select>
+        </div>
+        <div>
+          <label className="label">Latest departure</label>
+          <select className="input" value={limits.latestDepart} onChange={(e) => onChange({ latestDepart: Number(e.target.value) })}>{hours(limits.earliestDepart + 1, 23)}</select>
+        </div>
+        <div>
+          <label className="label">Max layovers</label>
+          <select className="input" value={limits.maxLayovers} onChange={(e) => onChange({ maxLayovers: Number(e.target.value) })}>
+            {Array.from({ length: MAX_LAYOVERS + 1 }, (_, n) => <option key={n} value={n}>{n ? `Up to ${n}` : 'Direct'}</option>)}
+          </select>
+        </div>
+      </div>
+      <p className="mt-1 text-xs text-slate-500">Local time. Applies to each direction of the trip.</p>
+    </div>
+  );
 }
 
 function EstimateCard({ loading, onRefresh, estimate, children }) {

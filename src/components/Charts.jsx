@@ -76,15 +76,15 @@ export function ViewCard({ title, subtitle, table, bar, timeline, initial, foote
 /** columns: [{ key, label, align, format }], rows: objects. */
 export function DataTable({ columns, rows, foot }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="text-left text-xs text-slate-500 uppercase">
-          <tr>{columns.map((c) => <th key={c.key} className={`px-2 py-1.5 ${c.align === 'right' ? 'text-right' : ''}`}>{c.label}</th>)}</tr>
+    <div className="overflow-x-auto print:overflow-visible">
+      <table className="w-full text-sm print:text-xs">
+        <thead className="text-left text-xs text-slate-500 uppercase print:text-[9px]">
+          <tr>{columns.map((c) => <th key={c.key} className={`px-2 py-1.5 print:px-1 ${c.align === 'right' ? 'text-right' : ''}`}>{c.label}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
             <tr key={i} className="border-t border-slate-100">
-              {columns.map((c) => <td key={c.key} className={`px-2 py-1.5 ${c.align === 'right' ? 'text-right tabular-nums' : ''}`}>{c.format ? c.format(r[c.key], r) : r[c.key]}</td>)}
+              {columns.map((c) => <td key={c.key} className={`px-2 py-1.5 print:px-1 print:py-1 ${c.align === 'right' ? 'text-right tabular-nums' : ''}`}>{c.format ? c.format(r[c.key], r) : r[c.key]}</td>)}
             </tr>
           ))}
         </tbody>
@@ -278,7 +278,8 @@ export function LineChart({ points, labels = points, series, format = compact, t
   return (
     <div>
       <div ref={wrap} className="relative" onPointerLeave={() => setHover(null)}>
-        <svg width={w} height={height} role="img" aria-label="Line chart" onPointerMove={move} className="block touch-none">
+        {/* Measured on screen; the viewBox lets it shrink to the printed column instead of running past it. */}
+        <svg width={w} height={height} viewBox={`0 0 ${w} ${height}`} role="img" aria-label="Line chart" onPointerMove={move} className="block touch-none print:h-auto print:w-full">
           {ticks.map((t) => (
             <g key={t}>
               <line x1={pad.l} x2={w - pad.r} y1={y(t)} y2={y(t)} stroke={GRID} strokeWidth="1" />

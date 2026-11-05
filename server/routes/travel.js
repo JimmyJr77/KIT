@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { db, json, withTeams } from '../db.js';
 import { estimateFlight, estimateCar, mcpStatus, VEHICLE_CLASSES, placeLabel } from '../services/estimators.js';
 import { mileageRate } from '../services/gsa.js';
-import { quarterFor, tripCosts, upcomingQuarters, lockTotal, LOCK_FIELDS, PURPOSES } from '../../src/lib/travelCalc.js';
+import { quarterFor, tripCosts, upcomingQuarters, lockTotal, LOCK_FIELDS, PURPOSES, flightPrefs } from '../../src/lib/travelCalc.js';
 
 const r = Router();
 
@@ -270,6 +270,7 @@ function flightInput(a, trip) {
     departDate: a.departDate || trip.date_from,
     returnDate: a.returnDate || trip.date_to,
     intl: !!(trip.location_from?.intl || trip.location_to?.intl),
+    ...flightPrefs(a),
   };
 }
 
