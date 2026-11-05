@@ -10,6 +10,7 @@ import { useYearBasis } from '../lib/yearBasis.js';
 import ReportTrends from './ReportTrends.jsx';
 import PipelineByPerson from '../components/PipelineByPerson.jsx';
 import { BookToBill } from '../components/BdDashboard.jsx';
+import { nameOnLight, nameOnDark } from '../lib/brand.js';
 
 const shortQuarter = (q) => `Q${q.slice(-1)} '${q.slice(2, 4)}`;
 
@@ -46,7 +47,7 @@ export default function Reports() {
     try {
       // Loaded only when needed: the PowerPoint library is large.
       const [{ default: PptxGenJS }, { buildDeck }] = await Promise.all([import('pptxgenjs'), import('../lib/bdDeck.js')]);
-      const deck = buildDeck(new PptxGenJS(), report);
+      const deck = buildDeck(new PptxGenJS(), report, { nameOnLight, nameOnDark });
       await deck.writeFile({ fileName: `BD report ${who} ${p.value}.pptx` });
     } catch (e) {
       setError(`Couldn't build the PowerPoint: ${e.message}`);
@@ -124,8 +125,11 @@ function Report({ r }) {
   return (
     <article className="mx-auto max-w-5xl space-y-6 rounded-xl border border-slate-200 bg-white p-8 shadow-sm print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none">
       <header className="border-b border-slate-200 pb-4">
-        <div className="text-xs font-semibold tracking-wide text-brand-700 uppercase">KIT · BD report</div>
-        <h1 className="mt-1 text-2xl font-bold text-slate-900">{r.scope} · {r.period}</h1>
+        <div className="flex items-center justify-between gap-4">
+          <img src={nameOnLight} alt="Knexus" className="h-6 w-auto" />
+          <div className="text-xs font-semibold tracking-wide text-brand-700 uppercase">KIT · BD report</div>
+        </div>
+        <h1 className="mt-4 text-2xl font-bold text-slate-900">{r.scope} · {r.period}</h1>
         <p className="text-sm text-slate-500">Prepared {shortDate(r.prepared, { month: 'long', day: 'numeric', year: 'numeric' })}. Pipeline figures are as of today; the report card covers {r.period}.</p>
       </header>
 

@@ -5,6 +5,7 @@ import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
 import { ledTeams } from '../pages/MyTeam.jsx';
+import { markOnDark } from '../lib/brand.js';
 
 const NAV = [
   { to: '/alerts', label: 'Alerts', icon: Bell },
@@ -93,7 +94,7 @@ export default function Layout() {
     <div className="flex h-screen overflow-hidden print:block print:h-auto print:overflow-visible">
       <aside className={`flex shrink-0 flex-col overflow-hidden whitespace-nowrap bg-brand-900 text-slate-200 transition-[width] duration-200 print:hidden ${collapsed ? 'w-16' : 'w-60'}`}>
         <div className={`flex items-center gap-2.5 py-5 ${collapsed ? 'justify-center px-2' : 'px-5'}`}>
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand-500 text-lg font-bold text-white" title={collapsed ? 'KIT — Knexus Intelligence Toolkit' : undefined}>K</div>
+          <img src={markOnDark} alt="Knexus" className="h-9 w-9 shrink-0 object-contain" title={collapsed ? 'KIT — Knexus Intelligence Toolkit' : undefined} />
           {!collapsed && (
             <div className="min-w-0">
               <div className="text-base font-bold tracking-wide text-white">KIT</div>

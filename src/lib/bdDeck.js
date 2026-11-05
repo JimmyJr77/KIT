@@ -1,5 +1,6 @@
 // The BD report as an editable PowerPoint deck: native charts and tables (not pictures), so numbers can be restyled,
-// re-labeled or copied. Takes a PptxGenJS instance and the report data the Reports page shows; works in the browser and Node.
+// re-labeled or copied. Takes a PptxGenJS instance, the report data the Reports page shows, and the Knexus name marks
+// ({ nameOnLight, nameOnDark } as data URLs); works in the browser and Node.
 import { shortDate } from './format.js';
 
 const FONT = 'Calibri';
@@ -24,6 +25,10 @@ const LEFT = 0.5;
 const WIDTH = 12.33;
 const TOP = 1.45;
 const BOTTOM = 6.85;
+// The name mark is 1848 × 260. On content slides it sits at the top right, so titles stop short of it.
+const NAME_RATIO = 1848 / 260;
+const HEADER_LOGO_W = 1.42;
+const TITLE_W = 10.6;
 
 const money = (n) => {
   if (n == null) return '—';
@@ -49,8 +54,8 @@ const sum = (xs) => xs.reduce((a, b) => a + b, 0);
 /** A content slide: the title and subtitle over the shared top bar, footer and page number. */
 function page(pptx, title, subtitle) {
   const s = pptx.addSlide({ masterName: 'REPORT' });
-  s.addText(title, { x: LEFT, y: 0.3, w: WIDTH, h: 0.6, margin: 0, fontFace: FONT, fontSize: 28, bold: true, color: NAVY });
-  if (subtitle) s.addText(subtitle, { x: LEFT, y: 0.88, w: WIDTH, h: 0.35, margin: 0, fontFace: FONT, fontSize: 14, color: MUTED });
+  s.addText(title, { x: LEFT, y: 0.3, w: TITLE_W, h: 0.6, margin: 0, fontFace: FONT, fontSize: 28, bold: true, color: NAVY });
+  if (subtitle) s.addText(subtitle, { x: LEFT, y: 0.88, w: TITLE_W, h: 0.35, margin: 0, fontFace: FONT, fontSize: 14, color: MUTED });
   return s;
 }
 
@@ -127,7 +132,7 @@ const rankedBars = (rows) => ({
 /** Stacked columns beside a table of the exact figures, which small segments have no room to carry. */
 const stacked = { ...chartBase, barDir: 'col', barGrouping: 'stacked', chartColors: SERIES, showLegend: true, legendPos: 'b', showValue: false, barGapWidthPct: 60 };
 
-export function buildDeck(pptx, r) {
+export function buildDeck(pptx, r, logos) {
   const { bd, card } = r;
   const m = Object.fromEntries(card.measures.map((x) => [x.key, x]));
   const q = bd.expected.quarters;
@@ -140,6 +145,7 @@ export function buildDeck(pptx, r) {
     background: { color: 'FFFFFF' },
     objects: [
       { rect: { x: 0, y: 0, w: '100%', h: 0.12, fill: { color: NAVY } } },
+      { image: { x: LEFT + WIDTH - HEADER_LOGO_W, y: 0.42, w: HEADER_LOGO_W, h: HEADER_LOGO_W / NAME_RATIO, data: logos.nameOnLight } },
       { line: { x: LEFT, y: 7.0, w: WIDTH, h: 0, line: { color: LINE, width: 0.75 } } },
       { text: { text: `KIT · BD report · ${r.scope} · ${r.period}`, options: { x: LEFT, y: 7.05, w: 9, h: 0.3, margin: 0, fontFace: FONT, fontSize: 10, color: MUTED } } },
     ],
@@ -149,6 +155,7 @@ export function buildDeck(pptx, r) {
   // Title
   const t = pptx.addSlide();
   t.background = { color: NAVY };
+  t.addImage({ x: 0.9, y: 1.45, w: 3.2, h: 3.2 / NAME_RATIO, data: logos.nameOnDark });
   t.addShape(pptx.ShapeType.rect, { x: 0.9, y: 2.25, w: 0.9, h: 0.06, fill: { color: SERIES[0] }, line: { color: SERIES[0], width: 0 } });
   t.addText('KIT · BD REPORT', { x: 0.9, y: 2.4, w: 11.5, h: 0.45, margin: 0, fontFace: FONT, fontSize: 16, bold: true, charSpacing: 2, color: 'C7D2FE' });
   t.addText(`${r.scope} · ${r.period}`, { x: 0.9, y: 2.85, w: 11.5, h: 1.1, margin: 0, fontFace: FONT, fontSize: 44, bold: true, color: 'FFFFFF' });

@@ -3,6 +3,7 @@ import { Eye, EyeOff } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import ProfileFields, { EMPTY_PROFILE } from '../components/ProfileFields.jsx';
+import { markOnLight } from '../lib/brand.js';
 
 export default function Login() {
   const { login, register } = useAuth();
@@ -35,7 +36,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-brand-900 via-brand-700 to-brand-500 p-4">
       <form onSubmit={submit} className={`w-full ${mode === 'register' ? 'max-w-2xl' : mode === 'request' ? 'max-w-md' : 'max-w-sm'} rounded-2xl bg-white p-8 shadow-2xl`}>
         <div className="mb-6 flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-brand-600 text-xl font-bold text-white">K</div>
+          <img src={markOnLight} alt="Knexus" className="h-11 w-11 object-contain" />
           <div>
             <h1 className="text-xl font-bold text-slate-900">KIT</h1>
             <p className="text-sm text-slate-500">Knexus Intelligence Toolkit</p>

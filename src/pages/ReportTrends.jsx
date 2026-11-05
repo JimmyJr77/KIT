@@ -2,6 +2,7 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { useApi } from '../lib/data.js';
 import { shortDate } from '../lib/format.js';
 import { LineChart, compact } from '../components/Charts.jsx';
+import { nameOnLight } from '../lib/brand.js';
 
 // How each format reads on an axis or in a tooltip, and how a change in it reads.
 const FORMATS = {
@@ -49,8 +50,11 @@ export default function ReportTrends({ weeks, director, who, embedded }) {
     <article className={embedded ? 'space-y-3' : 'mx-auto max-w-6xl space-y-4 print:max-w-none'}>
       {embedded ? <p className="text-xs text-slate-500">{about}</p> : (
         <header className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm print:border-0 print:p-0 print:shadow-none">
-          <div className="text-xs font-semibold tracking-wide text-brand-700 uppercase">KIT · Change over time</div>
-          <h1 className="mt-1 text-xl font-bold text-slate-900">{who} · last {weeks} weeks</h1>
+          <div className="flex items-center justify-between gap-4">
+            <img src={nameOnLight} alt="Knexus" className="h-6 w-auto" />
+            <div className="text-xs font-semibold tracking-wide text-brand-700 uppercase">KIT · Change over time</div>
+          </div>
+          <h1 className="mt-4 text-xl font-bold text-slate-900">{who} · last {weeks} weeks</h1>
           <p className="mt-1 text-sm text-slate-500">{about}</p>
         </header>
       )}
