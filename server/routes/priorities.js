@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db, json, withTeams, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED } from '../db.js';
 import { loadThreads, bidAssignment, NO_ASSIGNMENT } from './tickets.js';
 import { recordWork, loadWorkLog } from '../worklog.js';
+import { awardTokens, TOKENS } from '../race.js';
 import { notifyMentions } from '../mentions.js';
 import { loadSupport } from './support.js';
 import { KIT_STAGES, listPipelines, allStatuses } from '../pipelines.js';
@@ -320,8 +321,11 @@ r.put('/cards/:id', (req, res) => {
   })();
   const wasDone = new Set(json.parse(card.checklist, []).filter((i) => i.done).map((i) => i.text));
   (Array.isArray(b.checklist) ? b.checklist : []).filter((i) => i.done && !wasDone.has(String(i.text || '').trim()))
-    .forEach((i) => recordWork(req.user, { kind: 'task', ticket_id: card.ticket_id, card_id: card.id, summary: i.text }));
-  if (b.completed && !card.completed) recordWork(req.user, { kind: 'completed', ticket_id: card.ticket_id, card_id: card.id, summary: card.title });
+    .forEach((i) => { recordWork(req.user, { kind: 'task', ticket_id: card.ticket_id, card_id: card.id, summary: i.text }); awardTokens(req.user, 'check', `${card.id}:${String(i.text || '').trim()}`); });
+  if (b.completed && !card.completed) {
+    recordWork(req.user, { kind: 'completed', ticket_id: card.ticket_id, card_id: card.id, summary: card.title });
+    awardTokens(req.user, 'priority', card.id, TOKENS.priority);
+  }
   res.json({ card: loadCard(card.id) });
 });
 
@@ -337,7 +341,10 @@ r.put('/cards/:id/checklist/:index', (req, res) => {
     db.prepare("UPDATE activity_subtasks SET done = ?, done_at = CASE WHEN ? THEN datetime('now') END WHERE id = ?").run(done ? 1 : 0, done ? 1 : 0, sub.id);
     mirrorCards(activityId);
   })();
-  if (done && !sub.done) recordWork(req.user, { kind: 'task', ticket_id: card.ticket_id, card_id: card.id, summary: sub.text });
+  if (done && !sub.done) {
+    recordWork(req.user, { kind: 'task', ticket_id: card.ticket_id, card_id: card.id, summary: sub.text });
+    awardTokens(req.user, 'subtask', sub.id);
+  }
   res.json({ card: loadCard(card.id) });
 });
 

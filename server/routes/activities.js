@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { recordWork } from '../worklog.js';
+import { awardTokens } from '../race.js';
 import {
   ACTIVITY_TYPES, ACTIVITY_PRIORITIES, nextPosition, openOrder, setOrder, subtasksOf, mirrorCards, syncMilestone,
 } from '../activities.js';
@@ -138,7 +139,10 @@ r.put('/:id', (req, res) => {
       // Reopened, it goes back to the bottom of the open list rather than jumping the queue.
       db.prepare("UPDATE ticket_tasks SET done = ?, done_at = CASE WHEN ? THEN datetime('now') ELSE NULL END, position = CASE WHEN ? THEN position ELSE ? END WHERE id = ?")
         .run(b.done ? 1 : 0, b.done ? 1 : 0, b.done ? 1 : 0, nextPosition(k.ticket_id), k.id);
-      if (b.done) recordWork(req.user, { kind: 'task', ticket_id: data.ticket_id || k.ticket_id, summary: data.text || k.text });
+      if (b.done) {
+        recordWork(req.user, { kind: 'task', ticket_id: data.ticket_id || k.ticket_id, summary: data.text || k.text });
+        awardTokens(req.user, 'task', k.id);
+      }
     }
     mirrorCards(k.id);
     [...new Set([k.ticket_id, data.ticket_id].filter(Boolean))].forEach((t) => { touch(t); syncMilestone(t); });
@@ -190,7 +194,10 @@ r.put('/subtasks/:id', (req, res) => {
     }
     if (typeof b.done === 'boolean' && b.done !== !!s.done) {
       db.prepare("UPDATE activity_subtasks SET done = ?, done_at = CASE WHEN ? THEN datetime('now') END WHERE id = ?").run(b.done ? 1 : 0, b.done ? 1 : 0, s.id);
-      if (b.done) recordWork(req.user, { kind: 'task', ticket_id: s.ticket_id, summary: s.text });
+      if (b.done) {
+        recordWork(req.user, { kind: 'task', ticket_id: s.ticket_id, summary: s.text });
+        awardTokens(req.user, 'subtask', s.id);
+      }
     }
     mirrorCards(s.task_id);
     touch(s.ticket_id);

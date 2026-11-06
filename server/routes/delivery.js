@@ -11,6 +11,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { db, json } from '../db.js';
 import { requireAdmin } from '../auth.js';
+import { awardTokens } from '../race.js';
 import { inBooks } from '../financials.js';
 import { CONTRACT_DOC_TYPES, ADDITIONAL_DOCS } from '../../src/lib/process.js';
 import { queueDelete, ACTIVITY_TYPES } from '../services/pipedrive.js';
@@ -314,6 +315,7 @@ r.put('/tasks/:tid', (req, res) => {
   db.prepare(`UPDATE delivery_tasks SET title = ?, description = ?, done = ?, done_at = CASE WHEN ? THEN COALESCE(done_at, datetime('now')) END, due_date = ?, due_time = ?,
     assignee_id = ?, activity_type = ?, pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?`)
     .run(next.title, next.description, next.done, next.done, next.due_date, next.due_time, next.assignee_id, next.activity_type, k.id);
+  if (next.done && !k.done) awardTokens(req.user, 'delivery', k.id);
   touch(k.program_id);
   res.json({ program: one(k.program_id) });
 });

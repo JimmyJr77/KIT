@@ -924,6 +924,26 @@ CREATE TABLE IF NOT EXISTS site_feedback (
   path TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- The KITT race (right-click the car). Tokens are a ledger: finishing a task pays in, a race takes one out. A task
+-- pays once however often it's checked and unchecked, which the unique index on (reason, ref) enforces.
+CREATE TABLE IF NOT EXISTS game_tokens (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  delta INTEGER NOT NULL,
+  reason TEXT NOT NULL, -- task | subtask | check | delivery | priority | race
+  ref TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS game_tokens_once ON game_tokens(user_id, reason, ref) WHERE ref IS NOT NULL;
+-- Clean runs only (the car never touched a wall); each track keeps its twenty best.
+CREATE TABLE IF NOT EXISTS race_times (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  track TEXT NOT NULL,
+  ms INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS race_times_track ON race_times(track, ms);
 `);
 addColumn('ticket_contacts', 'is_primary', 'INTEGER NOT NULL DEFAULT 0'); // the deal's main contact person
 addColumn('contacts', 'pipedrive_id', 'INTEGER');

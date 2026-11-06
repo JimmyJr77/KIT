@@ -42,6 +42,7 @@ import priorityAccountRoutes from './routes/priorityAccounts.js';
 import lessonRoutes from './routes/lessons.js';
 import retroRoutes from './routes/retros.js';
 import feedbackRoutes from './routes/feedback.js';
+import raceRoutes from './routes/race.js';
 import aiRoutes from './routes/ai.js';
 
 ensureGsaRates();
@@ -92,6 +93,7 @@ app.use('/api/priority-accounts', requireAuth, priorityAccountRoutes);
 app.use('/api/lessons', requireAuth, lessonRoutes);
 app.use('/api/retros', requireAuth, retroRoutes);
 app.use('/api/feedback', requireAuth, feedbackRoutes);
+app.use('/api/race', requireAuth, raceRoutes);
 app.use('/api/ai', requireAuth, aiRoutes);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
