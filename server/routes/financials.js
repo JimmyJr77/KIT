@@ -6,7 +6,7 @@ import { PIPELINE_STATUSES } from './priorities.js';
 import {
   bids, contracts, filtersFrom, byStage, expected, qualifiedBy, bookingsByQuarter, backlog, bookToBill, bookToBillByDirector, bookToBillSeries,
   fundedTtm, pipelineByPerson,
-  targets, trends, quarters, quarterRange, localToday, OPEN_STAGES, QUALIFIED_STAGES,
+  targets, trends, quarters, quarterRange, localToday, OPEN_STAGES, QUALIFIED_STAGES, isOpen,
 } from '../financials.js';
 import { addDays, quarterFor } from '../../src/lib/travelCalc.js';
 import { reportCard, period, directors, reportTrends, THRESHOLDS } from '../reportCard.js';
@@ -23,8 +23,8 @@ r.get('/bd', (req, res) => {
   const today = localToday();
   const year = Number(today.slice(0, 4));
   const ttmStart = addDays(today, -365);
-  const open = list.filter((t) => OPEN_STAGES.includes(t.pipeline_status) || !t.pipeline_status);
-  const qualified = list.filter((t) => QUALIFIED_STAGES.includes(t.pipeline_status));
+  const open = list.filter((t) => isOpen(t) && (OPEN_STAGES.includes(t.pipeline_status) || !t.pipeline_status));
+  const qualified = list.filter((t) => isOpen(t) && QUALIFIED_STAGES.includes(t.pipeline_status));
   const ytd = bookToBill(deals, `${year}-01-01`, today);
   res.json({
     filters: f,
@@ -84,7 +84,7 @@ r.get('/teams', (req, res) => {
       };
     }),
     bd: {
-      openValue: sum(list.filter((t) => OPEN_STAGES.includes(t.pipeline_status)), (t) => t.value),
+      openValue: sum(list.filter((t) => isOpen(t) && OPEN_STAGES.includes(t.pipeline_status)), (t) => t.value),
       bookedYtd: sum(deals.filter((p) => p.awarded_on >= `${year}-01-01`), (p) => p.value),
     },
     marketing: { year: sum(spendEntries({ from: `${year}-01-01`, to: localToday() }), (x) => x.amount) },

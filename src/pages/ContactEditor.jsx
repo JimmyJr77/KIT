@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Trash2, Loader2, Mail, Phone, Ticket } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useApi } from '../lib/data.js';
+import MultiSelect from '../components/MultiSelect.jsx';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, formatPhoneInput, stamp, fullStamp, ticketKind } from '../lib/format.js';
 import Avatar from '../components/Avatar.jsx';
@@ -47,12 +49,15 @@ export function RelationshipPicker({ value, onChange }) {
   );
 }
 
-const EMPTY = { first_name: '', last_name: '', organization: '', role: '', email: '', phone: '', relationship: 0, notes: '' };
+const EMPTY = { first_name: '', last_name: '', organization: '', role: '', email: '', phone: '', relationship: 0, notes: '', labels: [] };
 const toForm = (c) => ({ ...EMPTY, ...Object.fromEntries(Object.keys(EMPTY).map((k) => [k, c?.[k] ?? EMPTY[k]])) });
 
 /** The contact's details. Calls onSubmit(form) and shows any error it throws. */
 export function ContactForm({ initial, submitLabel, onSubmit, onCancel, extra }) {
   const [form, setForm] = useState(() => toForm(initial));
+  // Pipedrive's person labels (Customer, PARTNER, TPOC…), so a person is labelled the same in both.
+  const personFields = useApi('/pipedrive/fields/person');
+  const labelOptions = ((personFields.data?.fields || []).find((f) => f.key === 'label_ids' || f.key === 'label')?.options || []).map((o) => ({ value: o.label, label: o.label }));
   // A new contact can come with interaction notes; they're saved along with it.
   const [pending, setPending] = useState([]);
   const [draft, setDraft] = useState('');
@@ -80,11 +85,15 @@ export function ContactForm({ initial, submitLabel, onSubmit, onCancel, extra })
       </div>
       <div className="grid grid-cols-2 gap-2">
         <Field label="Where they work"><input className="input" placeholder="Organization" value={form.organization} onChange={(e) => set('organization', e.target.value)} /></Field>
-        <Field label="Role"><input className="input" placeholder="Title or role" value={form.role} onChange={(e) => set('role', e.target.value)} /></Field>
+        <Field label="Title"><input className="input" placeholder="Title or role" value={form.role} onChange={(e) => set('role', e.target.value)} /></Field>
       </div>
+      <Field label="Labels">
+        <MultiSelect options={[...labelOptions, ...form.labels.filter((l) => !labelOptions.some((o) => o.value === l)).map((l) => ({ value: l, label: l }))]} value={form.labels}
+          onChange={(v) => set('labels', v)} placeholder={labelOptions.length ? 'Customer, PARTNER, TPOC…' : 'Labels'} onCreate={(name) => set('labels', [...form.labels, name])} />
+      </Field>
       <div className="grid grid-cols-2 gap-2">
-        <Field label="Email"><input className="input" type="email" value={form.email} onChange={(e) => set('email', e.target.value)} /></Field>
-        <Field label="Phone"><input className="input" inputMode="tel" placeholder="xxx-xxx-xxxx" value={form.phone} onChange={(e) => set('phone', formatPhoneInput(e.target.value))} /></Field>
+        <Field label="Email (work)"><input className="input" type="email" value={form.email} onChange={(e) => set('email', e.target.value)} /></Field>
+        <Field label="Phone (work)"><input className="input" inputMode="tel" placeholder="xxx-xxx-xxxx" value={form.phone} onChange={(e) => set('phone', formatPhoneInput(e.target.value))} /></Field>
       </div>
       <Field label="Relationship"><RelationshipPicker value={form.relationship} onChange={(v) => set('relationship', v)} /></Field>
       <Field label="Relationship notes">

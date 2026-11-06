@@ -279,6 +279,8 @@ CREATE TABLE IF NOT EXISTS ticket_contacts (
 );
 `);
 
+/** A setting's saved value, for one-time migrations that run before the settings helpers are defined. */
+const getSettingRaw = (key) => db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value;
 // Columns added after the first release of a table.
 function addColumn(table, column, type) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
@@ -754,20 +756,8 @@ CREATE TABLE IF NOT EXISTS delivery_team (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Copy a pipeline ticket into Delivery the moment it's Awarded, however that happens.
-CREATE TRIGGER IF NOT EXISTS delivery_on_award_insert AFTER INSERT ON tickets
-WHEN NEW.pipeline_status = 'Awarded' AND NEW.ticket_type = 'bid'
-BEGIN
-  INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value)
-  VALUES (NEW.id, NEW.opportunity_title, NEW.organization, NEW.account_type, NEW.value);
-END;
-CREATE TRIGGER IF NOT EXISTS delivery_on_award_update AFTER UPDATE OF pipeline_status ON tickets
-WHEN NEW.pipeline_status = 'Awarded' AND OLD.pipeline_status IS NOT 'Awarded' AND NEW.ticket_type = 'bid'
-BEGIN
-  INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value)
-  VALUES (NEW.id, NEW.opportunity_title, NEW.organization, NEW.account_type, NEW.value);
-END;
 `);
+// (A ticket used to become a contract when its stage reached Awarded; now it does when its deal is won. See the delivery_on_won triggers below.)
 // Alerts telling someone they've been put on a won contract.
 addColumn('alerts', 'program_id', 'INTEGER REFERENCES delivery_programs(id) ON DELETE CASCADE');
 addColumn('delivery_programs', 'technical_lead_id', 'INTEGER REFERENCES users(id)');
@@ -794,23 +784,7 @@ addColumn('delivery_programs', 'kept_at', 'TEXT');
 addColumn('delivery_programs', 'completed_at', 'TEXT'); // when delivery finished: set by marking the contract Complete
 const NOTHING_ADDED = `program_manager_id IS NULL AND technical_lead_id IS NULL AND status = 'Active' AND TRIM(COALESCE(notes, '')) = ''
     AND id NOT IN (SELECT program_id FROM delivery_team) AND id NOT IN (SELECT program_id FROM program_entries) AND id NOT IN (SELECT program_id FROM delivery_files)`;
-db.exec(`
-DROP TRIGGER IF EXISTS delivery_hold_on_unaward;
-CREATE TRIGGER delivery_hold_on_unaward AFTER UPDATE OF pipeline_status ON tickets
-WHEN OLD.pipeline_status = 'Awarded' AND NEW.pipeline_status IS NOT 'Awarded' AND NEW.ticket_type = 'bid'
-BEGIN
-  DELETE FROM delivery_programs WHERE ticket_id = NEW.id AND ${NOTHING_ADDED};
-  UPDATE delivery_programs SET held_at = datetime('now'), kept_at = NULL WHERE ticket_id = NEW.id;
-END;
-CREATE TRIGGER IF NOT EXISTS delivery_release_on_award AFTER UPDATE OF pipeline_status ON tickets
-WHEN NEW.pipeline_status = 'Awarded' AND OLD.pipeline_status IS NOT 'Awarded' AND NEW.ticket_type = 'bid'
-BEGIN
-  UPDATE delivery_programs SET held_at = NULL, kept_at = NULL WHERE ticket_id = NEW.id;
-END;
-UPDATE delivery_programs SET held_at = datetime('now') WHERE held_at IS NULL AND kept_at IS NULL
-  AND ticket_id IN (SELECT id FROM tickets WHERE ticket_type = 'bid' AND pipeline_status IS NOT 'Awarded');
-DELETE FROM delivery_programs WHERE held_at IS NOT NULL AND ${NOTHING_ADDED};
-`);
+
 // Travel request alerts: a lead has one to approve (travel_request), or the traveler's was decided (travel_decision).
 addColumn('alerts', 'trip_id', 'INTEGER REFERENCES trips(id) ON DELETE CASCADE');
 
@@ -838,9 +812,6 @@ CREATE TABLE IF NOT EXISTS support_need_tickets (
 // Support alerts: you were asked for support (support_need), or a work ticket was made from your request (support_ticket).
 addColumn('alerts', 'support_id', 'INTEGER REFERENCES support_needs(id) ON DELETE CASCADE');
 
-// Pipeline tickets already Awarded before Delivery existed.
-db.exec(`INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value)
-  SELECT id, opportunity_title, organization, account_type, value FROM tickets WHERE pipeline_status = 'Awarded' AND ticket_type = 'bid'`);
 
 // Move the old single notes field on each card into its first note entry.
 db.transaction(() => {
@@ -1242,6 +1213,206 @@ CREATE TABLE IF NOT EXISTS retro_votes (
 );
 CREATE INDEX IF NOT EXISTS retro_lanes_board ON retro_lanes(board_id);
 CREATE INDEX IF NOT EXISTS retro_notes_board ON retro_notes(board_id);
+`);
+
+
+// ---- Pipedrive, in full: a home on tickets, contacts and contracts for everything a deal, person, organization, product
+// and project holds, so the two stay the same.
+
+// Won or lost is a deal's status in Pipedrive, apart from its stage (a deal can sit in an "Awarded" stage and still be
+// open). Only a won ticket is a contract in Delivery. won_at / lost_at are when it closed.
+addColumn('tickets', 'deal_status', "TEXT NOT NULL DEFAULT 'open'"); // open | won | lost
+addColumn('tickets', 'won_at', 'TEXT');
+addColumn('tickets', 'lost_at', 'TEXT');
+// Where the deal came from, as Pipedrive records it: the origin (manually created, import, API…) and the channel.
+addColumn('tickets', 'source_origin', 'TEXT');
+addColumn('tickets', 'source_origin_id', 'TEXT');
+addColumn('tickets', 'source_channel_id', 'TEXT');
+// A deal deleted in Pipedrive is archived here (never deleted), and this says when.
+addColumn('tickets', 'pipedrive_deleted_at', 'TEXT');
+db.exec(`
+-- Organizations (Pipedrive's), with everything Pipedrive keeps on one. Tickets and contacts point at them.
+CREATE TABLE IF NOT EXISTS organizations (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  address TEXT,
+  labels TEXT,            -- JSON array of label names
+  website TEXT,
+  linkedin TEXT,
+  industry TEXT,
+  annual_revenue TEXT,
+  employee_count INTEGER,
+  owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  people_count INTEGER,
+  open_deals_count INTEGER,
+  won_deals_count INTEGER,
+  lost_deals_count INTEGER,
+  pipedrive_id INTEGER UNIQUE,
+  pipedrive_snapshot TEXT,
+  pipedrive_pending INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+-- Pipedrive's field definitions (deal, person, organization and project fields): custom fields and the built-in ones that
+-- have options (labels, lost reasons, industries…). Refreshed on every pull, so a field or option added in Pipedrive
+-- shows up in KIT on its own.
+CREATE TABLE IF NOT EXISTS pipedrive_fields (
+  entity TEXT NOT NULL,      -- deal | person | organization | project
+  key TEXT NOT NULL,
+  pipedrive_id INTEGER,
+  name TEXT NOT NULL,
+  field_type TEXT NOT NULL,  -- varchar, text, enum, set, date, double, monetary, phone, user, org, people, address…
+  options TEXT,              -- JSON [{ id, label, color }] for enum and set fields
+  position INTEGER NOT NULL DEFAULT 0,
+  custom INTEGER NOT NULL DEFAULT 0,    -- made in Pipedrive by the company (edit_flag)
+  important INTEGER NOT NULL DEFAULT 0, -- shown in Pipedrive's Summary section
+  active INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (entity, key)
+);
+-- A deal's installments (Pipedrive's payment schedule): how much is due, and when.
+CREATE TABLE IF NOT EXISTS ticket_installments (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  description TEXT,
+  amount REAL NOT NULL DEFAULT 0,
+  billing_date TEXT,
+  pipedrive_id INTEGER,
+  pipedrive_snapshot TEXT,
+  pipedrive_pending INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ticket_installments_ticket ON ticket_installments(ticket_id);
+-- The phases of Pipedrive's Projects board (Kick-off, Planning, Implementation…), which a contract moves through.
+CREATE TABLE IF NOT EXISTS delivery_phases (
+  id INTEGER PRIMARY KEY,
+  board_id INTEGER,
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  pipedrive_id INTEGER UNIQUE
+);
+-- A contract's plan: the tasks (with subtasks) and activities of its Pipedrive project.
+CREATE TABLE IF NOT EXISTS delivery_tasks (
+  id INTEGER PRIMARY KEY,
+  program_id INTEGER NOT NULL REFERENCES delivery_programs(id) ON DELETE CASCADE,
+  parent_id INTEGER REFERENCES delivery_tasks(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'task', -- task | activity
+  title TEXT NOT NULL,
+  description TEXT,
+  activity_type TEXT,
+  due_date TEXT,
+  due_time TEXT,
+  done INTEGER NOT NULL DEFAULT 0,
+  done_at TEXT,
+  assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  pipedrive_id INTEGER,
+  pipedrive_snapshot TEXT,
+  pipedrive_pending INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS delivery_tasks_program ON delivery_tasks(program_id, position);
+-- Notes on a contract's project (Pipedrive project notes), two-way like deal notes.
+CREATE TABLE IF NOT EXISTS delivery_notes (
+  id INTEGER PRIMARY KEY,
+  program_id INTEGER NOT NULL REFERENCES delivery_programs(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT,
+  pipedrive_id INTEGER,
+  pipedrive_pending INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS delivery_notes_program ON delivery_notes(program_id);
+`);
+addColumn('tickets', 'organization_id', 'INTEGER REFERENCES organizations(id) ON DELETE SET NULL');
+// Contacts: Pipedrive's labels (JSON names), their organization, and the sync bookkeeping that lets edits go both ways.
+addColumn('contacts', 'labels', 'TEXT');
+addColumn('contacts', 'organization_id', 'INTEGER REFERENCES organizations(id) ON DELETE SET NULL');
+addColumn('contacts', 'pipedrive_snapshot', 'TEXT');
+addColumn('contacts', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');
+// Products: the rest of what a Pipedrive deal product carries, and the bookkeeping for two-way edits.
+addColumn('ticket_products', 'tax', 'REAL NOT NULL DEFAULT 0');
+addColumn('ticket_products', 'sum', 'REAL');
+addColumn('ticket_products', 'billing_frequency', 'TEXT');
+addColumn('ticket_products', 'billing_frequency_cycles', 'INTEGER');
+addColumn('ticket_products', 'billing_start_date', 'TEXT');
+addColumn('ticket_products', 'is_enabled', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('ticket_products', 'product_pipedrive_id', 'INTEGER'); // the catalog product
+addColumn('ticket_products', 'pipedrive_snapshot', 'TEXT');
+addColumn('ticket_products', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');
+// Contracts: the Pipedrive project each one is delivered as, with its overview (dates, phase, status, owner, labels).
+addColumn('delivery_programs', 'pipedrive_project_id', 'INTEGER');
+addColumn('delivery_programs', 'project_status', 'TEXT');   // open | completed | canceled, as Pipedrive has it
+addColumn('delivery_programs', 'phase_id', 'INTEGER REFERENCES delivery_phases(id) ON DELETE SET NULL');
+addColumn('delivery_programs', 'start_date', 'TEXT');
+addColumn('delivery_programs', 'end_date', 'TEXT');
+addColumn('delivery_programs', 'labels', 'TEXT');           // JSON array of project label names
+addColumn('delivery_programs', 'owner_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+addColumn('delivery_programs', 'health_status', 'INTEGER');
+addColumn('delivery_programs', 'project_archived_at', 'TEXT');
+addColumn('delivery_programs', 'pipedrive_snapshot', 'TEXT');
+addColumn('delivery_programs', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('delivery_files', 'pipedrive_id', 'INTEGER');
+addColumn('delivery_files', 'url', 'TEXT');
+addColumn('pipedrive_deletes', 'project_id', 'INTEGER'); // for project items: the Pipedrive project they were on
+// A file kept in KIT after it was deleted in Pipedrive (an admin's choice when many go at once): KIT's own now, never sent back.
+addColumn('ticket_files', 'pipedrive_detached', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('delivery_files', 'pipedrive_detached', 'INTEGER NOT NULL DEFAULT 0');
+db.exec("DELETE FROM settings WHERE key = 'pipedrive_pull_file_deletes'"); // file deletions always sync now
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS delivery_programs_project ON delivery_programs(pipedrive_project_id) WHERE pipedrive_project_id IS NOT NULL');
+
+// Won tickets, from before deal_status existed: Lost is lost; a ticket in Awarded, or with a contract in Delivery that isn't
+// on hold, counts as won (a pull sets each Pipedrive deal's real status afterwards).
+if (!getSettingRaw('deal_status_backfilled')) {
+  db.transaction(() => {
+    db.exec(`UPDATE tickets SET deal_status = 'lost', lost_at = COALESCE(done_at, updated_at) WHERE ticket_type = 'bid' AND pipeline_status = 'Lost'`);
+    db.exec(`UPDATE tickets SET deal_status = 'won', won_at = COALESCE((SELECT awarded_at FROM delivery_programs p WHERE p.ticket_id = tickets.id), done_at, updated_at)
+      WHERE ticket_type = 'bid' AND deal_status = 'open' AND (pipeline_status = 'Awarded'
+        OR id IN (SELECT ticket_id FROM delivery_programs WHERE held_at IS NULL AND ticket_id IS NOT NULL))`);
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('deal_status_backfilled', '1')").run();
+  })();
+}
+// Sending to Pipedrive used to be off unless an admin turned each kind on. Now everything syncs both ways on its own (in
+// production), so the old per-kind settings are cleared once: every kind starts as Auto, and an admin can still turn any off.
+if (!getSettingRaw('pipedrive_modes_reset_v2')) {
+  db.prepare("DELETE FROM settings WHERE key = 'pipedrive_send_modes'").run();
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('pipedrive_modes_reset_v2', '1')").run();
+}
+// Delivery follows the deal's status now, not its stage: a ticket is a contract while it's won.
+db.exec(`
+DROP TRIGGER IF EXISTS delivery_on_award_insert;
+DROP TRIGGER IF EXISTS delivery_on_award_update;
+DROP TRIGGER IF EXISTS delivery_hold_on_unaward;
+DROP TRIGGER IF EXISTS delivery_release_on_award;
+CREATE TRIGGER IF NOT EXISTS delivery_on_won_insert AFTER INSERT ON tickets
+WHEN NEW.deal_status = 'won' AND NEW.ticket_type = 'bid'
+BEGIN
+  INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value, awarded_at)
+  VALUES (NEW.id, NEW.opportunity_title, NEW.organization, NEW.account_type, NEW.value, COALESCE(NEW.won_at, datetime('now')));
+END;
+CREATE TRIGGER IF NOT EXISTS delivery_on_won_update AFTER UPDATE OF deal_status ON tickets
+WHEN NEW.deal_status = 'won' AND OLD.deal_status IS NOT 'won' AND NEW.ticket_type = 'bid'
+BEGIN
+  INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value, awarded_at)
+  VALUES (NEW.id, NEW.opportunity_title, NEW.organization, NEW.account_type, NEW.value, COALESCE(NEW.won_at, datetime('now')));
+  UPDATE delivery_programs SET held_at = NULL, kept_at = NULL, awarded_at = COALESCE(NEW.won_at, awarded_at) WHERE ticket_id = NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS delivery_hold_on_unwon AFTER UPDATE OF deal_status ON tickets
+WHEN OLD.deal_status = 'won' AND NEW.deal_status IS NOT 'won' AND NEW.ticket_type = 'bid'
+BEGIN
+  DELETE FROM delivery_programs WHERE ticket_id = NEW.id AND pipedrive_project_id IS NULL AND ${NOTHING_ADDED}
+    AND id NOT IN (SELECT program_id FROM delivery_tasks) AND id NOT IN (SELECT program_id FROM delivery_notes);
+  UPDATE delivery_programs SET held_at = datetime('now'), kept_at = NULL WHERE ticket_id = NEW.id;
+END;
+UPDATE delivery_programs SET held_at = datetime('now') WHERE held_at IS NULL AND kept_at IS NULL
+  AND ticket_id IN (SELECT id FROM tickets WHERE ticket_type = 'bid' AND deal_status IS NOT 'won');
+-- Every won ticket has a contract (tickets won before Delivery existed, or whose contract was lost to an older rule).
+INSERT OR IGNORE INTO delivery_programs (ticket_id, name, organization, account_type, value, awarded_at)
+  SELECT id, opportunity_title, organization, account_type, value, COALESCE(won_at, done_at, datetime('now')) FROM tickets
+  WHERE deal_status = 'won' AND ticket_type = 'bid' AND id NOT IN (SELECT ticket_id FROM delivery_programs WHERE ticket_id IS NOT NULL);
 `);
 
 const insertTeam = db.prepare('INSERT OR IGNORE INTO teams (name) VALUES (?)');

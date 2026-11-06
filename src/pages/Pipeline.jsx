@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp, Star } from 'lucide-react';
+import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp, Star, Trophy } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullName, fullStamp } from '../lib/format.js';
@@ -18,8 +19,8 @@ import NextStepBadge from '../components/NextStepBadge.jsx';
 
 const NO_STAGE = '__none__';
 const money = (n) => usd(n).replace('.00', '');
-// Closed-out stages are set apart from the active pipeline. Lost pipeline tickets aren't on the board: the Lost view lists them.
-const CLOSED = new Set(['Awarded', 'Lost']);
+// Won and lost deals aren't on the board, as in Pipedrive: Closed deals lists them (and won ones are contracts in Delivery).
+import { isClosed } from '../lib/lanes.js';
 
 /** Master tickets as a board, one column per pipeline stage. Drag a ticket to move it to another stage. */
 // Ways to order the cards in each column. `dir` is the direction each starts in when picked; the arrow button reverses
@@ -101,8 +102,9 @@ export default function Pipeline() {
   // One board per pipeline: KIT's own, plus one for each Pipedrive pipeline. KIT's own shows only when it has pipeline tickets or
   // is the only one.
   const keyOf = (id) => (id == null ? 'kit' : String(id));
-  // What the board shows: everything but lost pipeline tickets, narrowed to the chosen tags.
-  const shown = useMemo(() => (tickets || []).filter((t) => t.pipeline_status !== 'Lost').filter(byTags(tags)), [tickets, tags]);
+  // What the board shows: open pipeline tickets (won and lost ones have left the board), narrowed to the chosen tags.
+  const shown = useMemo(() => (tickets || []).filter((t) => !isClosed(t)).filter(byTags(tags)), [tickets, tags]);
+  const closed = useMemo(() => (tickets || []).filter(isClosed), [tickets]);
   const pipelines = useMemo(() => {
     const list = meta.data?.pipelines || [];
     const counts = new Map();
@@ -113,6 +115,14 @@ export default function Pipeline() {
   const choosePipeline = (k) => { setPipelineKey(k); try { localStorage.setItem('kit.pipeline', k); } catch { /* not saved */ } };
 
   const stages = (pipeline?.statuses || []).filter((s) => s !== 'Lost');
+  const lastStage = stages[stages.length - 1];
+  const wonHere = closed.filter((t) => t.deal_status === 'won' && keyOf(t.pipeline_id) === pipeline?.key);
+
+  const markWon = async (t) => {
+    if (!confirm(`Mark “${t.opportunity_title}” won? It moves into Delivery as a contract.${t.pipedrive_id ? ' Pipedrive follows.' : ''}`)) return;
+    setError('');
+    try { await api.put(`/tickets/${t.id}/outcome`, { deal_status: 'won' }); load(); } catch (e) { setError(`Couldn’t mark “${t.opportunity_title}” won: ${e.message}`); }
+  };
   const columns = useMemo(() => {
     const onBoard = shown.filter((t) => keyOf(t.pipeline_id) === pipeline?.key);
     const byStage = (s) => onBoard.filter((t) => (t.pipeline_status || NO_STAGE) === s).sort(compareBy(sort));
@@ -180,6 +190,11 @@ export default function Pipeline() {
             </button>
           </div>
           {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
+          {wonHere.length > 0 && (
+            <Link to="/closed-deals" className="ml-auto flex items-center gap-1.5 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100" title="Won deals leave the board; they're contracts in Delivery">
+              <Trophy size={13} /> {wonHere.length} won · {money(wonHere.reduce((s, t) => s + (t.value || 0), 0))}
+            </Link>
+          )}
         </div>
         {pipelines.length > 1 && (
           <div className="flex flex-wrap gap-1" role="tablist" aria-label="Pipelines">
@@ -198,7 +213,8 @@ export default function Pipeline() {
           onDragStart={({ active }) => setDragId(active.id)} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
           <div className="flex h-full min-h-96 items-stretch gap-3">
             {columns.map((c) => <Column key={c.key} column={c} onOpen={(id) => { setOpenStep(undefined); setOpenId(id); }}
-              onOpenStep={(t) => { setOpenStep(t.next_step?.id ?? null); setOpenId(t.id); }} dragId={dragId} now={now} />)}
+              onOpenStep={(t) => { setOpenStep(t.next_step?.id ?? null); setOpenId(t.id); }} dragId={dragId} now={now}
+              onWon={c.key === lastStage ? markWon : null} />)}
           </div>
           <DragOverlay>{dragging && <TicketCard ticket={dragging} now={now} overlay />}</DragOverlay>
         </DndContext>
@@ -216,10 +232,10 @@ export default function Pipeline() {
   );
 }
 
-function Column({ column, onOpen, onOpenStep, dragId, now }) {
+function Column({ column, onOpen, onOpenStep, dragId, now, onWon }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.key });
   const total = column.tickets.reduce((s, t) => s + (t.value || 0), 0);
-  const closed = CLOSED.has(column.key);
+  const closed = !!onWon; // the last stage: a deal here is marked won from its card
   return (
     <section ref={setNodeRef} aria-label={`${column.label} stage`}
       className={`flex min-w-40 flex-1 basis-0 flex-col rounded-xl border transition ${
@@ -232,7 +248,7 @@ function Column({ column, onOpen, onOpenStep, dragId, now }) {
         <span className="text-xs font-medium text-emerald-700 tabular-nums">{total ? money(total) : ''}</span>
       </header>
       <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-2">
-        {column.tickets.map((t) => <DraggableTicket key={t.id} ticket={t} onOpen={onOpen} onOpenStep={onOpenStep} hidden={dragId === t.id} now={now} />)}
+        {column.tickets.map((t) => <DraggableTicket key={t.id} ticket={t} onOpen={onOpen} onOpenStep={onOpenStep} hidden={dragId === t.id} now={now} onWon={onWon} />)}
         {!column.tickets.length && (
           <p className={`rounded-lg border-2 border-dashed px-3 py-6 text-center text-xs ${isOver ? 'border-brand-500 text-brand-600' : 'border-slate-200 text-slate-400'}`}>
             {isOver ? 'Drop here' : 'No tickets'}
@@ -243,11 +259,18 @@ function Column({ column, onOpen, onOpenStep, dragId, now }) {
   );
 }
 
-function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now }) {
+function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now, onWon }) {
   const { attributes, listeners, setNodeRef } = useDraggable({ id: ticket.id });
   return (
     <div ref={setNodeRef} {...attributes} {...listeners} onClick={() => onOpen(ticket.id)} className={hidden ? 'opacity-30' : ''}>
       <TicketCard ticket={ticket} now={now} onOpenStep={onOpenStep} />
+      {onWon && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); onWon(ticket); }} onPointerDown={(e) => e.stopPropagation()}
+          className="mt-1 flex w-full items-center justify-center gap-1 rounded-md bg-emerald-50 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+          title="Mark won: it becomes a contract in Delivery">
+          <Trophy size={12} /> Mark won
+        </button>
+      )}
     </div>
   );
 }

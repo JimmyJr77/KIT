@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2 } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -71,6 +71,8 @@ export default function TicketTimeline({ ticketId, focus, activityId, onClose, o
           {t.organization && <span>· {t.organization}</span>}
           {t.team_name && <span className="rounded bg-slate-100 px-1.5 text-slate-600">{t.team_name}</span>}
           {t.pipeline_status && <span className="rounded bg-slate-100 px-1.5 text-slate-600">{t.pipeline_status}</span>}
+          {t.deal_status === 'won' && <span className="flex items-center gap-1 rounded bg-emerald-100 px-1.5 font-semibold text-emerald-800" title={t.won_at ? `Won ${stamp(t.won_at)}` : 'Won'}><Trophy size={11} /> Won</span>}
+          {t.deal_status === 'lost' && <span className="flex items-center gap-1 rounded bg-red-100 px-1.5 font-semibold text-red-800" title={t.lost_at ? `Lost ${stamp(t.lost_at)}` : 'Lost'}><XCircle size={11} /> Lost</span>}
           {t.value != null && <span className="rounded bg-emerald-50 px-1.5 text-emerald-700">{usd(t.value).replace('.00', '')}</span>}
           {t.event_id && (
             <Link to={`/events?open=${t.event_id}`} className="flex items-center gap-1 rounded bg-sky-50 px-1.5 text-sky-800 hover:underline" title="The event this ticket supports">
@@ -88,6 +90,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, onClose, o
         <div className="space-y-5">
           {t.ticket_type !== 'account' && <ArchiveBar ticket={t} onChanged={refresh} />}
           {t.ticket_type === 'bid' && <AssignmentBar ticket={t} onChanged={refresh} />}
+          {t.ticket_type === 'bid' && <OutcomeBar ticket={t} onChanged={refresh} />}
           <Composer ticketId={t.id} onPosted={refresh} />
 
           <div className="flex flex-wrap gap-1.5">
@@ -286,7 +289,7 @@ function Event({ event: e, ticket, onChanged, onOpenActivity }) {
               </a>
               {(e.author?.id === user.id || user.role === 'admin') && (
                 <button type="button" className="btn-ghost shrink-0 px-2 py-1 text-slate-400 hover:text-red-600" aria-label={`Delete ${e.file.name}`} title="Delete file"
-                  onClick={async () => { if (confirm(`Delete “${e.file.name}”?`)) { await api.del(`/tickets/files/${e.file.id}`); onChanged(); } }}>
+                  onClick={async () => { if (confirm(`Delete “${e.file.name}”?${e.file.synced ? ' It’s deleted from the deal in Pipedrive too.' : ''}`)) { await api.del(`/tickets/files/${e.file.id}`); onChanged(); } }}>
                   <Trash2 size={14} />
                 </button>
               )}
@@ -423,6 +426,71 @@ function Composer({ ticketId, onPosted }) {
 }
 
 /** Archive the ticket (it leaves the boards; restore it here or from the Archive page), or restore an archived one. */
+/**
+ * Won, lost or open: the deal's status, apart from its stage (as in Pipedrive). Won puts the ticket into Delivery as a
+ * contract; lost asks for a reason. On a Pipedrive deal the change is synced to Pipedrive.
+ */
+function OutcomeBar({ ticket: t, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [losing, setLosing] = useState(false);
+  const [reason, setReason] = useState(t.lost_reason || '');
+  const [program, setProgram] = useState(null);
+  const set = async (deal_status, lost_reason) => {
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api.put(`/tickets/${t.id}/outcome`, { deal_status, lost_reason });
+      setProgram(r.program);
+      setLosing(false);
+      onChanged();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  const synced = t.pipedrive_id ? ' Pipedrive follows.' : '';
+  if (t.deal_status === 'won') {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+        <span className="flex items-center gap-1.5"><Trophy size={14} /> Won{t.won_at ? ` ${stamp(t.won_at)}` : ''}. It’s a contract in Delivery.</span>
+        <span className="flex items-center gap-2">
+          <Link to={`/delivery?open=${program?.id ?? ''}&ticket=${t.id}`} className="flex items-center gap-1 text-xs font-medium text-emerald-800 hover:underline"><BriefcaseBusiness size={13} /> Open in Delivery</Link>
+          <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy} onClick={() => confirm(`Reopen “${t.opportunity_title}”? Its contract in Delivery goes on hold.${synced}`) && set('open')}><Undo2 size={13} /> Reopen</button>
+        </span>
+      </div>
+    );
+  }
+  if (t.deal_status === 'lost') {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-900">
+        <span className="flex items-center gap-1.5"><XCircle size={14} /> Lost{t.lost_at ? ` ${stamp(t.lost_at)}` : ''}{t.lost_reason ? ` · ${t.lost_reason}` : ''}</span>
+        <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy} onClick={() => confirm(`Reopen “${t.opportunity_title}”?${synced}`) && set('open')}><Undo2 size={13} /> Reopen</button>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {!losing && (
+          <>
+            <button type="button" className="btn px-2.5 py-1 text-xs text-red-700" disabled={busy} onClick={() => setLosing(true)}><XCircle size={13} /> Lost</button>
+            <button type="button" className="btn-primary px-2.5 py-1 text-xs" disabled={busy} title={`Mark this deal won. It moves into Delivery as a contract.${synced}`}
+              onClick={() => confirm(`Mark “${t.opportunity_title}” won? It moves into Delivery as a contract.${synced}`) && set('won')}><Trophy size={13} /> Won</button>
+          </>
+        )}
+      </div>
+      {losing && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-red-50 p-3 text-sm">
+          <span className="font-medium text-red-900">Why was it lost?</span>
+          <input className="input h-8 min-w-48 flex-1 py-0 text-sm" list="lost-reasons" placeholder="Reason" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
+          <datalist id="lost-reasons">{(t.lost_reasons || []).map((x) => <option key={x} value={x} />)}</datalist>
+          <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setLosing(false)} disabled={busy}>Cancel</button>
+          <button type="button" className="btn px-2.5 py-1 text-xs text-red-700" disabled={busy} onClick={() => set('lost', reason)}>{busy ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />} Mark lost</button>
+        </div>
+      )}
+      {error && <p className="text-xs text-red-600">{error}</p>}
+    </div>
+  );
+}
+
 function ArchiveBar({ ticket, onChanged }) {
   const [busy, setBusy] = useState(false);
   const set = async (archived) => {

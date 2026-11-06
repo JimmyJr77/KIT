@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Loader2, Check, TriangleAlert, Send, Eye, ChevronRight, Radio } from 'lucide-react';
+import { RefreshCw, Loader2, Check, TriangleAlert, Send, Eye, ChevronRight, Radio, Scale, FolderKanban, ArrowLeftRight, ArrowRight, ArrowLeft, SlidersHorizontal, Trash2, FileCheck } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { stamp } from '../lib/format.js';
@@ -13,10 +13,16 @@ function summary(r) {
     const n = (added || 0) + (updated || 0);
     return n ? `${plural(n, word, many)}${added && updated ? ` (${added.toLocaleString()} new)` : ''}` : null;
   };
+  const gone = (n, word, many) => n && `${plural(n, word, many)} deleted in Pipedrive`;
   return [
-    r.pipelines && plural(r.pipelines, 'new pipeline'), part(r.dealsAdded, r.dealsUpdated, 'deal'), part(r.contactsAdded, r.contactsUpdated, 'contact'),
-    part(r.activitiesAdded, r.activitiesUpdated, 'activity', 'activities'), part(r.notesAdded, r.notesUpdated, 'note'),
-    r.filesAdded && plural(r.filesAdded, 'new file'), r.filesDeleted && plural(r.filesDeleted, 'file') + ' deleted in Pipedrive',
+    r.pipelines && plural(r.pipelines, 'new pipeline'), part(r.dealsAdded, r.dealsUpdated, 'deal'), r.dealsArchived && `${plural(r.dealsArchived, 'deal')} deleted in Pipedrive (archived here)`,
+    part(r.organizationsAdded, r.organizationsUpdated, 'organization'), part(r.contactsAdded, r.contactsUpdated, 'contact'),
+    part(r.activitiesAdded, r.activitiesUpdated, 'activity', 'activities'), gone(r.activitiesDeleted, 'activity', 'activities'),
+    part(r.notesAdded, r.notesUpdated, 'note'), gone(r.notesDeleted, 'note'),
+    r.filesAdded && plural(r.filesAdded, 'new file'), gone(r.filesDeleted, 'file'), r.filesHeld && `${plural(r.filesHeld, 'file')} deleted in Pipedrive, held for a decision`,
+    part(r.productsAdded, r.productsUpdated, 'product'), gone(r.productsDeleted, 'product'), r.installmentsAdded && plural(r.installmentsAdded, 'new installment'),
+    r.projectsUpdated && plural(r.projectsUpdated, 'project'), r.projectsUnlinked && `${plural(r.projectsUnlinked, 'project')} not on a won deal`,
+    part(r.tasksAdded, r.tasksUpdated, 'project task'), gone(r.tasksDeleted, 'project task'), part(r.projectNotesAdded, 0, 'project note'), r.projectFilesAdded && plural(r.projectFilesAdded, 'project file'),
   ].filter(Boolean).join(' · ');
 }
 
@@ -125,20 +131,26 @@ export function PipedrivePullPanel({ scope }) {
 // ---- Admins: sending to Pipedrive
 
 const KINDS = [
-  { key: 'deals', label: 'Deal fields', hint: 'Title, value, stage (won or lost too), lost reason, probability, expected close date, owner, Account' },
+  { key: 'deals', label: 'Deal fields', hint: 'Title, value, stage, won / lost, lost reason, probability, expected close date, owner, organization, Account and every custom field' },
   { key: 'labels', label: 'Tags', hint: 'Pipedrive’s labels only; tags made in KIT stay in KIT' },
   { key: 'notes', label: 'Notes', hint: 'Comments added in KIT, and Pipedrive notes edited, pinned or deleted in KIT' },
   { key: 'activities', label: 'Activities', hint: 'Added, edited or deleted in KIT' },
   { key: 'files', label: 'Files', hint: 'Uploads go as files; linked documents as a note with the link' },
-  { key: 'products', label: 'Products', hint: 'Matched by name to Pipedrive’s product catalog' },
+  { key: 'products', label: 'Products', hint: 'Added, changed or removed on the deal; new names join Pipedrive’s product catalog' },
+  { key: 'installments', label: 'Installments', hint: 'The deal’s payment schedule, added, changed or removed' },
   { key: 'followers', label: 'Followers', hint: 'Added to the deal; nobody is taken off' },
-  { key: 'contacts', label: 'People', hint: 'New contacts become Pipedrive people; added to the deal as participants' },
+  { key: 'contacts', label: 'People', hint: 'New contacts become Pipedrive people, edits update them; added to the deal as participants' },
+  { key: 'organizations', label: 'Organizations', hint: 'New organizations and edits to name, address, labels, website, LinkedIn, industry, revenue, employees' },
+  { key: 'projects', label: 'Projects', hint: 'A contract’s overview, status, phase, dates, labels, plan (tasks and activities), notes and documents, on its Pipedrive project' },
 ];
 const SENT = {
   deals: 'deal', labels: ['deal’s tags', 'deals’ tags'], notesAdded: 'new note', notesUpdated: 'edited note', notesDeleted: 'deleted note',
   activitiesAdded: ['new activity', 'new activities'], activitiesUpdated: ['edited activity', 'edited activities'], activitiesDeleted: ['deleted activity', 'deleted activities'],
-  filesAdded: 'file', filesDeleted: 'deleted file', products: 'product', followers: 'follower', peopleAdded: 'new person', contactPersons: 'contact person',
-  participantsAdded: 'participant',
+  filesAdded: 'file', filesDeleted: 'deleted file', project_filesDeleted: 'deleted project file', productsAdded: 'new product', productsUpdated: 'changed product', productsDeleted: 'removed product',
+  catalogProductsAdded: 'new catalog product', installmentsAdded: 'new installment', installmentsUpdated: 'changed installment', installmentsDeleted: 'removed installment',
+  followers: 'follower', peopleAdded: 'new person', peopleUpdated: 'edited person', contactPersons: 'contact person', participantsAdded: 'participant',
+  organizationsAdded: 'new organization', organizationsUpdated: 'edited organization', projectsUpdated: 'project', tasksAdded: 'new project task', tasksUpdated: 'edited project task',
+  tasksDeleted: 'deleted project task', projectNotesAdded: 'new project note', projectNotesUpdated: 'edited project note', project_notesDeleted: 'deleted project note', projectFilesAdded: 'project file',
 };
 const sentSummary = (sent) => Object.entries(sent || {}).map(([k, n]) => {
   const w = SENT[k] || k;
@@ -148,7 +160,7 @@ const sentSummary = (sent) => Object.entries(sent || {}).map(([k, n]) => {
 const MODES = [
   { key: 'off', label: 'Do not send', title: 'Never sent to Pipedrive' },
   { key: 'manual', label: 'On push', title: 'Sent when you push from here, after a preview' },
-  { key: 'auto', label: 'Auto sync', title: 'Sent on its own a minute or so after it changes, and when you push from here. Deletions only go when you push.' },
+  { key: 'auto', label: 'Auto sync', title: 'Sent on its own a minute or so after it changes (deletions too), and when you push from here' },
 ];
 
 /** Do not send, On push or Auto sync for one kind of change. */
@@ -232,9 +244,36 @@ function Preview({ p }) {
         </Section>
       )}
       {p.products && (
-        <Section title="Products" count={n(p.products)}>
-          {p.products.items.map((x) => <Item key={x.id} title={x.title}>{x.text}</Item>)}
-          {more(p.products)}
+        <Section title="Products" count={n(p.products.add) + n(p.products.edit) + n(p.products.remove)}
+          note={[n(p.products.add) && `${n(p.products.add)} new`, n(p.products.edit) && `${n(p.products.edit)} changed`, n(p.products.remove) && `${n(p.products.remove)} removed`].filter(Boolean).join(', ')}>
+          {p.products.add.items.map((x) => <Item key={x.id} title={x.title}>{x.text}</Item>)}
+          {p.products.edit.items.map((x) => <Item key={x.id} title={`${x.title} · ${x.text}`}>{x.changes.map((c) => `${c.label}: ${c.from} → ${c.to}`).join('; ')}</Item>)}
+          {n(p.products.remove) > 0 && <li>{plural(n(p.products.remove), 'product')} removed in KIT</li>}
+        </Section>
+      )}
+      {p.installments && (
+        <Section title="Installments" count={n(p.installments.add) + n(p.installments.edit) + n(p.installments.remove)}>
+          {p.installments.add.items.map((x) => <Item key={x.id} title={x.title}>{x.text}</Item>)}
+          {p.installments.edit.items.map((x) => <Item key={x.id} title={`${x.title} · edited`}>{x.text}</Item>)}
+          {n(p.installments.remove) > 0 && <li>{plural(n(p.installments.remove), 'installment')} removed in KIT</li>}
+        </Section>
+      )}
+      {p.organizations && (
+        <Section title="Organizations" count={n(p.organizations.add) + n(p.organizations.edit)}>
+          {p.organizations.add.items.map((o) => <li key={o.id}>{o.text} (new)</li>)}
+          {p.organizations.edit.items.map((o) => <Item key={o.id} title={o.text}>{o.changes.map((c) => `${c.label}: ${c.from} → ${c.to}`).join('; ')}</Item>)}
+        </Section>
+      )}
+      {p.projects && (
+        <Section title="Projects" count={n(p.projects.edit) + n(p.projects.tasks.add) + n(p.projects.tasks.edit) + n(p.projects.tasks.remove) + n(p.projects.notes.add) + n(p.projects.notes.edit) + n(p.projects.notes.remove) + n(p.projects.files.add)}>
+          {p.projects.edit.items.map((x) => <Item key={x.id} title={x.title}>{x.changes.map((c) => `${c.label}: ${c.from} → ${c.to}`).join('; ')}</Item>)}
+          {p.projects.tasks.add.items.map((x) => <Item key={`t${x.id}`} title={x.title}>New task: {x.text}</Item>)}
+          {p.projects.tasks.edit.items.map((x) => <Item key={`te${x.id}`} title={`${x.title} · ${x.text}`}>{x.changes.map((c) => `${c.label}: ${c.from} → ${c.to}`).join('; ')}</Item>)}
+          {n(p.projects.tasks.remove) > 0 && <li>{plural(n(p.projects.tasks.remove), 'task')} deleted in KIT</li>}
+          {p.projects.notes.add.items.map((m) => <Item key={`n${m.id}`} title={m.title}>Note: {m.text}</Item>)}
+          {p.projects.notes.edit.items.map((m) => <Item key={`ne${m.id}`} title={`${m.title} · edited note`}>{m.text}</Item>)}
+          {n(p.projects.notes.remove) > 0 && <li>{plural(n(p.projects.notes.remove), 'project note')} deleted in KIT</li>}
+          {p.projects.files.add.items.map((f) => <Item key={`f${f.id}`} title={f.title}>File: {f.text}</Item>)}
         </Section>
       )}
       {p.followers && (
@@ -246,9 +285,10 @@ function Preview({ p }) {
         </Section>
       )}
       {p.contacts && (
-        <Section title="People" count={n(p.contacts.add) + p.contacts.tickets}
-          note={`${plural(n(p.contacts.add), 'new person', 'new people')}; checked on ${plural(p.contacts.tickets, 'deal')}`}>
+        <Section title="People" count={n(p.contacts.add) + n(p.contacts.edit) + p.contacts.tickets}
+          note={`${plural(n(p.contacts.add), 'new person', 'new people')}, ${n(p.contacts.edit)} edited; checked on ${plural(p.contacts.tickets, 'deal')}`}>
           {p.contacts.add.items.map((c) => <li key={c.id}>{c.text}{c.organization ? `, ${c.organization}` : ''}</li>)}
+          {(p.contacts.edit?.items || []).map((c) => <Item key={`e${c.id}`} title={c.text}>{c.changes.map((x) => `${x.label}: ${x.from} → ${x.to}`).join('; ')}</Item>)}
           {more(p.contacts.add)}
         </Section>
       )}
@@ -274,10 +314,12 @@ export function PipedriveSend({ status }) {
   const s = status.data;
   const last = s?.lastSend;
   const auto = s?.auto;
-  useEffect(() => { if (s?.modes && !modes) { setModes(s.modes); setDraft(s.modes); } }, [s]); // eslint-disable-line react-hooks/exhaustive-deps
-  const deletesOn = !!s?.fileDeletes?.to_pipedrive;
-  const kinds = useMemo(() => [...KINDS.map((k) => k.key).filter((k) => modes && modes[k] !== 'off'), ...(deletesOn ? ['fileDeletes'] : [])], [modes, deletesOn]);
-  const autoKinds = KINDS.filter((k) => modes?.[k.key] === 'auto');
+  useEffect(() => { if (s?.savedModes && !modes) { setModes(s.savedModes); setDraft(s.savedModes); } }, [s]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selective = s?.direction === 'selective';
+  // What a push sends: the effective modes (from the direction), which the per-kind grid edits in a selective sync.
+  const effective = selective ? modes : s?.modes;
+  const kinds = useMemo(() => KINDS.map((k) => k.key).filter((k) => effective && effective[k] !== 'off'), [effective]);
+  const autoKinds = KINDS.filter((k) => effective?.[k.key] === 'auto');
   // While anything is on Auto, check every 30 seconds so its latest run shows.
   useEffect(() => {
     if (!autoKinds.length || s?.running) return undefined;
@@ -294,7 +336,7 @@ export function PipedriveSend({ status }) {
       + 'Changes made in KIT from now on will update your real Pipedrive deals on their own, about a minute later. Deletions still wait for you to push.')) return;
     setError(''); setSaving(true);
     try {
-      const saved = (await api.put('/pipedrive/send/modes', Object.fromEntries(changed.map((k) => [k.key, draft[k.key]])))).modes;
+      const saved = (await api.put('/pipedrive/send/modes', Object.fromEntries(changed.map((k) => [k.key, draft[k.key]])))).savedModes;
       setModes(saved); setDraft(saved); status.reload();
     } catch (e) { setError(e.message); } finally { setSaving(false); }
   };
@@ -319,18 +361,17 @@ export function PipedriveSend({ status }) {
   return (
     <div className="space-y-4">
       <p className="text-xs text-slate-500">
-        Choose what goes to Pipedrive. <b>On push</b> changes wait here until you push them. <b>Auto sync</b> changes go on their own about a minute
-        after they&apos;re made in KIT, and with your pushes too. Deletions only ever go when you push. Before each field goes, KIT checks
-        Pipedrive: if someone changed it there since the last pull, it&apos;s left alone and listed as a conflict, and the next pull brings
-        Pipedrive&apos;s version.
+        {selective ? <>Each kind of change is <b>Auto sync</b> (goes on its own about a minute after it&apos;s made in KIT, deletions too, and with your pushes), <b>On push</b> (waits here until you push) or <b>Do not send</b>.</>
+          : <>Every kind of change goes to Pipedrive on its own about a minute after it&apos;s made in KIT, deletions too, and with your pushes. Choose a <b>selective</b> sync above to set each kind by hand.</>}
+        {' '}Before each field goes, KIT checks Pipedrive: if someone changed it there since the last pull, it&apos;s left alone and listed as a conflict, and the next pull brings Pipedrive&apos;s version.
       </p>
       {s?.configured && !s.sending && (
-        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
-          Sending is off on this server, so testing here never changes your real deals, by hand or automatically. You can still preview.
-          It&apos;s on in production (or with PIPEDRIVE_PUSH=1).
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <b>One way only here.</b> {s.sending_blocked} Nothing done in KIT on this server reaches Pipedrive, by hand or automatically; you can still
+          preview. The production server syncs both ways.
         </p>
       )}
-      {!modes ? <p className="text-sm text-slate-400">Loading…</p> : (
+      {!modes ? <p className="text-sm text-slate-400">Loading…</p> : selective && (
         <>
           <div className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
             {KINDS.map((k) => (
@@ -339,6 +380,7 @@ export function PipedriveSend({ status }) {
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn text-xs" onClick={() => all('auto')}>All auto</button>
             <button type="button" className="btn text-xs" onClick={() => all('manual')}>All on push</button>
             <button type="button" className="btn text-xs" onClick={() => all('off')}>Send nothing</button>
             {changed.length > 0 && (
@@ -427,70 +469,225 @@ export function PipedriveSend({ status }) {
   );
 }
 
-const FILE_DELETES = [
-  { key: 'to_pipedrive', label: 'Files deleted in KIT are deleted in Pipedrive', hint: 'They go when you push to Pipedrive, after the preview. Never automatically.',
-    ask: 'Delete files in Pipedrive when they’re deleted in KIT? They’ll go with your next push, and the preview lists how many.' },
-  { key: 'to_kit', label: 'Files deleted in Pipedrive are deleted in KIT', hint: 'They go on the next pull or live update, for everyone, and can’t be restored from KIT.',
-    ask: 'Delete files in KIT when they’re deleted in Pipedrive? This happens on the next pull or live update, and includes files deleted there before now. KIT can’t restore them.' },
+const DIRECTIONS = [
+  { key: 'both', label: 'Two way', icon: ArrowLeftRight, hint: 'Pipedrive changes come into KIT (nightly, live and on pulls); every change made in KIT goes to Pipedrive on its own.' },
+  { key: 'to_kit', label: 'Pipedrive → KIT only', icon: ArrowLeft, hint: 'KIT follows Pipedrive. Nothing made or changed in KIT is ever sent.' },
+  { key: 'to_pipedrive', label: 'KIT → Pipedrive only', icon: ArrowRight, hint: 'Pipedrive follows KIT. Nothing is pulled, not even live updates, so KIT always wins.' },
+  { key: 'selective', label: 'Selective', icon: SlidersHorizontal, hint: 'Pipedrive changes come in; each kind of KIT change is set to Auto, On push or Off below.' },
 ];
 
-/** Admins: whether a file deleted on one side is deleted on the other. Each direction is its own choice. */
-function PipedriveFileDeletes({ status }) {
-  const saved = status.data?.fileDeletes;
-  const [draft, setDraft] = useState(null);
+/** Admins: which way the sync runs, the Sync button, and files held for a decision. */
+function PipedriveSync({ status }) {
+  const s = status.data;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => { if (saved && !draft) setDraft(saved); }, [saved]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!draft) return <p className="text-sm text-slate-400">Loading…</p>;
-  const changed = FILE_DELETES.filter((o) => draft[o.key] !== saved[o.key]);
-  const save = async () => {
-    if (changed.filter((o) => draft[o.key]).some((o) => !confirm(o.ask))) return;
-    setError(''); setBusy(true);
-    try { setDraft((await api.put('/pipedrive/file-deletes', draft)).fileDeletes); status.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  const choose = async (direction) => {
+    const d = DIRECTIONS.find((x) => x.key === direction);
+    if (direction === 'to_pipedrive' && !confirm('KIT → Pipedrive only: nothing is pulled from Pipedrive any more (not even live updates), and every change in KIT overwrites Pipedrive. Continue?')) return;
+    setBusy(true); setError('');
+    try { await api.put('/pipedrive/direction', { direction }); status.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+    return d;
   };
+  const sync = async () => {
+    const d = s?.direction;
+    const what = d === 'to_kit' ? 'pull everything from Pipedrive' : d === 'to_pipedrive' ? 'send everything waiting in KIT to Pipedrive' : 'pull everything from Pipedrive, then send everything waiting in KIT';
+    if (!confirm(`Sync now? This will ${what}.${s?.sending ? ' Deletions made in KIT are deleted in Pipedrive too.' : ''}`)) return;
+    setBusy(true); setError('');
+    try { await api.post('/pipedrive/sync', {}); status.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  const last = s?.lastSync;
   return (
     <div className="space-y-3">
-      {FILE_DELETES.map((o) => (
-        <label key={o.key} className="flex items-start gap-2 text-sm text-slate-700">
-          <input type="checkbox" className="mt-0.5" checked={draft[o.key]} disabled={busy} onChange={(e) => setDraft({ ...draft, [o.key]: e.target.checked })} />
-          <span><span className="font-medium">{o.label}</span><span className="block text-xs text-slate-500">{o.hint}</span></span>
-        </label>
-      ))}
-      {changed.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="btn-primary text-xs" onClick={save} disabled={busy}>
-            {busy && <Loader2 size={13} className="animate-spin" />} Save changes
+      <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Sync direction">
+        {DIRECTIONS.map((d) => (
+          <button key={d.key} type="button" role="radio" aria-checked={s?.direction === d.key} disabled={busy || !s} onClick={() => s?.direction !== d.key && choose(d.key)}
+            className={`rounded-lg border p-3 text-left transition ${s?.direction === d.key ? 'border-brand-500 bg-white ring-2 ring-brand-100' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+            <div className={`flex items-center gap-1.5 text-sm font-semibold ${s?.direction === d.key ? 'text-brand-700' : 'text-slate-700'}`}><d.icon size={15} /> {d.label}</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-slate-500">{d.hint}</div>
           </button>
-          <button type="button" className="btn text-xs" onClick={() => setDraft(saved)} disabled={busy}>Discard</button>
-        </div>
+        ))}
+      </div>
+      <p className="text-xs text-slate-500">
+        Files deleted on one side are always deleted on the other. If a pull finds {s?.fileHoldAt || 20} or more of KIT&apos;s files deleted in Pipedrive at once, they&apos;re
+        held instead and you decide here. Whatever is set, a server that isn&apos;t the production server never writes to Pipedrive.
+      </p>
+      {s?.fileHold && <FileHold status={status} />}
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" className="btn-primary" onClick={sync} disabled={busy || !s?.configured || s?.running || (!s?.pulling && !s?.sending)}
+          title={!s?.pulling && !s?.sending ? 'Nothing to sync on this server with this direction' : undefined}>
+          {s?.running ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} Sync now
+        </button>
+        {s?.running && <span className="text-sm text-slate-500">Pipedrive is busy ({s.label}): {s.phase}…</span>}
+        {s && !s.running && <span className="text-xs text-slate-500">
+          {s.direction === 'to_kit' ? 'Pulls everything from Pipedrive.' : s.direction === 'to_pipedrive' ? 'Sends everything waiting in KIT.' : 'Pulls everything, then sends everything waiting.'}
+          {!s.sending && s.direction !== 'to_kit' && ' (Not sending from this server.)'}
+        </span>}
+      </div>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {last && !s?.running && (
+        <Result ok={last.ok && !last.result?.sent?.errors?.length}>
+          <div className="flex items-center gap-1.5 font-medium">{last.ok ? <Check size={14} /> : <TriangleAlert size={14} />} {last.ok ? 'Last synced' : 'Last sync failed'} {when(last.at)} by {last.by}</div>
+          {last.ok ? (
+            <div className="mt-0.5 space-y-0.5 text-xs">
+              {last.pulling && <div>From Pipedrive: {summary(last.result.pulled || {}) || 'nothing changed'}.</div>}
+              {last.sending && <div>To Pipedrive: {sentSummary(last.result.sent?.sent) || 'nothing needed sending'}.{last.result.sent?.conflicts?.length ? ` Not sent (changed in Pipedrive since): ${last.result.sent.conflicts.map((c) => `${c.title} (${c.field})`).join('; ')}.` : ''}{last.result.sent?.errors?.length ? ` Failed: ${last.result.sent.errors.join('; ')}` : ''}</div>}
+            </div>
+          ) : <div className="mt-0.5 text-xs">{last.error}</div>}
+        </Result>
       )}
+    </div>
+  );
+}
+
+/** Files deleted in Pipedrive, many at once: delete them in KIT too, or keep them as KIT's own. */
+function FileHold({ status }) {
+  const h = status.data.fileHold;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+  const gone = h.files.filter((f) => f.deal_gone);
+  const tickets = [...new Set(gone.map((f) => f.ticket_id))].length;
+  const decide = async (action) => {
+    const ask = action === 'delete' ? `Delete ${plural(h.files.length, 'file')} in KIT, as they were deleted in Pipedrive? This can’t be undone.`
+      : `Keep ${plural(h.files.length, 'file')} in KIT as KIT’s own files? They’re no longer tied to Pipedrive and are never sent back.${tickets ? ` ${plural(tickets, 'ticket')} whose deal is gone from Pipedrive become KIT-only tickets on the KIT pipeline, back on the boards.` : ''}`;
+    if (!confirm(ask)) return;
+    setBusy(true); setError('');
+    try { await api.post('/pipedrive/file-hold', { action }); status.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+      <div className="flex items-start gap-1.5 font-medium"><TriangleAlert size={16} className="mt-0.5 shrink-0" />
+        <span>{plural(h.files.length, 'file')} that KIT has were deleted in Pipedrive ({when(h.at)}). They&apos;re held, not deleted, until you decide.{tickets ? ` ${plural(tickets, 'ticket')} had the deal itself deleted in Pipedrive.` : ''}</span>
+      </div>
+      <button type="button" className="flex items-center gap-1 text-xs hover:underline" onClick={() => setOpen((o) => !o)}><ChevronRight size={12} className={open ? 'rotate-90' : ''} /> {open ? 'Hide' : 'Show'} the files</button>
+      {open && (
+        <ul className="max-h-48 space-y-0.5 overflow-y-auto text-xs">
+          {h.files.map((f) => <li key={`${f.table}${f.id}`}><span className="text-amber-700">{f.title}:</span> {f.name}{f.deal_gone ? ' (deal deleted in Pipedrive)' : ''}</li>)}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="btn text-xs" onClick={() => decide('keep')} disabled={busy}><FileCheck size={13} /> Keep them in KIT as KIT files</button>
+        <button type="button" className="btn text-xs text-red-700" onClick={() => decide('delete')} disabled={busy}><Trash2 size={13} /> Delete them in KIT too</button>
+      </div>
+      {error && <p className="text-xs text-red-700">{error}</p>}
+    </div>
+  );
+}
+
+/** Admins: the sync's direction and Sync button, pulls, live updates, what goes to Pipedrive, projects and the parity check. */
+export default function PipedrivePanel() {
+  const status = usePipedrive();
+  const d = status.data?.direction;
+  return (
+    <div className="panel space-y-5">
+      <h2 className="section-title flex items-center gap-2"><RefreshCw size={16} className="text-brand-600" /> Pipedrive</h2>
+      <section className="space-y-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><ArrowLeftRight size={14} className="text-brand-600" /> Sync</h3>
+        <PipedriveSync status={status} />
+      </section>
+      {d !== 'to_pipedrive' && (
+        <section className="space-y-2 border-t border-slate-100 pt-4">
+          <h3 className="text-sm font-semibold text-slate-800">Pull from Pipedrive</h3>
+          <PipedrivePull scope="all" status={status} />
+        </section>
+      )}
+      {d !== 'to_pipedrive' && (
+        <section className="space-y-2 border-t border-slate-100 pt-4">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><Radio size={14} className="text-brand-600" /> Live updates from Pipedrive</h3>
+          <PipedriveLive />
+        </section>
+      )}
+      {d !== 'to_kit' && (
+        <section className="space-y-2 border-t border-slate-100 pt-4">
+          <h3 className="text-sm font-semibold text-slate-800">Send to Pipedrive</h3>
+          <PipedriveSend status={status} />
+        </section>
+      )}
+      <section className="space-y-2 border-t border-slate-100 pt-4">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><FolderKanban size={14} className="text-brand-600" /> Projects and fields</h3>
+        <PipedriveProjects status={status} />
+      </section>
+      <section className="space-y-2 border-t border-slate-100 pt-4">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><Scale size={14} className="text-brand-600" /> Do the numbers match?</h3>
+        <PipedriveParity />
+      </section>
+    </div>
+  );
+}
+
+/** Admins: Pipedrive has no webhooks for Projects, tasks or field definitions, so they're refreshed every ten minutes; here they can be refreshed now. */
+function PipedriveProjects({ status }) {
+  const [error, setError] = useState('');
+  const s = status.data;
+  const last = s?.lastProjects;
+  const refresh = async () => {
+    setError('');
+    try { await api.post('/pipedrive/pull/projects', {}); status.reload(); } catch (e) { setError(e.message); }
+  };
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-slate-500">
+        Pipedrive Projects are the plan on won contracts in Delivery: overview, phase, tasks, activities, notes and documents, both ways. Pipedrive has no live
+        events for projects or for field definitions, so KIT refreshes them every ten minutes and on every pull. Custom fields now known:{' '}
+        {s?.fields ? `${s.fields.deal} on deals, ${s.fields.person} on people, ${s.fields.organization} on organizations` : '…'}.
+      </p>
+      {last && (
+        <Result ok={last.ok}>
+          <div className="flex items-center gap-1.5 font-medium">{last.ok ? <Check size={14} /> : <TriangleAlert size={14} />} {last.ok ? 'Last refreshed' : 'Last refresh failed'} {when(last.at)}</div>
+          <div className="mt-0.5 text-xs">{last.ok ? summary(last.result) || 'Nothing changed.' : last.error}</div>
+        </Result>
+      )}
+      <button type="button" className="btn text-sm" onClick={refresh} disabled={!s?.configured || s?.running}><RefreshCw size={14} /> Refresh projects and fields now</button>
       {error && <p className="text-sm text-red-600">{error}</p>}
     </div>
   );
 }
 
-/** Admins: pull everything from Pipedrive, and send chosen KIT changes to it. */
-export default function PipedrivePanel() {
-  const status = usePipedrive();
+const money = (n) => `$${Math.round(Number(n) || 0).toLocaleString('en-US')}`;
+
+/** Admins: Pipedrive's deal counts and values next to KIT's, read live. Numbers that differ are flagged. */
+function PipedriveParity() {
+  const [p, setP] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const check = async () => {
+    setBusy(true); setError('');
+    try { setP(await api.get('/pipedrive/parity')); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  const sameCount = (r) => r.pipedrive.count === r.kit.count;
+  const sameValue = (r) => Math.round(r.pipedrive.value) === Math.round(r.kit.value);
   return (
-    <div className="panel space-y-5">
-      <h2 className="section-title flex items-center gap-2"><RefreshCw size={16} className="text-brand-600" /> Pipedrive</h2>
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold text-slate-800">Pull from Pipedrive</h3>
-        <PipedrivePull scope="all" status={status} />
-      </section>
-      <section className="space-y-2 border-t border-slate-100 pt-4">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><Radio size={14} className="text-brand-600" /> Live updates from Pipedrive</h3>
-        <PipedriveLive />
-      </section>
-      <section className="space-y-2 border-t border-slate-100 pt-4">
-        <h3 className="text-sm font-semibold text-slate-800">Send to Pipedrive</h3>
-        <PipedriveSend status={status} />
-      </section>
-      <section className="space-y-2 border-t border-slate-100 pt-4">
-        <h3 className="text-sm font-semibold text-slate-800">Deleted files</h3>
-        <PipedriveFileDeletes status={status} />
-      </section>
+    <div className="space-y-2">
+      <p className="text-xs text-slate-500">Open, won and lost deals in Pipedrive against the deals KIT has from it. Deals whose tickets were deleted in KIT are left out of KIT&apos;s side (a pull never brings them back, and KIT never deletes a deal in Pipedrive).</p>
+      <button type="button" className="btn text-sm" onClick={check} disabled={busy}>{busy ? <Loader2 size={14} className="animate-spin" /> : <Scale size={14} />} Check now</button>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {p && (
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase"><tr><th className="px-3 py-2">Deals</th><th className="px-3 py-2 text-right">Pipedrive</th><th className="px-3 py-2 text-right">KIT</th><th className="px-3 py-2" /></tr></thead>
+            <tbody>
+              {p.deals.map((r) => (
+                <tr key={r.key} className="border-t border-slate-100">
+                  <td className="px-3 py-2 font-medium text-slate-800">{r.label}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{r.pipedrive.count.toLocaleString()} · {money(r.pipedrive.value)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{r.kit.count.toLocaleString()} · {money(r.kit.value)}</td>
+                  <td className="px-3 py-2">{sameCount(r) && sameValue(r) ? <span className="flex items-center gap-1 text-xs text-emerald-700"><Check size={13} /> Match</span>
+                    : <span className="flex items-center gap-1 text-xs text-amber-700"><TriangleAlert size={13} /> {!sameCount(r) ? 'Counts differ' : 'Values differ'}</span>}</td>
+                </tr>
+              ))}
+              <tr className="border-t border-slate-100">
+                <td className="px-3 py-2 font-medium text-slate-800">Projects</td>
+                <td className="px-3 py-2 text-right tabular-nums">{p.projects.pipedrive}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{p.projects.kit}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{p.projects.unlinked ? `${p.projects.unlinked} in Pipedrive not on any deal` : ''}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
+            Checked {when(p.checked_at)}. Only in KIT (not Pipedrive deals): {p.only_kit.count} · {money(p.only_kit.value)}. Deleted in KIT, still in Pipedrive: {p.deleted_in_kit}.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

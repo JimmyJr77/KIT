@@ -45,6 +45,7 @@ export default function Alerts() {
   const select = (a) => {
     markRead(a);
     if (isDelivery(a)) return a.program_id && navigate(`/delivery?open=${a.program_id}`);
+    if (a.kind === 'pipedrive_file_hold') return navigate('/admin');
     if (isTravel(a)) return a.trip_id && navigate(`/travel?open=${a.trip_id}`);
     setOpen(a);
   };
@@ -88,8 +89,9 @@ export default function Alerts() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
                   <span className={a.read ? 'text-slate-600' : 'text-slate-900'}>
-                    <span className="font-semibold">{fullName(a.actor) || 'Someone'}</span>{' '}
-                    {a.kind === 'support_need' ? <>needs your support{a.support_id ? '' : ' (request since deleted)'}</>
+                    <span className="font-semibold">{a.kind === 'pipedrive_file_hold' ? 'Pipedrive' : fullName(a.actor) || 'Someone'}</span>{' '}
+                    {a.kind === 'pipedrive_file_hold' ? <>deleted {a.excerpt} of KIT&apos;s files. They&apos;re held, not deleted, until an admin decides in Admin Access › Pipedrive.</>
+                      : a.kind === 'support_need' ? <>needs your support{a.support_id ? '' : ' (request since deleted)'}</>
                       : a.kind === 'support_ticket' ? <>made a work ticket from your support request: <span className="font-semibold">{a.ticket_title || 'a deleted ticket'}</span></>
                       : a.kind === 'support_request' ? <>requested marketing support{a.event_id ? ' for' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>
                       : a.kind === 'support_accepted' ? <>created a work ticket for your marketing support request{a.event_id ? ' on' : ':'} <span className="font-semibold">{supportSubject(a)}</span></>

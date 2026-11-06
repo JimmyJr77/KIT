@@ -38,10 +38,29 @@ Integration secrets (`GEMINI_API_KEY`, `GSA_API_KEY`, and any MCP authentication
 ### Pipedrive in production
 
 1. In Render, open the service's **Environment** and add `PIPEDRIVE_API_KEY` with the API token from Pipedrive (Settings → Personal preferences → API). Use an admin's token so every deal is visible. Add `PIPEDRIVE_WEBHOOK_SECRET` too, using Render's **Generate** button for its value. Render asks for `sync: false` values only when a Blueprint is first created, so variables added to `render.yaml` later must be added by hand like this. Admin Access › Pipedrive names the service to use while the token is missing.
-2. Redeploy. KIT pulls everything from Pipedrive every night at 2 a.m. server time. To bring everything in right away, an admin selects **Pull everything** in Admin Access › Pipedrive.
-3. For live data, an admin selects **Turn on live updates** in the same panel. KIT registers webhooks in Pipedrive for deals, activities, notes, people, pipelines and stages, pointed at `https://<Render address>/api/pipedrive/webhook` (set `PUBLIC_URL` to use another HTTPS address). Pipedrive signs in with HTTP Basic auth: user `pipedrive` and the webhook secret. A few seconds after a change, KIT pulls just the deals it touched. The panel shows events received and the last live update.
+2. Redeploy. KIT pulls everything from Pipedrive every night at 2 a.m. server time, and refreshes Projects and field definitions every ten minutes. To bring everything in right away, an admin selects **Pull everything** in Admin Access › Pipedrive.
+3. For live data, an admin selects **Turn on live updates** in the same panel. KIT registers webhooks in Pipedrive for deals, activities, notes, people, organizations, pipelines and stages, pointed at `https://<Render address>/api/pipedrive/webhook` (set `PUBLIC_URL` to use another HTTPS address). Pipedrive signs in with HTTP Basic auth: user `pipedrive` and the webhook secret. A few seconds after a change, KIT pulls just the deals it touched. The panel shows events received and the last live update.
 
-Live updates follow the same rules as any pull. Pipedrive wins on its own fields, except fields changed in KIT that an admin hasn't sent yet. KIT's own work on a ticket is kept, and nothing deleted in Pipedrive is deleted in KIT. Turning live updates on or off changes only Pipedrive's webhook settings. KIT still never sends deal data to Pipedrive except when an admin sends it. Pipedrive removes a webhook after three days without a successful delivery; if the panel shows live updates as off, turn them on again.
+**Two-way only in production.** Only the production server (NODE_ENV=production on Render, or another production host with `PIPEDRIVE_TWO_WAY=1`) ever writes to Pipedrive: the API layer refuses every write from anywhere else, so a local or test server pulls from Pipedrive and never changes it, whatever an admin turns on. (`PIPEDRIVE_PUSH` no longer does anything.)
+
+**What stays the same on both sides.** A Pipedrive deal is a pipeline ticket, and everything on it has a home in KIT:
+
+| In Pipedrive | In KIT |
+|---|---|
+| Title, value, stage, owner, expected close date, probability, lost reason | The ticket (top of the ticket, and Deal details) |
+| Won / lost | The ticket's Won and Lost buttons. Only a **won** deal is a contract in Delivery; a deal sitting in an "Awarded" stage is still open until it's won. |
+| Account | Territory |
+| Every custom deal field (Capability Area, Opportunity Type, Google Deal, Google FSR, Knexus IP Utilization, RFP release date, Proposal Due Date, Prime or Sub, Prime Contractor, Expected Contract Term, NAICS, GovWin Link, …) | Deal details › Summary and Details, laid out as in Pipedrive, with Pipedrive's options. A field or option added in Pipedrive shows up in KIT on its own. |
+| Source origin, channel, channel ID | Deal details › Source |
+| Contact person and participants (first name, last name, title, labels, work phone and email) | People, and Deal details › Person |
+| Organization (address, labels, website, LinkedIn, industry, annual revenue, employees) | Deal details › Organization |
+| Products and installments | Deal details › Products and Installments |
+| Labels, followers, activities, notes, files | Tags, followers, activities, notes and documents on the ticket |
+| Projects: overview, status, phase, dates, owner, labels, plan (tasks, subtasks and activities), notes, files | Delivery: the won contract's project section, plan, project notes and documents. Marking a contract Complete completes the project, and the other way round. |
+
+**Direction.** Admin Access › Pipedrive › Sync sets which way the sync runs: two way (the default), Pipedrive → KIT only, KIT → Pipedrive only (nothing is pulled, not even live updates), or selective (each kind of KIT change set to Auto, On push or Off). **Sync now** pulls everything and then sends everything waiting, as the direction allows. Files deleted on one side are always deleted on the other; when a pull finds 20 or more of KIT's files deleted in Pipedrive at once, they're held instead, every admin is alerted, and an admin either deletes them in KIT or keeps them as KIT's own files (a ticket whose deal is gone from Pipedrive then becomes a KIT-only ticket on the KIT pipeline). Every delete in KIT that also deletes the record in Pipedrive says so before it happens.
+
+Pipedrive wins on its own fields, except fields changed in KIT that haven't gone yet. KIT's own work on a ticket (priorities, strategy, assessments) is kept. What's deleted in Pipedrive is deleted in KIT (notes, activities, files, products, tasks); a deal deleted or archived in Pipedrive is archived in KIT, never deleted. KIT → Pipedrive goes on its own about a minute after a change, for every kind of change (deletions too), unless an admin sets a kind to On push or Do not send in Admin Access › Pipedrive. A contract without a Pipedrive project can have one made from Delivery. **Do the numbers match?** in the same panel reads Pipedrive's open, won and lost counts and values next to KIT's.
 
 To check the frontend deployment output locally:
 
@@ -67,10 +86,10 @@ First name, last name, email, phone (formatted as `xxx-xxx-xxxx` while you type)
 - **General purpose:** multi-select. Options are Internal, Client, Partner, Conference, and Other.
 - **Locations:** domestic trips take City and State. International trips take City, State/Province, and Country.
 - **Quarter:** set automatically from Date From (calendar year), e.g. `2026 Q4`.
-- **Airfare:** choose Estimated (Airfare MCP), Booked, or No Air Travel. Estimates re-run when the route or dates change. Dates default to the trip dates and can be edited. Each trip can also set its earliest and latest departure (default 10am–8pm) and max layovers (default direct); these apply each way.
+- **Airfare:** choose Estimated (Airfare MCP), Booked, or No Air Travel. Estimates re-run when the route or dates change. Dates default to the trip dates and can be edited. Each trip can also set its earliest and latest departure (default 10am–8pm) and max layovers (default direct); these apply each way. Set your own defaults for new trips under **Settings** on the Travel page.
 - **Train/Tram:** a dollar amount.
 - **POV:** miles × the GSA mileage rate, with an optional round trip. The GSA rate already covers fuel, so gas isn't reimbursed separately.
-- **Car rental:** estimated through the Rental Car MCP using the vehicle class, location, and dates/times, or entered as booked. Dates default to the trip dates and can be edited. Each trip can also set its earliest and latest departure (default 10am–8pm) and max layovers (default direct); these apply each way.
+- **Car rental:** estimated through the Rental Car MCP using the vehicle class, location, and dates/times, or entered as booked. Dates default to the trip dates and can be edited.
 - **Lodging:** priced at the GSA FY2027 rate for each location, including seasonal rates. You can add several hotels to split a stay. Each hotel can override the nightly rate.
 - **M&IE:** the GSA daily rate for the location, with the first and last day at 75%. A daily breakdown and a manual override are available.
 - **Refresh:** every page load and every click of **Refresh estimates** re-prices all estimated airfare and rental cars on upcoming trips.
@@ -84,6 +103,9 @@ The FY2027 GSA per diem file (`server/data/gsa/FY2027_PerDiemRates.csv`) ships w
 The POV mileage rate is set separately each calendar year and is seeded at $0.725/mi. **Confirm the 2027 rate** and update it in the panel.
 
 GSA doesn't cover international (OCONUS) locations, so those take a manual rate (State Department rates).
+
+### Delivery
+Won contracts. A pipeline ticket becomes a contract the moment its deal is marked **won** (on the ticket, on the BD Pipeline board's last column, or in Pipedrive), and comes with its Pipedrive project: overview, phase on the Delivery board, dates, owner, labels, the plan (tasks with subtasks, and activities, ticked off on either side), project notes, documents, and the deal's payment schedule. A contract whose deal is reopened or lost goes on hold until an admin keeps or deletes it.
 
 ### Weekly Priorities
 - Pick a team and its **check-in day**. The week strip scrolls left and right through past and future weeks; use the arrows, a date picker, or "This week."

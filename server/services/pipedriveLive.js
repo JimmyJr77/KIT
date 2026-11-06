@@ -1,7 +1,7 @@
 // Live updates from Pipedrive. Pipedrive's webhooks tell KIT when a deal, activity, note, person, pipeline or stage
 // changes; KIT gathers the deals they touch for a few seconds and pulls just those, the same way any pull does (so
 // Pipedrive wins on the fields it holds, except ones changed in KIT that haven't been sent, and KIT's own work is kept).
-// Like every pull, nothing is deleted in KIT when it's deleted in Pipedrive.
+// Like every pull, what's deleted in Pipedrive is deleted in KIT (a deleted deal's ticket is archived).
 //
 // Nothing here writes deal data to Pipedrive. The webhooks themselves are registered only when an admin turns live
 // updates on in Admin Access (and removed when they turn it off).
@@ -10,13 +10,14 @@
 // PIPEDRIVE_WEBHOOK_SECRET. Without that secret, the endpoint turns every request away.
 import crypto from 'node:crypto';
 import { db, json, getSetting, setSetting } from '../db.js';
-import { call, startPull, syncStatus, pipedriveConfigured } from './pipedrive.js';
+import { call, startPull, syncStatus, pipedriveConfigured, sendingAllowed, sendingBlockedReason, pullsAllowed } from './pipedrive.js';
 
 export const WEBHOOK_USER = 'pipedrive';
 const WEBHOOK_PATH = '/api/pipedrive/webhook';
 const WEBHOOK_NAME = 'KIT live updates';
-// What KIT listens for. Pipedrive has no file events, but adding a file changes its deal, which brings the file over.
-const OBJECTS = ['deal', 'activity', 'note', 'person', 'pipeline', 'stage'];
+// What KIT listens for. Pipedrive has no file or project events, but adding a file changes its deal, which brings the
+// file over, and projects are refreshed every few minutes.
+const OBJECTS = ['deal', 'activity', 'note', 'person', 'organization', 'pipeline', 'stage'];
 const secret = () => process.env.PIPEDRIVE_WEBHOOK_SECRET || '';
 // Wait this long after the last event before pulling (bulk edits send many at once), but never longer than MAX_WAIT.
 const QUIET = 5000;
@@ -73,7 +74,7 @@ export function dealsIn(body) {
   const ids = new Set();
   const add = (v) => { const n = Number(v && typeof v === 'object' ? v.value ?? v.id : v); if (n > 0) ids.add(n); };
   if (entity === 'deal') {
-    if (!deleted) add(meta.entity_id ?? meta.id ?? now?.id); // a deleted deal stays in KIT, as with a pull
+    add(meta.entity_id ?? meta.id ?? now?.id ?? before?.id); // a deleted deal is pulled too: the pull archives its ticket
   } else if (entity === 'activity' || entity === 'note') {
     add(now?.deal_id); add(before?.deal_id); // moved to another deal: both
   } else if (entity === 'person') {
@@ -81,6 +82,12 @@ export function dealsIn(body) {
     if (person) {
       db.prepare(`SELECT DISTINCT t.pipedrive_id FROM tickets t JOIN ticket_contacts tc ON tc.ticket_id = t.id JOIN contacts c ON c.id = tc.contact_id
         WHERE c.pipedrive_id = ? AND t.pipedrive_id IS NOT NULL`).all(person).forEach((r) => add(r.pipedrive_id));
+    }
+  } else if (entity === 'organization') {
+    const org = Number(meta.entity_id ?? meta.id ?? now?.id ?? before?.id);
+    if (org) {
+      db.prepare(`SELECT DISTINCT t.pipedrive_id FROM tickets t JOIN organizations o ON o.id = t.organization_id WHERE o.pipedrive_id = ? AND t.pipedrive_id IS NOT NULL`)
+        .all(org).forEach((r) => add(r.pipedrive_id));
     }
   }
   return { entity, action, deals: [...ids], meta: entity === 'pipeline' || entity === 'stage' };
@@ -111,7 +118,7 @@ function schedule(ms) {
 function flush() {
   timer = null;
   if (!pending.size && !refreshMeta) { firstAt = 0; return; }
-  if (!pipedriveConfigured()) { pending.clear(); refreshMeta = false; firstAt = 0; return; }
+  if (!pipedriveConfigured() || !pullsAllowed()) { pending.clear(); refreshMeta = false; firstAt = 0; return; }
   const dealIds = [...pending];
   try {
     startPull(dealIds.length > MANY ? { kind: 'all' } : { kind: 'deals', dealIds });
@@ -159,6 +166,7 @@ export async function liveStatus(req) {
 
 /** Register a webhook for each kind of record KIT listens for (any that are already there are kept). */
 export async function turnOn(req) {
+  if (!sendingAllowed()) throw new Error(`Live updates are registered from the production server only. ${sendingBlockedReason()}`);
   if (!secret()) throw new Error('Set PIPEDRIVE_WEBHOOK_SECRET on the server first.');
   const where = publicUrl(req);
   if (!where.ok) throw new Error(`Pipedrive can only send to a public HTTPS address, and this server is at ${where.url || 'an unknown address'}. Set PUBLIC_URL.`);

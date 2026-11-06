@@ -154,7 +154,8 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
       created_at: stamp(created), updated_at: stamp(closedOn), bd_director_id: director.id, territory_id: t.territory,
       projected_win_date: t.date, assessment: json.str(assessment(status === 'Awarded')),
     });
-    db.prepare('UPDATE tickets SET done_at = ? WHERE id = ?').run(stamp(closedOn), id);
+    db.prepare('UPDATE tickets SET done_at = ?, deal_status = ?, won_at = ?, lost_at = ? WHERE id = ?')
+      .run(stamp(closedOn), status === 'Awarded' ? 'won' : 'lost', status === 'Awarded' ? stamp(closedOn) : null, status === 'Lost' ? stamp(closedOn) : null, id);
     backdate(id, t, status, closedOn);
     closed.push({ id, title, status, closedOn, value, director });
   });

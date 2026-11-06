@@ -1,7 +1,7 @@
 // CRM: contacts, their interaction log, and the tickets they're involved in. Contacts added from a
 // ticket are linked to it, and every contact appears on the master CRM page.
 import { Router } from 'express';
-import { db } from '../db.js';
+import { db, json } from '../db.js';
 
 const r = Router();
 
@@ -14,7 +14,7 @@ function withTickets(rows) {
   const links = db.prepare(`SELECT tc.contact_id, t.id, t.opportunity_title, t.ticket_type FROM ticket_contacts tc
     JOIN tickets t ON t.id = tc.ticket_id ORDER BY t.opportunity_title`).all();
   return rows.map(({ by_first, by_last, ...c }) => ({
-    ...c,
+    ...c, labels: json.parse(c.labels, []),
     created_by_user: by_first ? { id: c.created_by, first_name: by_first, last_name: by_last } : null,
     tickets: links.filter((l) => l.contact_id === c.id).map(({ contact_id, ...t }) => t),
   }));
@@ -33,10 +33,18 @@ function fields(b = {}) {
     phone: s(b.phone) || null,
     relationship: Math.max(0, Math.min(5, Math.round(Number(b.relationship) || 0))),
     notes: s(b.notes) || null,
+    labels: json.str([...new Set((Array.isArray(b.labels) ? b.labels : []).map((x) => s(x)).filter(Boolean))]),
   };
   if (!f.first_name) return { error: 'First name is required' };
   if (f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) return { error: 'That email doesn’t look right' };
   return { f };
+}
+
+/** KIT's organization row for a name (made if new), so a person's organization is Pipedrive's too. */
+function organizationFor(name) {
+  if (!name) return null;
+  return db.prepare('SELECT id FROM organizations WHERE name = ? COLLATE NOCASE LIMIT 1').get(name)?.id
+    ?? db.prepare('INSERT INTO organizations (name) VALUES (?)').run(name).lastInsertRowid;
 }
 
 /** Every contact, alphabetical by last name. `q` searches name, organization, role, email, and notes. */
@@ -70,8 +78,9 @@ r.get('/:id', (req, res) => {
 r.post('/', (req, res) => {
   const { f, error } = fields(req.body);
   if (error) return res.status(400).json({ error });
-  const id = db.prepare(`INSERT INTO contacts (first_name, last_name, organization, role, email, phone, relationship, notes, created_by)
-    VALUES (@first_name, @last_name, @organization, @role, @email, @phone, @relationship, @notes, @created_by)`).run({ ...f, created_by: req.user.id }).lastInsertRowid;
+  const id = db.prepare(`INSERT INTO contacts (first_name, last_name, organization, organization_id, role, email, phone, relationship, notes, labels, created_by)
+    VALUES (@first_name, @last_name, @organization, @organization_id, @role, @email, @phone, @relationship, @notes, @labels, @created_by)`)
+    .run({ ...f, organization_id: organizationFor(f.organization), created_by: req.user.id }).lastInsertRowid;
   // Interaction notes written while adding the person, newest first; saved oldest first so the order holds.
   const notes = (Array.isArray(req.body?.interactions) ? req.body.interactions : []).map((n) => String(n || '').trim()).filter(Boolean);
   const addNote = db.prepare("INSERT INTO contact_interactions (contact_id, body, author_id, created_at) VALUES (?, ?, ?, datetime('now', ?))");
@@ -88,8 +97,10 @@ r.put('/:id', (req, res) => {
   if (!db.prepare('SELECT 1 FROM contacts WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'Contact not found' });
   const { f, error } = fields(req.body);
   if (error) return res.status(400).json({ error });
-  db.prepare(`UPDATE contacts SET first_name=@first_name, last_name=@last_name, organization=@organization, role=@role, email=@email,
-    phone=@phone, relationship=@relationship, notes=@notes, updated_at=datetime('now') WHERE id=@id`).run({ ...f, id: Number(req.params.id) });
+  // On a person from Pipedrive, a change to a field Pipedrive holds waits to be sent.
+  db.prepare(`UPDATE contacts SET first_name=@first_name, last_name=@last_name, organization=@organization, organization_id=@organization_id, role=@role, email=@email,
+    phone=@phone, relationship=@relationship, notes=@notes, labels=@labels, updated_at=datetime('now'), pipedrive_pending=(pipedrive_id IS NOT NULL) WHERE id=@id`)
+    .run({ ...f, organization_id: organizationFor(f.organization), id: Number(req.params.id) });
   res.json({ contact: one(req.params.id) });
 });
 

@@ -29,7 +29,7 @@ function known() {
 function context() {
   const territories = db.prepare('SELECT name FROM territories ORDER BY position, name').all().map((t) => t.name);
   const orgs = db.prepare(`SELECT organization, COUNT(*) AS n FROM tickets WHERE ticket_type = 'bid' AND archived_at IS NULL
-      AND COALESCE(pipeline_status, '') NOT IN ('Awarded', 'Lost') AND COALESCE(organization, '') != ''
+      AND deal_status = 'open' AND COALESCE(pipeline_status, '') NOT IN ('Awarded', 'Lost') AND COALESCE(organization, '') != ''
     GROUP BY organization ORDER BY n DESC LIMIT 25`).all().map((o) => o.organization);
   return [
     `Account types: ${ACCOUNT_TYPES.join(', ')}`,

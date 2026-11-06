@@ -11,7 +11,7 @@ import { db, json } from './db.js';
 import { weekStartFor } from './routes/priorities.js';
 import {
   bids, contracts, expected, byStage, qualifiedBy, bookingsByQuarter, backlog, bookToBill, bookToBillSeries, fundedTtm, pipelineByPerson,
-  targets, quartersTarget, trailingQuarters, trends, quarters, quarterRange, localToday, QUALIFIED_STAGES,
+  targets, quartersTarget, trailingQuarters, trends, quarters, quarterRange, localToday, QUALIFIED_STAGES, isOpen,
 } from './financials.js';
 import { spendEntries, spendFor } from './marketingSpend.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
@@ -119,7 +119,7 @@ export function bdDashboard(s, basis = 'calendar') {
   const thisQ = quarterFor(today);
   const qr = quarterRange(thisQ);
   const { list, deals } = money(s);
-  const qualified = list.filter((t) => QUALIFIED_STAGES.includes(t.pipeline_status));
+  const qualified = list.filter((t) => isOpen(t) && QUALIFIED_STAGES.includes(t.pipeline_status));
   const t = targets(year, s.director);
   const booked = (start, end = today) => sum(deals.filter((p) => p.awarded_on >= start && p.awarded_on <= end), (p) => p.value);
   const billed = (start, end = today) => bookToBill(deals, start, end).billed;

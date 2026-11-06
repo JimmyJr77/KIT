@@ -27,7 +27,7 @@ export function snapshotForecast(date = localToday()) {
   if (getSetting(key)) return 0;
   const { start, end } = quarterRange(quarter);
   const bids = db.prepare(`SELECT * FROM tickets WHERE ticket_type = 'bid' AND archived_at IS NULL AND projected_win_date BETWEEN ? AND ?
-    AND (pipeline_status IS NULL OR pipeline_status NOT IN (SELECT value FROM json_each(?)))`).all(start, end, JSON.stringify(CLOSED));
+    AND deal_status = 'open' AND (pipeline_status IS NULL OR pipeline_status NOT IN (SELECT value FROM json_each(?)))`).all(start, end, JSON.stringify(CLOSED));
   if (!bids.length) return 0;
   const model = pwinModel();
   const add = db.prepare(`INSERT INTO forecast_snapshots (quarter, taken_on, ticket_id, opportunity_title, bd_director_id, territory_id,

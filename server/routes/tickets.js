@@ -8,12 +8,13 @@ import path from 'node:path';
 import { db, json, getSetting, setSetting, withTeams, defaultAssignment, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED } from '../db.js';
 import { requireAdmin } from '../auth.js';
 import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../src/lib/assessment.js';
-import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
+import { LANES, laneFor, isArchived, isClosed } from '../../src/lib/lanes.js';
 import { recordWork } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
 import { ticketFields } from './priorities.js';
 import { statusesFor, listPipelines } from '../pipelines.js';
 import { queueDelete } from '../services/pipedrive.js';
+import { fieldsOf, customDealFields } from '../services/pipedriveFields.js';
 import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
 import { NEXT_STEP_SQL } from '../activities.js';
 
@@ -43,7 +44,7 @@ export const COMMENT_SQL = `SELECT m.*, u.first_name, u.last_name, c.title AS ca
 
 export const commentOut = (m) => ({
   id: m.id, ticket_id: m.ticket_id, ticket_title: m.ticket_title, card_id: m.card_id, card_title: m.card_title, parent_id: m.parent_id,
-  kind: m.kind, body: m.body, pinned: !!m.pinned, created_at: m.created_at, updated_at: m.updated_at ?? null, author: author(m),
+  kind: m.kind, body: m.body, pinned: !!m.pinned, created_at: m.created_at, updated_at: m.updated_at ?? null, author: author(m), synced: !!m.pipedrive_id,
   target_type: m.target_type ?? null, target_id: m.target_id ?? null,
   reply_count: m.reply_count ?? 0, last_reply_at: m.last_reply_at ?? null,
   card_assignee_ids: m.card_assignee_ids ? String(m.card_assignee_ids).split(',').map(Number) : [],
@@ -309,15 +310,15 @@ r.put('/:id/lane', (req, res) => {
   const set = (sql, ...args) => db.prepare(`UPDATE tickets SET ${sql} WHERE id = ?`).run(...args, t.id);
 
   if (lane) {
-    if (t.ticket_type === 'bid' && ['Awarded', 'Lost'].includes(t.pipeline_status) && lane !== 'done') {
-      return res.status(400).json({ error: `This pipeline ticket is ${t.pipeline_status}, so it stays in Done. Change its pipeline stage to reopen it.` });
+    if (t.ticket_type === 'bid' && isClosed(t) && lane !== 'done') {
+      return res.status(400).json({ error: `This pipeline ticket is ${t.deal_status}, so it stays in Done. Reopen it to move it.` });
     }
     set(`lane = ?, lane_locked = ?, archived_at = NULL, archive_set_id = NULL,
       done_at = CASE WHEN ? = 'done' THEN COALESCE(done_at, datetime('now')) ELSE NULL END`, lane, t.ticket_type === 'bid' ? 1 : 0, lane);
   }
   if (typeof b.locked === 'boolean' && t.ticket_type === 'bid') {
     if (b.locked) set('lane = COALESCE(?, lane), lane_locked = 1', lane || b.current || null);
-    else set("lane = NULL, lane_locked = 0, done_at = CASE WHEN pipeline_status IN ('Awarded', 'Lost') THEN done_at ELSE NULL END");
+    else set("lane = NULL, lane_locked = 0, done_at = CASE WHEN deal_status IN ('won', 'lost') THEN done_at ELSE NULL END");
   }
   if (typeof b.archived === 'boolean') {
     if (b.archived) set("archived_at = datetime('now')");
@@ -334,8 +335,49 @@ r.put('/:id/stage', (req, res) => {
   if (t.ticket_type === 'work') return res.status(400).json({ error: 'Work tickets have no pipeline stage' });
   const stage = req.body?.pipeline_status ?? null;
   if (stage !== null && !statusesFor(t.pipeline_id).includes(stage)) return res.status(400).json({ error: 'Unknown pipeline stage' });
-  db.prepare("UPDATE tickets SET pipeline_status = ?, updated_at = datetime('now') WHERE id = ?").run(stage, t.id);
+  db.transaction(() => {
+    db.prepare("UPDATE tickets SET pipeline_status = ?, updated_at = datetime('now') WHERE id = ?").run(stage, t.id);
+    // Lost is a closing stage: moving there loses the deal, moving out of it reopens the deal. Won is its own button.
+    if (stage === 'Lost' && t.deal_status !== 'lost') setOutcome(t.id, 'lost', req.body?.lost_reason ?? t.lost_reason);
+    else if (stage !== 'Lost' && t.deal_status === 'lost') setOutcome(t.id, 'open');
+  })();
   res.json({ ticket: ticketRow(t.id) });
+});
+
+/** Mark a pipeline ticket won, lost (with a reason) or open again. The ticket's stage follows: lost → Lost; won on KIT's own pipeline → Awarded. */
+function setOutcome(id, status, lostReason = null) {
+  const t = ticketRow(id);
+  if (status === 'won') {
+    db.prepare(`UPDATE tickets SET deal_status = 'won', won_at = COALESCE(won_at, datetime('now')), lost_at = NULL, lost_reason = NULL, done_at = COALESCE(done_at, datetime('now')),
+      pipeline_status = CASE WHEN pipeline_id IS NULL THEN 'Awarded' WHEN pipeline_status = 'Lost' THEN ? ELSE pipeline_status END, updated_at = datetime('now') WHERE id = ?`)
+      .run(lastOpenStage(t), id);
+  } else if (status === 'lost') {
+    db.prepare(`UPDATE tickets SET deal_status = 'lost', lost_at = COALESCE(lost_at, datetime('now')), won_at = NULL, lost_reason = ?, done_at = COALESCE(done_at, datetime('now')),
+      pipeline_status = 'Lost', updated_at = datetime('now') WHERE id = ?`).run(String(lostReason || '').trim() || null, id);
+  } else {
+    db.prepare(`UPDATE tickets SET deal_status = 'open', won_at = NULL, lost_at = NULL, lost_reason = NULL, done_at = NULL, lane = NULL, lane_locked = 0,
+      pipeline_status = CASE WHEN pipeline_status = 'Lost' THEN ? ELSE pipeline_status END, updated_at = datetime('now') WHERE id = ?`).run(lastOpenStage(t), id);
+  }
+}
+/** The stage a ticket was in before it was lost, from its history; failing that, its pipeline's first stage. */
+function lastOpenStage(t) {
+  const last = db.prepare("SELECT pipeline_status FROM ticket_history WHERE ticket_id = ? AND pipeline_status IS NOT NULL AND pipeline_status != 'Lost' ORDER BY id DESC LIMIT 1").get(t.id);
+  return last?.pipeline_status || statusesFor(t.pipeline_id)[0] || null;
+}
+
+/**
+ * Body: { deal_status: 'won' | 'lost' | 'open', lost_reason? }. Won puts the ticket into Delivery as a contract; lost takes a
+ * reason (Pipedrive's lost reasons are offered); open reopens a closed deal. On a Pipedrive deal the change is synced.
+ */
+r.put('/:id/outcome', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets are won or lost' });
+  const status = req.body?.deal_status;
+  if (!['won', 'lost', 'open'].includes(status)) return res.status(400).json({ error: 'Choose won, lost or open' });
+  setOutcome(t.id, status, req.body?.lost_reason);
+  recordWork(req.user, { kind: 'ticket', ticket_id: t.id, summary: `${t.opportunity_title}: ${status === 'open' ? 'reopened' : status}` });
+  res.json({ ticket: ticketRow(t.id), program: db.prepare('SELECT id FROM delivery_programs WHERE ticket_id = ?').get(t.id) || null });
 });
 
 // ---- Full timeline of a master ticket, newest first
@@ -352,7 +394,9 @@ r.get('/:id/timeline', (req, res) => {
     bd_director_id: t.bd_director_id ?? null, territory_id: t.territory_id ?? null,
     projected_win_date: t.projected_win_date ?? null, win_date_undetermined: !!t.win_date_undetermined,
     lost_reason: t.lost_reason ?? null, probability: t.probability ?? null, currency: t.currency ?? null,
-    labels: json.parse(t.labels, []), source: t.source ?? null };
+    labels: json.parse(t.labels, []), source: t.source ?? null, deal_status: t.deal_status || 'open', won_at: t.won_at ?? null, lost_at: t.lost_at ?? null,
+    pipeline_id: t.pipeline_id ?? null, pipedrive_id: t.pipedrive_id ?? null, organization_id: t.organization_id ?? null,
+    lost_reasons: (fieldsOf('deal').find((f) => f.key === 'lost_reason')?.options || []).map((o) => o.label) };
   const events = [{ type: 'ticket', at: t.created_at, author: t.first_name ? { id: t.created_by, first_name: t.first_name, last_name: t.last_name } : null }];
 
   // Each new activity (a priority made on the Weekly Priorities board is one too); subtasks aren't events.
@@ -386,7 +430,7 @@ r.get('/:id/timeline', (req, res) => {
     LEFT JOIN ticket_process_steps p ON p.id = f.process_step_id WHERE f.ticket_id = ?`).all(t.id)
     .forEach((f) => events.push({
       type: 'file', at: f.created_at, author: f.first_name ? { id: f.uploaded_by, first_name: f.first_name, last_name: f.last_name } : null,
-      file: { id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, step_type: f.step_type ?? null, url: f.url ?? null, email_id: f.email_id ?? null },
+      file: { id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, step_type: f.step_type ?? null, url: f.url ?? null, email_id: f.email_id ?? null, synced: !!(f.pipedrive_id || f.pipedrive_note_id) },
     }));
 
   db.prepare('SELECT * FROM ticket_emails WHERE ticket_id = ?').all(t.id).forEach((m) => events.push({
@@ -619,13 +663,23 @@ r.get('/files/:id', (req, res) => {
 
 // ---- Deal details: the Pipedrive deal fields that have no other place on the ticket, its followers and its products.
 
+const orgOut = (o) => (o ? { ...o, labels: json.parse(o.labels, []) } : null);
 const detailsOf = (t) => ({
   lost_reason: t.lost_reason ?? null, probability: t.probability ?? null, currency: t.currency ?? null, source: t.source ?? null,
+  source_origin: t.source_origin ?? null, source_origin_id: t.source_origin_id ?? null, source_channel_id: t.source_channel_id ?? null,
+  deal_status: t.deal_status || 'open', won_at: t.won_at ?? null, lost_at: t.lost_at ?? null, value: t.value ?? null, projected_win_date: t.projected_win_date ?? null,
   labels: json.parse(t.labels, []), custom_fields: json.parse(t.custom_fields, []), pipedrive_id: t.pipedrive_id ?? null,
   pipeline_id: t.pipeline_id ?? null, pipelines: listPipelines().map(({ id, name }) => ({ id, name })),
+  // Pipedrive's field definitions, so the form shows every custom deal field with its options, and people's and organizations' labels.
+  fields: { deal: customDealFields(), person: fieldsOf('person'), organization: fieldsOf('organization') },
+  organization: orgOut(t.organization_id ? db.prepare('SELECT * FROM organizations WHERE id = ?').get(t.organization_id) : null)
+    || orgOut(t.organization ? db.prepare('SELECT * FROM organizations WHERE name = ? COLLATE NOCASE LIMIT 1').get(t.organization) : null),
+  people: db.prepare(`SELECT c.id, c.first_name, c.last_name, c.email, c.phone, c.role, c.labels, c.organization, c.pipedrive_id, tc.is_primary FROM ticket_contacts tc
+    JOIN contacts c ON c.id = tc.contact_id WHERE tc.ticket_id = ? ORDER BY tc.is_primary DESC, c.last_name, c.first_name`).all(t.id).map((c) => ({ ...c, labels: json.parse(c.labels, []), is_primary: !!c.is_primary })),
   followers: db.prepare(`SELECT u.id, u.first_name, u.last_name FROM ticket_followers f JOIN users u ON u.id = f.user_id
     WHERE f.ticket_id = ? ORDER BY u.last_name, u.first_name`).all(t.id),
   products: db.prepare('SELECT * FROM ticket_products WHERE ticket_id = ? ORDER BY position, id').all(t.id),
+  installments: db.prepare('SELECT * FROM ticket_installments WHERE ticket_id = ? ORDER BY billing_date, id').all(t.id),
 });
 
 r.get('/:id/details', (req, res) => {
@@ -655,7 +709,9 @@ r.put('/:id/details', (req, res) => {
   }
   if ('labels' in b) { set.labels = cleanLabels(b.labels); set.labels_pending = t.pipedrive_id ? 1 : 0; }
   if ('custom_fields' in b) {
-    set.custom_fields = json.str((b.custom_fields || []).map((f) => ({ name: String(f.name ?? '').trim(), value: String(f.value ?? '').trim() })).filter((f) => f.name));
+    // Pipedrive's fields keep their key (so the change is synced); KIT-only fields are just a name and value.
+    set.custom_fields = json.str((b.custom_fields || []).map((f) => ({ ...(f.key ? { key: String(f.key) } : {}), name: String(f.name ?? '').trim(), value: String(f.value ?? '').trim() }))
+      .filter((f) => f.name && (f.value || !f.key)));
   }
   if ('pipeline_id' in b && (Number(b.pipeline_id) || null) !== (t.pipeline_id ?? null)) {
     const p = listPipelines().find((x) => x.id === (Number(b.pipeline_id) || null));
@@ -728,6 +784,7 @@ r.put('/products/:pid', (req, res) => {
   const { out, error } = productFields(req.body || {}, true);
   if (error) return res.status(400).json({ error });
   Object.entries(out).forEach(([k, v]) => db.prepare(`UPDATE ticket_products SET ${k} = ? WHERE id = ?`).run(v, p.id));
+  db.prepare('UPDATE ticket_products SET pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?').run(p.id);
   touch(p.ticket_id);
   res.json(detailsOf(ticketRow(p.ticket_id)));
 });
@@ -736,8 +793,76 @@ r.delete('/products/:pid', (req, res) => {
   const p = db.prepare('SELECT * FROM ticket_products WHERE id = ?').get(req.params.pid);
   if (!p) return res.status(404).json({ error: 'Product not found' });
   db.prepare('DELETE FROM ticket_products WHERE id = ?').run(p.id);
+  queueDelete('product', p.pipedrive_id, ticketRow(p.ticket_id)?.pipedrive_id);
   touch(p.ticket_id);
   res.json(detailsOf(ticketRow(p.ticket_id)));
+});
+
+// ---- Installments: the deal's payment schedule (Pipedrive's installments), two-way.
+
+function installmentFields(b) {
+  const amount = Number(b.amount);
+  if (!(amount > 0)) return { error: 'Enter an amount above zero' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(b.billing_date || '')) return { error: 'Enter the billing date' };
+  return { out: { description: String(b.description ?? '').trim() || null, amount, billing_date: b.billing_date } };
+}
+
+r.post('/:id/installments', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const { out, error } = installmentFields(req.body || {});
+  if (error) return res.status(400).json({ error });
+  db.prepare('INSERT INTO ticket_installments (ticket_id, description, amount, billing_date) VALUES (?, ?, ?, ?)').run(t.id, out.description, out.amount, out.billing_date);
+  touch(t.id);
+  res.json(detailsOf(t));
+});
+
+r.put('/installments/:iid', (req, res) => {
+  const i = db.prepare('SELECT * FROM ticket_installments WHERE id = ?').get(req.params.iid);
+  if (!i) return res.status(404).json({ error: 'Installment not found' });
+  const { out, error } = installmentFields({ ...i, ...(req.body || {}) });
+  if (error) return res.status(400).json({ error });
+  db.prepare('UPDATE ticket_installments SET description = ?, amount = ?, billing_date = ?, pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?')
+    .run(out.description, out.amount, out.billing_date, i.id);
+  touch(i.ticket_id);
+  res.json(detailsOf(ticketRow(i.ticket_id)));
+});
+
+r.delete('/installments/:iid', (req, res) => {
+  const i = db.prepare('SELECT * FROM ticket_installments WHERE id = ?').get(req.params.iid);
+  if (!i) return res.status(404).json({ error: 'Installment not found' });
+  db.prepare('DELETE FROM ticket_installments WHERE id = ?').run(i.id);
+  queueDelete('installment', i.pipedrive_id, ticketRow(i.ticket_id)?.pipedrive_id);
+  touch(i.ticket_id);
+  res.json(detailsOf(ticketRow(i.ticket_id)));
+});
+
+// ---- The deal's organization: Pipedrive's organization record, edited here and synced.
+
+/** Body: name, address, labels [names], website, linkedin, industry, annual_revenue, employee_count. Makes the organization if the ticket has none. */
+r.put('/:id/organization', (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const b = req.body || {};
+  const text = (v) => String(v ?? '').trim() || null;
+  const name = text(b.name) || t.organization;
+  if (!name) return res.status(400).json({ error: 'Name the organization' });
+  const fields = {
+    name, address: text(b.address), labels: json.str([...new Set((Array.isArray(b.labels) ? b.labels : []).map((x) => String(x).trim()).filter(Boolean))]),
+    website: text(b.website), linkedin: text(b.linkedin), industry: text(b.industry), annual_revenue: text(b.annual_revenue),
+    employee_count: b.employee_count === '' || b.employee_count == null ? null : Math.round(Number(b.employee_count)) || null,
+  };
+  db.transaction(() => {
+    let orgId = t.organization_id;
+    if (!orgId) {
+      orgId = db.prepare('SELECT id FROM organizations WHERE name = ? COLLATE NOCASE LIMIT 1').get(name)?.id
+        ?? db.prepare('INSERT INTO organizations (name) VALUES (?)').run(name).lastInsertRowid;
+    }
+    db.prepare(`UPDATE organizations SET name = @name, address = @address, labels = @labels, website = @website, linkedin = @linkedin, industry = @industry,
+      annual_revenue = @annual_revenue, employee_count = @employee_count, pipedrive_pending = 1, updated_at = datetime('now') WHERE id = @id`).run({ ...fields, id: orgId });
+    db.prepare("UPDATE tickets SET organization_id = ?, organization = ?, updated_at = datetime('now') WHERE id = ?").run(orgId, name, t.id);
+  })();
+  res.json(detailsOf(ticketRow(t.id)));
 });
 
 export default r;

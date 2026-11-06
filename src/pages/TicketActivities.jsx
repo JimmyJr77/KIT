@@ -220,7 +220,7 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
     }
   };
   const remove = async () => {
-    if (!confirm(`Delete the activity “${activity.subject}”?`)) return;
+    if (!confirm(`Delete the activity “${activity.subject}”?${activity.pipedrive_id ? ' It’s deleted from the deal in Pipedrive too.' : ''}`)) return;
     await api.del(`/activities/${activity.id}`);
     onSaved();
   };

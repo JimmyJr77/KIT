@@ -51,7 +51,7 @@ const matches = (t, f) => (!f.director || t.bd_director_id === f.director) && (!
  */
 export function bids(f = {}) {
   const model = pwinModel();
-  return db.prepare(`SELECT t.id, t.opportunity_title, t.organization, t.pipeline_status, t.value, t.bd_director_id, t.territory_id,
+  return db.prepare(`SELECT t.id, t.opportunity_title, t.organization, t.pipeline_status, t.deal_status, t.won_at, t.lost_at, t.value, t.bd_director_id, t.territory_id,
       t.projected_win_date, t.win_date_undetermined, t.assessment, t.created_at, t.done_at,
       d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
     FROM tickets t LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id
@@ -63,7 +63,10 @@ export function bids(f = {}) {
       return { ...rest, pwin: p ? p.score / 100 : null };
     });
 }
-const isOpen = (t) => !CLOSED_STAGES.includes(t.pipeline_status);
+// Open means not won or lost (the deal's status, as in Pipedrive), whatever stage it sits in.
+export const isOpen = (t) => (t.deal_status ? t.deal_status === 'open' : !CLOSED_STAGES.includes(t.pipeline_status));
+export const isWon = (t) => (t.deal_status ? t.deal_status === 'won' : t.pipeline_status === 'Awarded');
+export const isLost = (t) => (t.deal_status ? t.deal_status === 'lost' : t.pipeline_status === 'Lost');
 const weighted = (t) => (t.value || 0) * (t.pwin ?? 1);
 
 /** Value and count in each pipeline stage (open and closed), in stage order; pipeline tickets with no stage last. */
@@ -113,7 +116,7 @@ export function expected(list, count = 4) {
 /** Qualified pipeline (open, Qualified onward) grouped by `key` (territory or director), largest first. */
 export function qualifiedBy(list, key) {
   const groups = new Map();
-  list.filter((t) => QUALIFIED_STAGES.includes(t.pipeline_status)).forEach((t) => {
+  list.filter((t) => isOpen(t) && QUALIFIED_STAGES.includes(t.pipeline_status)).forEach((t) => {
     const id = key === 'territory' ? t.territory_id : t.bd_director_id;
     const name = (key === 'territory' ? t.territory_name : t.director_name) || (key === 'territory' ? 'No territory' : 'No BD director');
     if (!groups.has(id)) groups.set(id, { id, name, count: 0, value: 0, weighted: 0 });

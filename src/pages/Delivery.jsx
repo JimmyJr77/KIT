@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, BriefcaseBusiness, Ticket, Trash2, UserPlus, AlertTriangle, Landmark, ReceiptText, Plus, MapPin, LayoutGrid, Table2, ChevronUp, ChevronDown, ChevronsUpDown, Upload, FileText, Loader2 } from 'lucide-react';
+import { Search, BriefcaseBusiness, Ticket, Trash2, UserPlus, AlertTriangle, Landmark, ReceiptText, Plus, MapPin, LayoutGrid, Table2, ChevronUp, ChevronDown, ChevronsUpDown, Upload, FileText, Loader2, FolderKanban, CheckSquare, Square, Pin, StickyNote, ExternalLink, CalendarCheck, CheckCircle2, RefreshCw, Pencil, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullName, shortDate, parseUtc, todayIso } from '../lib/format.js';
@@ -11,11 +11,15 @@ import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import UserCombobox from '../components/UserCombobox.jsx';
+import MultiSelect from '../components/MultiSelect.jsx';
 
 const money = (n) => usd(n).replace('.00', '');
 const wonOn = (utc) => (utc ? shortDate(parseUtc(utc).toLocaleDateString('en-CA'), { month: 'short', day: 'numeric', year: 'numeric' }) : '');
 
-/** Contracts we've won. A pipeline ticket is copied here when it's Awarded, to get a Program Manager and a delivery team. */
+const STATUS_STYLE = { Active: 'bg-emerald-50 text-emerald-700', Complete: 'bg-slate-100 text-slate-600', Canceled: 'bg-red-50 text-red-700' };
+const PROJECT_STATUS = { open: 'Open', completed: 'Completed', canceled: 'Canceled', deleted: 'Deleted in Pipedrive' };
+
+/** Contracts we've won. A pipeline ticket is copied here when it's marked won, to get a Program Manager, a delivery team and its Pipedrive project. */
 export default function Delivery() {
   const users = useApi('/users');
   const teams = useApi('/teams');
@@ -28,18 +32,27 @@ export default function Delivery() {
   const setView = (v) => { setViewState(v); try { localStorage.setItem('kit.delivery.view', v); } catch { /* not saved */ } };
 
   const [held, setHeld] = useState(0);
-  const load = () => api.get(`/delivery?status=${status}`).then((d) => { setPrograms(d.programs); setHeld(d.held); });
+  const [meta, setMeta] = useState({ phases: [], project_labels: [], activity_types: [] });
+  const load = () => api.get(`/delivery?status=${status}`).then((d) => { setPrograms(d.programs); setHeld(d.held); setMeta({ phases: d.phases, project_labels: d.project_labels, activity_types: d.activity_types }); });
   useEffect(() => { load(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Links from alerts land here with ?open=<program id>; show every status so the contract is found.
   const [params, setParams] = useSearchParams();
+  // A won ticket links here with ?ticket=<ticket id>; the contract is found once the list has loaded.
+  const [ticketWanted, setTicketWanted] = useState(null);
   useEffect(() => {
     const id = Number(params.get('open'));
-    if (!id) return;
+    const ticket = Number(params.get('ticket'));
+    if (!id && !ticket) return;
     setStatus('all');
-    setOpenId(id);
+    if (id) setOpenId(id); else setTicketWanted(ticket);
     setParams({}, { replace: true });
   }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!ticketWanted || !programs) return;
+    const p = programs.find((x) => x.ticket_id === ticketWanted);
+    if (p) { setOpenId(p.id); setTicketWanted(null); }
+  }, [ticketWanted, programs]);
 
   const shown = (programs || []).filter((p) => {
     const s = q.trim().toLowerCase();
@@ -50,9 +63,9 @@ export default function Delivery() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Delivery" subtitle="Contracts we’ve won. Each one lands here when its pipeline ticket is marked Awarded.">
+      <PageHeader title="Delivery" subtitle="Contracts we’ve won. Each one lands here when its deal is marked won, with its Pipedrive project as the plan.">
         <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
-          {[['active', 'Active'], ['complete', 'Complete'], ['held', `On hold${held ? ` (${held})` : ''}`], ['all', 'All']].map(([k, l]) => (
+          {[['active', 'Active'], ['complete', 'Complete'], ['canceled', 'Canceled'], ['held', `On hold${held ? ` (${held})` : ''}`], ['all', 'All']].map(([k, l]) => (
             <button key={k} type="button" onClick={() => setStatus(k)}
               className={`rounded px-3 ${status === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
           ))}
@@ -76,14 +89,14 @@ export default function Delivery() {
 
       {status === 'held' && (
         <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Contracts with information on them whose pipeline ticket is no longer Awarded. They’re saved as they were, but left out of bookings, backlog and revenue until an admin decides. If the ticket is Awarded again, the contract comes back on its own.
+          Contracts with information on them whose deal is no longer won. They’re saved as they were, but left out of bookings, backlog and revenue until an admin decides. If the deal is won again, the contract comes back on its own.
         </p>
       )}
 
       {programs && !shown.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <BriefcaseBusiness size={28} className="mx-auto mb-2 text-slate-300" />
-          {q ? 'Nothing matches your search.' : status === 'held' ? 'No contracts on hold.' : status === 'complete' ? 'No completed contracts yet.' : 'No won contracts yet. Move a pipeline ticket to Awarded on BD Pipeline and it shows up here.'}
+          {q ? 'Nothing matches your search.' : status === 'held' ? 'No contracts on hold.' : status === 'complete' ? 'No completed contracts yet.' : status === 'canceled' ? 'No canceled contracts.' : 'No won contracts yet. Mark a pipeline ticket won (on its ticket, or on BD Pipeline) and it shows up here.'}
         </div>
       )}
 
@@ -98,12 +111,13 @@ export default function Delivery() {
                 <div className="font-semibold leading-snug text-slate-900">{p.name}</div>
                 <div className="truncate text-xs text-slate-500">{[p.organization, p.account_type].filter(Boolean).join(' · ') || 'Customer not set'}</div>
               </div>
-              {p.held_at ? <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">On hold · {p.ticket_stage || 'No stage'}</span>
-                : p.status === 'Complete' && <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">Complete</span>}
+              {p.held_at ? <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">On hold · {p.deal_status === 'won' ? p.ticket_stage : 'not won'}</span>
+                : p.status !== 'Active' ? <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[p.status]}`}>{p.status}</span>
+                  : p.project.phase && <span className="shrink-0 rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700" title="Pipedrive project phase">{p.project.phase}</span>}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
               {p.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-700">{money(p.value)}</span>}
-              <span className="text-slate-400">Won {wonOn(p.awarded_at)}</span>
+              <span className="text-slate-400">{p.held_at ? `Not won · ${p.ticket_stage || 'no stage'}` : `Won ${wonOn(p.awarded_at)}`}</span>
             </div>
             {p.value > 0 && <FundedBar program={p} />}
             <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs">
@@ -113,6 +127,7 @@ export default function Delivery() {
                 <span className="flex items-center gap-1 font-medium text-amber-700"><AlertTriangle size={12} /> Needs a Program Manager</span>
               )}
               <span className="flex items-center gap-1.5 text-slate-500">
+                {p.tasks.length > 0 && <span className="flex items-center gap-0.5" title="Plan: tasks done"><CheckSquare size={11} /> {p.tasks.filter((k) => k.done).length}/{p.tasks.length}</span>}
                 {p.team.length > 0 && <span className="flex -space-x-1.5">{p.team.slice(0, 4).map((m) => <Avatar key={m.id} user={m.user || { id: m.id, first_name: m.name, last_name: '' }} size="xs" className="ring-2 ring-white" />)}</span>}
                 {p.team.length} on team
               </span>
@@ -122,7 +137,7 @@ export default function Delivery() {
       </div>}
 
       {open && (
-        <ProgramPanel key={open.id} program={open} users={users.data?.users || []} teams={teams.data?.teams || []}
+        <ProgramPanel key={open.id} program={open} users={users.data?.users || []} teams={teams.data?.teams || []} meta={meta}
           onChange={replace} onClose={() => { setOpenId(null); load(); }} onDecided={(p) => {
             if (p && status !== 'held') replace(p);
             else setOpenId(null);
@@ -133,8 +148,8 @@ export default function Delivery() {
   );
 }
 
-/** One won contract: its Program Manager, Technical Lead, delivery team, status, and notes. Changes save as they're made. */
-function ProgramPanel({ program: p, users, teams, onChange, onClose, onDecided }) {
+/** One won contract: its Pipedrive project (overview, plan, notes, documents), Program Manager, Technical Lead, delivery team and money. Changes save as they're made. */
+function ProgramPanel({ program: p, users, teams, meta, onChange, onClose, onDecided }) {
   const [error, setError] = useState('');
   const [notes, setNotes] = useState(p.notes || '');
   const [member, setMember] = useState({ user_id: null, name: '', role: '' });
@@ -164,7 +179,7 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose, onDecided }
   const notesDirty = notes !== (p.notes || '');
 
   return (
-    <SidePanel wide title={p.name} onClose={() => { if (!notesDirty || confirm('Discard your unsaved notes?')) onClose(); }}
+    <SidePanel wide title={p.name} onClose={() => { if (!notesDirty || confirm('Discard your unsaved overview?')) onClose(); }}
       subtitle={[p.organization, p.value != null ? money(p.value) : null, `Won ${wonOn(p.awarded_at)}`].filter(Boolean).join(' · ')}>
       <div className="space-y-5">
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
@@ -182,9 +197,18 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose, onDecided }
             <select className="input h-8 w-36 py-0 text-sm" value={p.status} onChange={(e) => update({ status: e.target.value })}>
               <option>Active</option>
               <option>Complete</option>
+              <option>Canceled</option>
             </select>
           </label>
+          {p.status === 'Active' ? (
+            <button type="button" className="btn-primary h-8 px-3 py-0 text-xs" title="Delivery is finished. The Pipedrive project is completed too."
+              onClick={() => confirm(`Mark “${p.name}” complete? Delivery is finished${p.project.pipedrive_id ? ', and its Pipedrive project is completed too' : ''}.`) && update({ status: 'Complete' })}>
+              <CheckCircle2 size={14} /> Complete
+            </button>
+          ) : <span className="text-xs text-slate-500">{p.status === 'Complete' ? `Completed ${wonOn(p.completed_at)}` : 'Canceled'}</span>}
         </section>
+
+        <ProjectSection program={p} meta={meta} users={users} teams={teams} onChange={onChange} onUpdate={update} onError={setError} />
 
         {(p.bd_director || p.territory_name) && (
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
@@ -244,15 +268,20 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose, onDecided }
           </div>
         </section>
 
+        <PlanSection program={p} meta={meta} users={users} teams={teams} onChange={onChange} onError={setError} />
+
         <ContractDocuments program={p} onChange={onChange} onError={setError} />
 
+        <ProjectNotes program={p} onChange={onChange} onError={setError} />
+
         <section>
-          <h3 className="label">Notes</h3>
+          <h3 className="label">Overview</h3>
+          <p className="mb-1 text-[11px] text-slate-400">{p.project.pipedrive_id ? 'The Pipedrive project’s description. Saved here, it updates in Pipedrive.' : 'Period of performance, kickoff date, key deliverables…'}</p>
           <textarea className="input min-h-24 text-sm" placeholder="Period of performance, kickoff date, key deliverables…" value={notes} onChange={(e) => setNotes(e.target.value)} />
           {notesDirty && (
             <div className="mt-1.5 flex justify-end gap-2">
               <button type="button" className="btn-ghost text-xs" onClick={() => setNotes(p.notes || '')}>Cancel</button>
-              <button type="button" className="btn-primary text-xs" onClick={() => update({ notes })}>Save notes</button>
+              <button type="button" className="btn-primary text-xs" onClick={() => update({ notes })}>Save overview</button>
             </div>
           )}
         </section>
@@ -261,11 +290,221 @@ function ProgramPanel({ program: p, users, teams, onChange, onClose, onDecided }
   );
 }
 
+
+/**
+ * The contract's Pipedrive project: its link, status as Pipedrive has it, phase on the Delivery board, dates, owner and labels.
+ * Each change saves right away and goes to Pipedrive. A contract without a project can have one made.
+ */
+function ProjectSection({ program: p, meta, users, teams, onUpdate, onChange, onError }) {
+  const [busy, setBusy] = useState(false);
+  const pr = p.project;
+  const create = async () => {
+    if (!confirm(`Make a Pipedrive project for “${p.name}”, linked to its won deal? Its plan, notes and documents then sync both ways.`)) return;
+    setBusy(true); onError('');
+    try { onChange((await api.post(`/delivery/${p.id}/project`, {})).program); } catch (e) { onError(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <section className="space-y-2 rounded-lg border border-slate-200 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="label mb-0 flex items-center gap-1.5"><FolderKanban size={14} className="text-brand-600" /> Pipedrive project</h3>
+        {pr.pipedrive_id && pr.status !== 'deleted' ? (
+          <span className="flex flex-wrap items-center gap-2 text-xs">
+            <span className={`rounded px-1.5 py-0.5 font-medium ${pr.status === 'completed' ? 'bg-slate-100 text-slate-600' : pr.status === 'canceled' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>{PROJECT_STATUS[pr.status] || pr.status}</span>
+            {pr.pending && <span className="text-amber-700" title="A change made here is waiting to go to Pipedrive">Syncing…</span>}
+            <a href={`https://app.pipedrive.com/projects/${pr.pipedrive_id}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-brand-700 hover:underline"><ExternalLink size={12} /> Open in Pipedrive</a>
+          </span>
+        ) : (
+          <span className="flex items-center gap-2 text-xs text-slate-500">
+            {pr.status === 'deleted' ? 'Its project was deleted in Pipedrive.' : 'No Pipedrive project yet.'}
+            {p.pipedrive_deal_id && <button type="button" className="btn px-2 py-1 text-xs" onClick={create} disabled={busy}>{busy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Create project in Pipedrive</button>}
+          </span>
+        )}
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
+          <span className="w-16 shrink-0">Phase</span>
+          <select className="input min-w-0 py-1 text-sm" value={pr.phase_id ?? ''} onChange={(e) => onUpdate({ phase_id: e.target.value || null })}>
+            <option value="">No phase</option>
+            {meta.phases.map((ph) => <option key={ph.id} value={ph.id}>{ph.name}</option>)}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
+          <span className="w-16 shrink-0">Owner</span>
+          <span className="min-w-0 flex-1"><UserCombobox users={users} teams={teams} value={pr.owner?.id ?? null} onChange={(id) => onUpdate({ owner_id: id || null })} placeholder="Project owner…" /></span>
+        </label>
+        <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
+          <span className="w-16 shrink-0">Start</span>
+          <input type="date" className="input min-w-0 py-1 text-sm" value={pr.start_date || ''} onChange={(e) => onUpdate({ start_date: e.target.value || null })} />
+        </label>
+        <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
+          <span className="w-16 shrink-0">End</span>
+          <input type="date" className="input min-w-0 py-1 text-sm" value={pr.end_date || ''} onChange={(e) => onUpdate({ end_date: e.target.value || null })} />
+        </label>
+        <div className="flex items-center gap-2 text-xs font-medium text-slate-500 sm:col-span-2">
+          <span className="w-16 shrink-0">Labels</span>
+          <span className="min-w-0 flex-1">
+            <MultiSelect compact options={[...meta.project_labels, ...pr.labels.filter((l) => !meta.project_labels.includes(l))].map((l) => ({ value: l, label: l }))} value={pr.labels}
+              onChange={(v) => onUpdate({ labels: v })} placeholder="Project labels…" />
+          </span>
+        </div>
+      </div>
+      {p.installments.length > 0 && (
+        <div className="text-xs text-slate-600">
+          <span className="font-medium text-slate-500">Payment schedule (Pipedrive installments):</span>{' '}
+          {p.installments.map((i) => `${money(i.amount)} on ${shortDate(i.billing_date, { month: 'short', day: 'numeric', year: 'numeric' })}${i.description ? ` (${i.description})` : ''}`).join(' · ')}
+          {' '}· total {money(p.installments.reduce((s, i) => s + (i.amount || 0), 0))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** The plan: the project's tasks (with subtasks) and activities, ticked off here or in Pipedrive. */
+function PlanSection({ program: p, meta, users, teams, onChange, onError }) {
+  const [draft, setDraft] = useState({ title: '', kind: 'task', due_date: '', assignee_id: null, parent_id: null, activity_type: 'Task' });
+  const [editing, setEditing] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const call = async (fn) => { onError(''); setBusy(true); try { onChange((await fn()).program); } catch (e) { onError(e.message); } finally { setBusy(false); } };
+  const add = () => {
+    if (!draft.title.trim()) return;
+    call(() => api.post(`/delivery/${p.id}/tasks`, draft)).then(() => setDraft((d) => ({ ...d, title: '', due_date: '', parent_id: null })));
+  };
+  const toggle = (k) => call(() => api.put(`/delivery/tasks/${k.id}`, { done: !k.done }));
+  const remove = (k) => confirm(`Delete “${k.title}”?${k.synced ? ' It’s deleted from the Pipedrive project too.' : ''}`) && call(() => api.del(`/delivery/tasks/${k.id}`));
+  const save = () => call(() => api.put(`/delivery/tasks/${editing.id}`, editing)).then(() => setEditing(null));
+  const top = p.tasks.filter((k) => !k.parent_id);
+  const subs = (id) => p.tasks.filter((k) => k.parent_id === id);
+  const done = p.tasks.filter((k) => k.done).length;
+  const row = (k, sub) => (
+    <li key={k.id} className={`group flex items-start gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50 ${sub ? 'ml-7' : ''}`}>
+      <button type="button" onClick={() => toggle(k)} disabled={busy} aria-label={k.done ? 'Mark not done' : 'Mark done'} className={`mt-0.5 shrink-0 ${k.done ? 'text-emerald-600' : 'text-slate-300 hover:text-slate-500'}`}>
+        {k.done ? <CheckSquare size={16} /> : <Square size={16} />}
+      </button>
+      {editing?.id === k.id ? (
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          <input className="input min-w-40 flex-1 py-1 text-sm" value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && save()} autoFocus />
+          <input type="date" className="input w-36 py-1 text-sm" value={editing.due_date || ''} onChange={(e) => setEditing({ ...editing, due_date: e.target.value })} />
+          <button type="button" className="btn-primary px-2 py-1 text-xs" onClick={save} disabled={busy}>Save</button>
+          <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(null)}>Cancel</button>
+        </div>
+      ) : (
+        <>
+          <div className="min-w-0 flex-1">
+            <div className={`flex flex-wrap items-center gap-1.5 ${k.done ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+              {k.kind === 'activity' && <CalendarCheck size={12} className="shrink-0 text-violet-600" title={k.activity_type || 'Activity'} />}
+              <span className="truncate">{k.title}</span>
+              {k.pending && <span className="text-[10px] text-amber-700" title="Waiting to go to Pipedrive">syncing</span>}
+            </div>
+            <div className="text-[11px] text-slate-500">
+              {[k.kind === 'activity' ? k.activity_type : null, k.due_date && `due ${shortDate(k.due_date, { month: 'short', day: 'numeric' })}${k.due_time ? ` ${k.due_time}` : ''}`,
+                k.assignee && fullName(k.assignee), k.done && k.done_at && `done ${wonOn(k.done_at)}`].filter(Boolean).join(' · ')}
+            </div>
+          </div>
+          <span className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
+            {!sub && k.kind === 'task' && <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-brand-700" title="Add a subtask" onClick={() => setDraft((d) => ({ ...d, kind: 'task', parent_id: k.id }))}><Plus size={13} /></button>}
+            <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-brand-700" title="Edit" onClick={() => setEditing({ id: k.id, title: k.title, due_date: k.due_date || '' })}><Pencil size={13} /></button>
+            <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-red-600" title="Delete" onClick={() => remove(k)}><Trash2 size={13} /></button>
+          </span>
+        </>
+      )}
+    </li>
+  );
+  const parent = draft.parent_id ? p.tasks.find((k) => k.id === draft.parent_id) : null;
+  return (
+    <section>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h3 className="label mb-0">Plan</h3>
+        <span className="text-xs text-slate-500">{p.tasks.length ? `${done} of ${p.tasks.length} done` : 'Tasks and activities on the Pipedrive project'}</span>
+      </div>
+      {p.tasks.length > 0 && (
+        <ul className="mb-2 rounded-lg border border-slate-200 bg-white p-1">
+          {top.map((k) => [row(k, false), ...subs(k.id).map((s) => row(s, true))])}
+        </ul>
+      )}
+      <div className="space-y-1.5 rounded-lg bg-slate-50 p-3">
+        {parent && <div className="flex items-center gap-1 text-xs text-slate-600">Subtask of <b>{parent.title}</b> <button type="button" className="btn-ghost p-0.5" onClick={() => setDraft((d) => ({ ...d, parent_id: null }))} aria-label="Not a subtask"><X size={12} /></button></div>}
+        <div className="flex flex-wrap gap-1.5">
+          <select className="input w-28 py-1 text-sm" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value, parent_id: null })} aria-label="Kind" disabled={!!parent}>
+            <option value="task">Task</option>
+            <option value="activity">Activity</option>
+          </select>
+          {draft.kind === 'activity' && (
+            <select className="input w-28 py-1 text-sm" value={draft.activity_type} onChange={(e) => setDraft({ ...draft, activity_type: e.target.value })} aria-label="Activity type">
+              {meta.activity_types.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          )}
+          <input className="input min-w-40 flex-1 py-1 text-sm" placeholder={draft.kind === 'activity' ? 'Activity subject' : parent ? 'Subtask' : 'Task'} value={draft.title}
+            onChange={(e) => setDraft({ ...draft, title: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && add()} />
+          <input type="date" className="input w-36 py-1 text-sm" value={draft.due_date} onChange={(e) => setDraft({ ...draft, due_date: e.target.value })} aria-label="Due date" />
+          <span className="w-48"><UserCombobox users={users} teams={teams} value={draft.assignee_id} onChange={(id) => setDraft({ ...draft, assignee_id: id || null })} placeholder="Assignee…" /></span>
+          <button type="button" className="btn-primary px-2.5 py-1 text-xs" onClick={add} disabled={busy || !draft.title.trim()}><Plus size={14} /> Add</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Notes on the project, as Pipedrive keeps them: written here or there, pinned on top. */
+function ProjectNotes({ program: p, onChange, onError }) {
+  const { user } = useAuth();
+  const [text, setText] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const call = async (fn) => { onError(''); setBusy(true); try { onChange((await fn()).program); } catch (e) { onError(e.message); } finally { setBusy(false); } };
+  const add = () => text.trim() && call(() => api.post(`/delivery/${p.id}/notes`, { body: text })).then(() => setText(''));
+  return (
+    <section>
+      <h3 className="label flex items-center gap-1.5"><StickyNote size={14} className="text-amber-600" /> Project notes</h3>
+      <div className="rounded-lg border border-slate-300 bg-white focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-100">
+        <textarea rows={2} className="block w-full resize-none rounded-t-lg border-0 bg-transparent px-3 py-2 text-sm placeholder:text-slate-400 focus:ring-0 focus:outline-none"
+          placeholder="A note on the project (it goes to Pipedrive too)…" value={text} onChange={(e) => setText(e.target.value)} disabled={busy}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); add(); } }} />
+        {text.trim() && (
+          <div className="flex items-center justify-end border-t border-slate-100 px-3 py-1.5">
+            <button type="button" className="btn-primary px-2.5 py-1 text-xs" onClick={add} disabled={busy}>Add note</button>
+          </div>
+        )}
+      </div>
+      {p.project_notes.length > 0 && (
+        <ul className="mt-2 space-y-1.5">
+          {p.project_notes.map((n) => (
+            <li key={n.id} className="group rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                {n.pinned && <Pin size={11} className="text-amber-600" />}
+                <span className="font-medium text-slate-700">{n.author ? fullName(n.author) : 'Pipedrive'}</span> · {wonOn(n.created_at)}{n.updated_at ? ' · edited' : ''}
+                {n.synced && <RefreshCw size={10} className="text-slate-400" title="In Pipedrive too" />}
+                <span className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
+                  <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-amber-600" title={n.pinned ? 'Unpin' : 'Pin'} onClick={() => call(() => api.put(`/delivery/notes/${n.id}`, { pinned: !n.pinned }))}><Pin size={12} /></button>
+                  {(!n.author || n.author.id === user.id || user.role === 'admin') && (
+                    <>
+                      <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-brand-700" title="Edit" onClick={() => setEditing({ id: n.id, body: n.body })}><Pencil size={12} /></button>
+                      <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-red-600" title="Delete" onClick={() => confirm(`Delete this note?${n.synced ? ' It’s deleted from the Pipedrive project too.' : ''}`) && call(() => api.del(`/delivery/notes/${n.id}`))}><Trash2 size={12} /></button>
+                    </>
+                  )}
+                </span>
+              </div>
+              {editing?.id === n.id ? (
+                <div className="mt-1 space-y-1">
+                  <textarea rows={3} className="input text-sm" value={editing.body} onChange={(e) => setEditing({ ...editing, body: e.target.value })} autoFocus />
+                  <div className="flex justify-end gap-1.5">
+                    <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(null)}>Cancel</button>
+                    <button type="button" className="btn-primary px-2 py-1 text-xs" disabled={busy} onClick={() => call(() => api.put(`/delivery/notes/${n.id}`, { body: editing.body })).then(() => setEditing(null))}>Save</button>
+                  </div>
+                </div>
+              ) : <p className="mt-0.5 whitespace-pre-wrap text-slate-800">{n.body}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 /** A contract on hold: why, and (for admins) the two ways to settle it. */
 function HoldDecision({ program: p, onDecided, onError }) {
   const { user } = useAuth();
   const keep = async () => {
-    if (!confirm(`Keep “${p.name}” as a contract? It goes back into bookings, backlog and revenue, even though its pipeline ticket is ${p.ticket_stage || 'not Awarded'}.`)) return;
+    if (!confirm(`Keep “${p.name}” as a contract? It goes back into bookings, backlog and revenue, even though its deal isn’t won.`)) return;
     try { onDecided((await api.post(`/delivery/${p.id}/keep`)).program); } catch (e) { onError(e.message); }
   };
   const remove = async () => {
@@ -275,8 +514,8 @@ function HoldDecision({ program: p, onDecided, onError }) {
   };
   return (
     <section className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-      <p className="flex items-start gap-1.5 font-medium"><AlertTriangle size={15} className="mt-0.5 shrink-0" /> On hold since {wonOn(p.held_at)}: its pipeline ticket is now {p.ticket_stage || 'without a stage'}.</p>
-      <p className="mt-1 text-xs">Everything here is saved, but it isn’t counted in bookings, backlog or revenue. If the ticket is Awarded again, this comes back on its own.</p>
+      <p className="flex items-start gap-1.5 font-medium"><AlertTriangle size={15} className="mt-0.5 shrink-0" /> On hold since {wonOn(p.held_at)}: its deal is no longer won ({p.deal_status === 'lost' ? 'lost' : 'reopened'}, in {p.ticket_stage || 'no stage'}).</p>
+      <p className="mt-1 text-xs">Everything here is saved, but it isn’t counted in bookings, backlog or revenue. If the deal is won again, this comes back on its own.</p>
       {user.role === 'admin' ? (
         <div className="mt-2 flex flex-wrap gap-2">
           <button type="button" className="btn-primary text-xs" onClick={keep}>Keep as a contract</button>
@@ -319,7 +558,7 @@ function UploadButton({ programId, docType, label, onChange, onError }) {
 function FileRow({ file, showType, onChange, onError }) {
   const { user } = useAuth();
   const remove = async () => {
-    if (!confirm(`Delete “${file.name}”?`)) return;
+    if (!confirm(`Delete “${file.name}”?${file.synced ? ' It’s deleted from the Pipedrive project too.' : ''}`)) return;
     onError('');
     try { onChange((await api.del(`/delivery/files/${file.id}`)).program); } catch (e) { onError(e.message); }
   };
@@ -329,11 +568,12 @@ function FileRow({ file, showType, onChange, onError }) {
         title={`Added ${shortDate(parseUtc(file.created_at).toLocaleDateString('en-CA'), { month: 'short', day: 'numeric', year: 'numeric' })}${file.uploaded_by ? ` by ${fullName(file.uploaded_by)}` : ''}`}>
         <FileText size={13} className="shrink-0 text-emerald-600" />
         <span className="min-w-0 flex-1 truncate text-slate-800">{file.name}</span>
+        {file.synced && <RefreshCw size={10} className="shrink-0 text-slate-400" title="In the Pipedrive project too" />}
         {showType && <span className="shrink-0 rounded bg-slate-100 px-1 text-[10px] font-medium text-slate-500">{fileType(file.name)}</span>}
         {file.size != null && <span className="shrink-0 text-[11px] text-slate-400">{bytes(file.size)}</span>}
       </a>
-      {(file.uploaded_by?.id === user.id || user.role === 'admin') && (
-        <button type="button" className="btn-ghost shrink-0 p-1 text-slate-400 hover:text-red-600" onClick={remove} aria-label={`Delete ${file.name}`} title="Delete file"><Trash2 size={13} /></button>
+      {(!file.uploaded_by || file.uploaded_by?.id === user.id || user.role === 'admin') && (
+        <button type="button" className="btn-ghost shrink-0 p-1 text-slate-400 hover:text-red-600" onClick={remove} aria-label={`Delete ${file.name}`} title={file.synced ? 'Delete file (from the Pipedrive project too)' : 'Delete file'}><Trash2 size={13} /></button>
       )}
     </li>
   );
@@ -393,7 +633,7 @@ const SORTS = {
   name: (p) => p.name.toLowerCase(), customer: (p) => (p.organization || '~').toLowerCase(), value: (p) => p.value ?? -1,
   funded: (p) => (p.value ? p.funded / p.value : -1), billed: (p) => p.billed, won: (p) => p.awarded_at || '',
   pm: (p) => (p.program_manager ? `${p.program_manager.last_name} ${p.program_manager.first_name}` : '~').toLowerCase(), team: (p) => p.team.length,
-  status: (p) => p.status,
+  status: (p) => p.status, phase: (p) => p.project?.phase || '~',
 };
 
 /** The contracts as a sortable table. Selecting a row opens it in the side pane, as a card does. */
@@ -417,7 +657,7 @@ function ProgramTable({ programs, openId, onOpen }) {
         <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
           <tr>
             {header('name', 'Contract')}{header('customer', 'Customer')}{header('value', 'Value', 'text-right')}{header('funded', 'Funded', 'text-right')}
-            {header('billed', 'Billed', 'text-right')}{header('won', 'Won')}{header('pm', 'Program Manager')}{header('team', 'Team', 'text-right')}{header('status', 'Status')}
+            {header('billed', 'Billed', 'text-right')}{header('won', 'Won')}{header('pm', 'Program Manager')}{header('team', 'Team', 'text-right')}{header('phase', 'Phase')}{header('status', 'Status')}
           </tr>
         </thead>
         <tbody>
@@ -438,7 +678,8 @@ function ProgramTable({ programs, openId, onOpen }) {
                   : <span className="flex items-center gap-1 text-xs font-medium text-amber-700"><AlertTriangle size={12} /> Needs a PM</span>}
               </td>
               <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{p.team.length}</td>
-              <td className="px-4 py-3"><span className={`rounded px-1.5 py-0.5 text-xs font-medium ${p.held_at ? 'bg-amber-100 text-amber-900' : p.status === 'Complete' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-50 text-emerald-700'}`}>{p.held_at ? 'On hold' : p.status}</span></td>
+              <td className="px-4 py-3 text-slate-600">{p.project.phase || '—'}</td>
+              <td className="px-4 py-3"><span className={`rounded px-1.5 py-0.5 text-xs font-medium ${p.held_at ? 'bg-amber-100 text-amber-900' : STATUS_STYLE[p.status]}`}>{p.held_at ? 'On hold' : p.status}</span></td>
             </tr>
           ))}
         </tbody>

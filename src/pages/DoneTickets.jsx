@@ -5,7 +5,7 @@ import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { shortDate, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
-import { daysToArchive, ARCHIVE_AFTER_DAYS } from '../lib/lanes.js';
+import { daysToArchive, ARCHIVE_AFTER_DAYS, outcomeOf as dealOutcome } from '../lib/lanes.js';
 import { byDirector } from '../lib/directors.js';
 import PageHeader from '../components/PageHeader.jsx';
 import DirectorSelect from '../components/DirectorSelect.jsx';
@@ -16,8 +16,8 @@ const money = (n) => (n == null ? '—' : usd(Math.round(n)).replace('.00', ''))
 const ownerOf = (t) => (t.ticket_type === 'work'
   ? (t.owner_first_name ? `${t.owner_first_name} ${t.owner_last_name}` : null)
   : (t.director_first_name ? `${t.director_first_name} ${t.director_last_name}` : null));
-const outcomeOf = (t) => (t.ticket_type === 'work' ? 'Done' : t.pipeline_status || 'Done');
-const OUTCOME_STYLE = { Awarded: 'bg-emerald-50 text-emerald-700', Lost: 'bg-red-50 text-red-700', Done: 'bg-slate-100 text-slate-600' };
+const outcomeOf = (t) => (t.ticket_type === 'work' ? 'Done' : dealOutcome(t) || t.pipeline_status || 'Done');
+const OUTCOME_STYLE = { Won: 'bg-emerald-50 text-emerald-700', Awarded: 'bg-emerald-50 text-emerald-700', Lost: 'bg-red-50 text-red-700', Done: 'bg-slate-100 text-slate-600' };
 
 /**
  * Every ticket in the Tickets page's Done lane: awarded and lost pipeline tickets, and finished work tickets. Done tickets leave

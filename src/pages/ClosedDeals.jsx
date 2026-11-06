@@ -10,9 +10,9 @@ import DirectorSelect from '../components/DirectorSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 
 const GROUPS = [
-  { key: 'execution', label: 'In execution', about: 'Awarded and in delivery. Mark the contract Complete on Delivery when the work is finished and it moves to Executed.', date: 'Awarded' },
-  { key: 'executed', label: 'Executed', about: 'Delivery is finished: the contract is marked Complete.', date: 'Completed' },
-  { key: 'lost', label: 'Lost', about: 'Pipeline deals marked Lost.', date: 'Lost' },
+  { key: 'execution', label: 'In execution', about: 'Won and in delivery. Mark the contract Complete on Delivery (or complete its Pipedrive project) when the work is finished and it moves to Executed.', date: 'Won' },
+  { key: 'executed', label: 'Executed', about: 'Delivery is finished: the contract is Complete (or canceled).', date: 'Completed' },
+  { key: 'lost', label: 'Lost', about: 'Deals marked lost, here or in Pipedrive.', date: 'Lost' },
   { key: 'other', label: 'Other', about: 'Taken off the board for other reasons: archived by hand. Open one to restore it.', date: 'Removed' },
 ];
 const money = (n) => (n == null ? '—' : usd(Math.round(n)).replace('.00', ''));

@@ -9,7 +9,7 @@ import { TicketCard } from '../pages/Pipeline.jsx';
 import TicketTimeline from '../pages/TicketTimeline.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
-const CLOSED = ['Awarded', 'Lost'];
+import { isClosed } from '../lib/lanes.js';
 const readPref = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 const writePref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
 const hasAny = (p) => p.list.length > 0 || p.tiers.some((t) => t.accounts.length);
@@ -148,7 +148,7 @@ function TeamRollup({ people }) {
               <h3 className="mb-2 text-sm font-semibold text-slate-800">{t.name}</h3>
               <div className="flex flex-col gap-1.5">
                 {t.accounts.map((a) => {
-                  const open = a.tickets.filter((k) => !CLOSED.includes(k.pipeline_status));
+                  const open = a.tickets.filter((k) => !isClosed(k));
                   return (
                     <button key={a.key} type="button" onClick={() => setOpenAccount(a.key)}
                       className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-left text-sm hover:border-brand-500">

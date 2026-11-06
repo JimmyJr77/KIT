@@ -642,33 +642,90 @@ const formOf = (d) => ({
   lost_reason: d.lost_reason ?? '', probability: d.probability ?? '', currency: d.currency ?? '', source: d.source ?? '',
   followers: d.followers.map((u) => u.id), custom_fields: d.custom_fields, pipeline_id: d.pipeline_id ?? '',
 });
+const orgFormOf = (o) => ({
+  name: o?.name ?? '', address: o?.address ?? '', labels: o?.labels ?? [], website: o?.website ?? '', linkedin: o?.linkedin ?? '',
+  industry: o?.industry ?? '', annual_revenue: o?.annual_revenue ?? '', employee_count: o?.employee_count ?? '',
+});
+const Section = ({ title, hint, children }) => (
+  <section>
+    <h4 className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">{title}</h4>
+    {hint && <p className="mb-2 text-[11px] text-slate-400">{hint}</p>}
+    {children}
+  </section>
+);
+const Row = ({ label, children }) => (
+  <div className="flex items-baseline justify-between gap-3 py-1 text-sm">
+    <span className="shrink-0 text-xs text-slate-500">{label}</span>
+    <span className="min-w-0 text-right text-slate-800">{children ?? '—'}</span>
+  </div>
+);
+
+/** One Pipedrive field as the right kind of input: a select for options, several ticks for a set, a date, a number, or text. */
+function FieldInput({ field, value, onChange }) {
+  const v = value ?? '';
+  const options = field.options || [];
+  if (field.field_type === 'enum' && options.length) {
+    return (
+      <select className="input" value={v} onChange={(e) => onChange(e.target.value)}>
+        <option value="">—</option>
+        {options.map((o) => <option key={o.id} value={o.label}>{o.label}</option>)}
+      </select>
+    );
+  }
+  if (field.field_type === 'set' && options.length) {
+    const chosen = String(v).split(',').map((x) => x.trim()).filter(Boolean);
+    const toggle = (label) => onChange((chosen.includes(label) ? chosen.filter((x) => x !== label) : [...chosen, label]).join(', '));
+    return (
+      <div className="flex flex-wrap gap-1.5 py-1">
+        {options.map((o) => (
+          <button key={o.id} type="button" onClick={() => toggle(o.label)} aria-pressed={chosen.includes(o.label)}
+            className={`rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${chosen.includes(o.label) ? 'bg-brand-600 text-white ring-brand-600' : 'bg-white text-slate-600 ring-slate-300 hover:ring-slate-400'}`}>{o.label}</button>
+        ))}
+      </div>
+    );
+  }
+  if (field.field_type === 'date') return <input className="input" type="date" value={v} onChange={(e) => onChange(e.target.value)} />;
+  if (field.field_type === 'double' || field.field_type === 'monetary' || field.field_type === 'int') return <input className="input" type="number" step="any" value={v} onChange={(e) => onChange(e.target.value)} />;
+  if (field.field_type === 'text') return <textarea className="input min-h-16 text-sm" value={v} onChange={(e) => onChange(e.target.value)} />;
+  return <input className="input" value={v} onChange={(e) => onChange(e.target.value)} />;
+}
 
 /**
- * The Pipedrive deal fields with no other place on the ticket (tags sit under the ticket's title): lost reason, probability, currency, source,
- * followers, custom fields and products. Everything else in a deal already has a home (stage, value, dates, people,
- * notes, activities, files, emails), so a deal can be brought over whole.
+ * Everything on the Pipedrive deal that has no other place on the ticket (tags sit under the title; stage, value, dates, director and
+ * territory at the top): the Summary and Details fields as Pipedrive lays them out (every custom field, with its options), the
+ * source, the contact person and participants, the organization, products and installments. Pipedrive's fields keep their key, so
+ * a change here is synced; KIT-only fields are a name and a value.
  */
 function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
+  const [org, setOrg] = useState(null);
   const [users, setUsers] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const load = (d) => { setData(d); setForm(formOf(d)); };
+  const load = (d) => { setData(d); setForm(formOf(d)); setOrg(orgFormOf(d.organization || { name: ticket.organization })); };
   useEffect(() => {
     api.get(`/tickets/${ticket.id}/details`).then(load);
     api.get('/users').then((d) => setUsers(d.users));
   }, [ticket.id]);
   const dirty = !!data && JSON.stringify(form) !== JSON.stringify(formOf(data));
-  useEffect(() => { onDirty?.(dirty); }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+  const orgDirty = !!data && JSON.stringify(org) !== JSON.stringify(orgFormOf(data.organization || { name: ticket.organization }));
+  useEffect(() => { onDirty?.(dirty || orgDirty); }, [dirty, orgDirty]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const setField = (i, k, v) => setForm((f) => ({ ...f, custom_fields: f.custom_fields.map((x, j) => (j === i ? { ...x, [k]: v } : x)) }));
+  /** The form's value for a Pipedrive field, and a setter that adds the field to the list when it's first filled in. */
+  const pdValue = (field) => form.custom_fields.find((x) => x.key === field.key)?.value ?? '';
+  const setPd = (field, v) => setForm((f) => {
+    const has = f.custom_fields.some((x) => x.key === field.key);
+    return { ...f, custom_fields: has ? f.custom_fields.map((x) => (x.key === field.key ? { ...x, value: v } : x)) : [...f.custom_fields, { key: field.key, name: field.name, value: v }] };
+  });
 
   const save = async () => {
     setBusy(true);
     setError('');
     try {
-      load(await api.put(`/tickets/${ticket.id}/details`, { ...form, pipeline_id: form.pipeline_id || null }));
+      if (dirty) load(await api.put(`/tickets/${ticket.id}/details`, { ...form, pipeline_id: form.pipeline_id || null }));
+      if (orgDirty) load(await api.put(`/tickets/${ticket.id}/organization`, org));
       onChanged();
     } catch (e) {
       setError(e.message);
@@ -676,103 +733,229 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
       setBusy(false);
     }
   };
-  const products = async (call) => {
+  const lines = async (call) => {
     setError('');
-    // Only the product list changes; unsaved edits to the fields above are kept.
+    // Only the product or installment list changes; unsaved edits to the fields above are kept.
     try { setData(await call()); onChanged(); } catch (e) { setError(e.message); }
   };
 
   const userOptions = users.filter((u) => u.active !== 0).map((u) => ({ value: u.id, label: fullName(u) }));
-  const lost = ticket.pipeline_status === 'Lost';
+  const lost = data?.deal_status === 'lost';
+  const dealFields = data?.fields?.deal || [];
+  const summaryFields = dealFields.filter((f) => f.important);
+  const detailFields = dealFields.filter((f) => !f.important);
+  const kitOnly = (form?.custom_fields || []).map((x, i) => ({ ...x, i })).filter((x) => !x.key);
+  const orgField = (key) => (data?.fields?.organization || []).find((f) => f.key === key);
+  const orgLabelOptions = (orgField('label_ids') || orgField('label'))?.options || [];
+  const primary = data?.people?.find((c) => c.is_primary) || null;
+  const participants = (data?.people || []).filter((c) => !c.is_primary);
+  const synced = !!data?.pipedrive_id;
+
+  const fieldBlock = (fields) => fields.map((f) => (
+    <label key={f.key} className={f.field_type === 'text' || f.field_type === 'set' ? 'sm:col-span-2' : ''}>
+      <span className="label">{f.name}</span>
+      <FieldInput field={f} value={pdValue(f)} onChange={(v) => setPd(f, v)} />
+    </label>
+  ));
 
   return (
-    <DrawerShell title="Deal details" subtitle={data?.pipedrive_id ? `Pipedrive deal #${data.pipedrive_id}` : 'Deal fields from Pipedrive, and any others'} onClose={onClose}
-      footer={form && <SaveBar dirty={dirty} busy={busy} error={error} onSave={save} />}>
+    <DrawerShell title="Deal details" subtitle={synced ? `Pipedrive deal #${data.pipedrive_id} · changes here sync to Pipedrive` : 'Deal fields from Pipedrive, and any others'} onClose={onClose}
+      footer={form && <SaveBar dirty={dirty || orgDirty} busy={busy} error={error} onSave={save} />}>
       {form ? (
-        <div className="space-y-5">
-          <section className="grid gap-3 sm:grid-cols-2">
-            {data.pipelines.length > 1 && (
-              <label className="sm:col-span-2">
-                <span className="label">Pipeline</span>
-                <select className="input" value={form.pipeline_id} onChange={set('pipeline_id')}>
-                  {data.pipelines.map((p) => <option key={p.id ?? ''} value={p.id ?? ''}>{p.name}</option>)}
-                </select>
+        <div className="space-y-6">
+          <Section title="Summary">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {data.pipelines.length > 1 && (
+                <label className="sm:col-span-2">
+                  <span className="label">Pipeline</span>
+                  <select className="input" value={form.pipeline_id} onChange={set('pipeline_id')}>
+                    {data.pipelines.map((p) => <option key={p.id ?? ''} value={p.id ?? ''}>{p.name}</option>)}
+                  </select>
+                </label>
+              )}
+              <div className="sm:col-span-2 rounded-lg bg-slate-50 px-3 py-1 text-sm">
+                <Row label="Status">{{ open: 'Open', won: 'Won', lost: 'Lost' }[data.deal_status] || 'Open'}{data.won_at ? ` · ${stamp(data.won_at)}` : data.lost_at ? ` · ${stamp(data.lost_at)}` : ''}</Row>
+                <Row label="Value">{data.value != null ? money(data.value, form.currency || data.currency) : null}</Row>
+                <Row label="Expected close date">{data.projected_win_date ? shortDate(data.projected_win_date, { month: 'short', day: 'numeric', year: 'numeric' }) : null}</Row>
+                <Row label="Organization">{org.name || null}</Row>
+                <Row label="Contact person">{primary ? contactName(primary) : null}</Row>
+              </div>
+              {lost && (
+                <label className="sm:col-span-2">
+                  <span className="label">Lost reason</span>
+                  <input className="input" list="deal-lost-reasons" value={form.lost_reason} onChange={set('lost_reason')} placeholder="e.g. No Bid, Not Selected…" />
+                  <datalist id="deal-lost-reasons">{(ticket.lost_reasons || []).map((x) => <option key={x} value={x} />)}</datalist>
+                </label>
+              )}
+              <label>
+                <span className="label">Probability (%)</span>
+                <input className="input" type="number" min={0} max={100} value={form.probability} onChange={set('probability')} placeholder="Set by hand" />
               </label>
-            )}
-            {lost && (
-              <label className="sm:col-span-2">
-                <span className="label">Lost reason</span>
-                <input className="input" value={form.lost_reason} onChange={set('lost_reason')} placeholder="e.g. No Bid, price, incumbent kept it…" />
+              <label>
+                <span className="label">Currency</span>
+                <input className="input uppercase" maxLength={3} value={form.currency} onChange={set('currency')} placeholder="USD" />
               </label>
-            )}
-            <label>
-              <span className="label">Probability (%)</span>
-              <input className="input" type="number" min={0} max={100} value={form.probability} onChange={set('probability')} placeholder="Set by hand" />
-            </label>
-            <label>
-              <span className="label">Currency</span>
-              <input className="input uppercase" maxLength={3} value={form.currency} onChange={set('currency')} placeholder="USD" />
-            </label>
-            <label className="sm:col-span-2">
-              <span className="label">Source</span>
-              <input className="input" value={form.source} onChange={set('source')} placeholder="Where the deal came from" />
-            </label>
-            <div className="sm:col-span-2">
-              <span className="label">Followers</span>
-              <MultiSelect options={userOptions} value={form.followers} onChange={(v) => setForm((f) => ({ ...f, followers: v }))} placeholder="Type a name…" />
+              {fieldBlock(summaryFields)}
             </div>
-          </section>
+          </Section>
 
-          <section>
-            <h4 className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">Custom fields</h4>
-            <p className="mb-2 text-[11px] text-slate-400">Pipedrive custom fields come over here, by name. Add your own the same way.</p>
+          {detailFields.length > 0 && (
+            <Section title="Details" hint="Pipedrive's custom deal fields, with the choices Pipedrive offers. New fields added in Pipedrive show up here on their own.">
+              <div className="grid gap-3 sm:grid-cols-2">{fieldBlock(detailFields)}</div>
+            </Section>
+          )}
+
+          <Section title="Source">
+            {synced ? (
+              <div className="rounded-lg bg-slate-50 px-3 py-1">
+                <Row label="Source origin">{data.source_origin}</Row>
+                <Row label="Source origin ID">{data.source_origin_id}</Row>
+                <Row label="Source channel">{data.source}</Row>
+                <Row label="Source channel ID">{data.source_channel_id}</Row>
+              </div>
+            ) : (
+              <label>
+                <span className="label">Source</span>
+                <input className="input" value={form.source} onChange={set('source')} placeholder="Where the deal came from" />
+              </label>
+            )}
+          </Section>
+
+          <Section title="Person" hint="The deal's contact person and participants. Add or change people in the People pane.">
+            {primary ? <PersonCard person={primary} primary /> : <p className="text-sm text-slate-400">No contact person yet.</p>}
+            {participants.length > 0 && (
+              <div className="mt-2">
+                <span className="text-[11px] font-medium text-slate-500">Participants</span>
+                <ul className="mt-1 space-y-1.5">{participants.map((c) => <li key={c.id}><PersonCard person={c} /></li>)}</ul>
+              </div>
+            )}
+          </Section>
+
+          <Section title="Organization" hint={synced ? 'Pipedrive’s organization record. Changes here sync to Pipedrive.' : 'Where the deal is. Saved with the deal.'}>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="sm:col-span-2"><span className="label">Name</span><input className="input" value={org.name} onChange={(e) => setOrg({ ...org, name: e.target.value })} /></label>
+              <label className="sm:col-span-2"><span className="label">Address</span><input className="input" value={org.address} onChange={(e) => setOrg({ ...org, address: e.target.value })} placeholder="Street, city, state" /></label>
+              <div className="sm:col-span-2">
+                <span className="label">Labels</span>
+                <MultiSelect options={orgLabelOptions.map((o) => ({ value: o.label, label: o.label }))} value={org.labels} onChange={(v) => setOrg({ ...org, labels: v })} placeholder="Customer, Hot lead…" />
+              </div>
+              <label><span className="label">Website</span><input className="input" value={org.website} onChange={(e) => setOrg({ ...org, website: e.target.value })} placeholder="https://" /></label>
+              <label><span className="label">LinkedIn profile</span><input className="input" value={org.linkedin} onChange={(e) => setOrg({ ...org, linkedin: e.target.value })} placeholder="https://linkedin.com/company/…" /></label>
+              <label>
+                <span className="label">Industry</span>
+                {orgField('industry')?.options?.length ? (
+                  <select className="input" value={org.industry} onChange={(e) => setOrg({ ...org, industry: e.target.value })}>
+                    <option value="">—</option>
+                    {orgField('industry').options.map((o) => <option key={o.id} value={o.label}>{o.label}</option>)}
+                  </select>
+                ) : <input className="input" value={org.industry} onChange={(e) => setOrg({ ...org, industry: e.target.value })} />}
+              </label>
+              <label>
+                <span className="label">Annual revenue</span>
+                {orgField('annual_revenue')?.options?.length ? (
+                  <select className="input" value={org.annual_revenue} onChange={(e) => setOrg({ ...org, annual_revenue: e.target.value })}>
+                    <option value="">—</option>
+                    {orgField('annual_revenue').options.map((o) => <option key={o.id} value={o.label}>{o.label}</option>)}
+                  </select>
+                ) : <input className="input" value={org.annual_revenue} onChange={(e) => setOrg({ ...org, annual_revenue: e.target.value })} />}
+              </label>
+              <label><span className="label">Number of employees</span><input className="input" type="number" min={0} value={org.employee_count} onChange={(e) => setOrg({ ...org, employee_count: e.target.value })} /></label>
+            </div>
+          </Section>
+
+          <Section title="Followers">
+            <MultiSelect options={userOptions} value={form.followers} onChange={(v) => setForm((f) => ({ ...f, followers: v }))} placeholder="Type a name…" />
+          </Section>
+
+          <Section title="Other fields" hint="KIT-only fields: a name and a value, kept in KIT.">
             <div className="space-y-1.5">
-              {form.custom_fields.map((x, i) => (
-                <div key={i} className="flex gap-1.5">
-                  <input className="input w-2/5 text-sm" value={x.name} onChange={(e) => setField(i, 'name', e.target.value)} placeholder="Field" aria-label="Field name" />
-                  <input className="input flex-1 text-sm" value={x.value} onChange={(e) => setField(i, 'value', e.target.value)} placeholder="Value" aria-label="Field value" />
+              {kitOnly.map((x) => (
+                <div key={x.i} className="flex gap-1.5">
+                  <input className="input w-2/5 text-sm" value={x.name} onChange={(e) => setField(x.i, 'name', e.target.value)} placeholder="Field" aria-label="Field name" />
+                  <input className="input flex-1 text-sm" value={x.value} onChange={(e) => setField(x.i, 'value', e.target.value)} placeholder="Value" aria-label="Field value" />
                   <button type="button" className="btn-ghost px-1.5 text-slate-400 hover:text-red-600" aria-label="Remove field"
-                    onClick={() => setForm((f) => ({ ...f, custom_fields: f.custom_fields.filter((_, j) => j !== i) }))}><Trash2 size={14} /></button>
+                    onClick={() => setForm((f) => ({ ...f, custom_fields: f.custom_fields.filter((_, j) => j !== x.i) }))}><Trash2 size={14} /></button>
                 </div>
               ))}
               <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setForm((f) => ({ ...f, custom_fields: [...f.custom_fields, { name: '', value: '' }] }))}>
                 <Plus size={13} /> Add a field
               </button>
             </div>
-          </section>
+          </Section>
 
           <ProductsSection data={data} currency={form.currency || data.currency}
-            onAdd={(p) => products(() => api.post(`/tickets/${ticket.id}/products`, p))}
-            onDelete={(p) => confirm(`Remove “${p.name}”?`) && products(() => api.del(`/tickets/products/${p.id}`))} />
+            onAdd={(p) => lines(() => api.post(`/tickets/${ticket.id}/products`, p))}
+            onEdit={(p, patch) => lines(() => api.put(`/tickets/products/${p.id}`, patch))}
+            onDelete={(p) => confirm(`Remove “${p.name}”?${p.pipedrive_id ? ' It’s removed from the deal in Pipedrive too.' : ''}`) && lines(() => api.del(`/tickets/products/${p.id}`))} />
+
+          <InstallmentsSection data={data} currency={form.currency || data.currency}
+            onAdd={(i) => lines(() => api.post(`/tickets/${ticket.id}/installments`, i))}
+            onEdit={(i, patch) => lines(() => api.put(`/tickets/installments/${i.id}`, patch))}
+            onDelete={(i) => confirm(`Remove this installment?${i.pipedrive_id ? ' It’s removed from the deal in Pipedrive too.' : ''}`) && lines(() => api.del(`/tickets/installments/${i.id}`))} />
         </div>
       ) : <p className="text-sm text-slate-400">Loading…</p>}
     </DrawerShell>
   );
 }
 
-/** Products on the deal, each saved as it's added or removed (apart from the fields above). */
-function ProductsSection({ data, currency, onAdd, onDelete }) {
+/** A person on the deal, as Pipedrive shows them: name, title, labels, work phone and email. */
+function PersonCard({ person: c, primary }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-semibold text-slate-800">{contactName(c)}</span>
+        {primary && <span className="rounded bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-800">Contact person</span>}
+        {(c.labels || []).map((l) => <span key={l} className="rounded-full bg-slate-100 px-2 text-[10px] font-medium text-slate-600">{l}</span>)}
+      </div>
+      <div className="mt-0.5 grid gap-x-4 text-xs text-slate-500 sm:grid-cols-2">
+        <span>First name: <span className="text-slate-700">{c.first_name || '—'}</span></span>
+        <span>Last name: <span className="text-slate-700">{c.last_name || '—'}</span></span>
+        <span>Title: <span className="text-slate-700">{c.role || '—'}</span></span>
+        <span>Organization: <span className="text-slate-700">{c.organization || '—'}</span></span>
+        <span>Phone (work): {c.phone ? <a href={`tel:${c.phone}`} className="text-brand-700 hover:underline">{c.phone}</a> : '—'}</span>
+        <span>Email (work): {c.email ? <a href={`mailto:${c.email}`} className="text-brand-700 hover:underline">{c.email}</a> : '—'}</span>
+      </div>
+    </div>
+  );
+}
+
+/** Products on the deal, each saved as it's added, changed or removed (apart from the fields above). */
+function ProductsSection({ data, currency, onAdd, onEdit, onDelete }) {
   const blank = { name: '', quantity: '1', item_price: '', discount: '' };
   const [p, setP] = useState(blank);
+  const [editing, setEditing] = useState(null); // a product id, with its draft
   const set = (k) => (e) => setP((x) => ({ ...x, [k]: e.target.value }));
   const add = async () => { if (p.name.trim()) { await onAdd(p); setP(blank); } };
   const total = data.products.reduce((s, x) => s + lineTotal(x), 0);
+  const billing = (x) => (x.billing_frequency && x.billing_frequency !== 'one-time' ? ` · ${x.billing_frequency}${x.billing_frequency_cycles ? ` × ${x.billing_frequency_cycles}` : ''}${x.billing_start_date ? ` from ${x.billing_start_date}` : ''}` : '');
   return (
-    <section>
-      <h4 className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">Products</h4>
-      <p className="mb-2 text-[11px] text-slate-400">What's being sold on this deal. Saved as soon as you add or remove one.</p>
+    <Section title="Products" hint="What's being sold on this deal, as in Pipedrive. Saved as soon as you add, change or remove one.">
       {data.products.length > 0 && (
         <ul className="mb-2 divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
           {data.products.map((x) => (
-            <li key={x.id} className="group flex items-start gap-2 px-3 py-2 text-sm">
-              <div className="min-w-0 flex-1">
-                <div className="font-medium text-slate-800">{x.name}</div>
-                <div className="text-[11px] text-slate-500">
-                  {x.quantity} × {money(x.item_price, currency)}{x.discount ? ` · ${x.discount}% off` : ''}{x.comments ? ` · ${x.comments}` : ''}
+            <li key={x.id} className="group px-3 py-2 text-sm">
+              {editing?.id === x.id ? (
+                <div className="grid grid-cols-[1fr_4rem_6rem_4rem_4rem_auto_auto] items-center gap-1.5">
+                  <input className="input text-sm" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} aria-label="Product name" />
+                  <input className="input text-sm" type="number" min={0} value={editing.quantity} onChange={(e) => setEditing({ ...editing, quantity: e.target.value })} aria-label="Quantity" />
+                  <input className="input text-sm" type="number" min={0} value={editing.item_price} onChange={(e) => setEditing({ ...editing, item_price: e.target.value })} aria-label="Item price" />
+                  <input className="input text-sm" type="number" min={0} max={100} value={editing.discount} onChange={(e) => setEditing({ ...editing, discount: e.target.value })} aria-label="Discount percent" title="% off" />
+                  <input className="input text-sm" type="number" min={0} value={editing.tax} onChange={(e) => setEditing({ ...editing, tax: e.target.value })} aria-label="Tax percent" title="Tax %" />
+                  <button type="button" className="btn-primary px-2 py-1 text-xs" onClick={async () => { await onEdit(x, editing); setEditing(null); }}>Save</button>
+                  <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(null)}>Cancel</button>
                 </div>
-              </div>
-              <span className="shrink-0 tabular-nums text-slate-700">{money(lineTotal(x), currency)}</span>
-              <button type="button" onClick={() => onDelete(x)} aria-label={`Remove ${x.name}`} className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600"><Trash2 size={14} /></button>
+              ) : (
+                <div className="flex items-start gap-2">
+                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setEditing({ id: x.id, name: x.name, quantity: x.quantity, item_price: x.item_price, discount: x.discount, tax: x.tax ?? 0, comments: x.comments ?? '' })} title="Edit">
+                    <div className="font-medium text-slate-800">{x.name}{x.is_enabled === 0 && <span className="ml-1.5 text-[10px] font-normal text-slate-400">disabled</span>}</div>
+                    <div className="text-[11px] text-slate-500">
+                      {x.quantity} × {money(x.item_price, currency)}{x.discount ? ` · ${x.discount}% off` : ''}{x.tax ? ` · ${x.tax}% tax` : ''}{billing(x)}{x.comments ? ` · ${x.comments}` : ''}
+                    </div>
+                  </button>
+                  <span className="shrink-0 tabular-nums text-slate-700">{money(x.sum ?? lineTotal(x), currency)}</span>
+                  <button type="button" onClick={() => onDelete(x)} aria-label={`Remove ${x.name}`} className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600"><Trash2 size={14} /></button>
+                </div>
+              )}
             </li>
           ))}
           <li className="flex justify-between px-3 py-2 text-xs font-semibold text-slate-700"><span>Total</span><span className="tabular-nums">{money(total, currency)}</span></li>
@@ -785,6 +968,54 @@ function ProductsSection({ data, currency, onAdd, onDelete }) {
         <input className="input text-sm" type="number" min={0} max={100} value={p.discount} onChange={set('discount')} placeholder="% off" aria-label="Discount percent" />
         <button type="button" className="btn-primary px-2" onClick={add} disabled={!p.name.trim()} aria-label="Add product"><Plus size={15} /></button>
       </div>
-    </section>
+    </Section>
+  );
+}
+
+/** The deal's installments: Pipedrive's payment schedule (how much is due, and when). */
+function InstallmentsSection({ data, currency, onAdd, onEdit, onDelete }) {
+  const blank = { description: '', amount: '', billing_date: '' };
+  const [i, setI] = useState(blank);
+  const [editing, setEditing] = useState(null);
+  const set = (k) => (e) => setI((x) => ({ ...x, [k]: e.target.value }));
+  const add = async () => { if (i.amount && i.billing_date) { await onAdd(i); setI(blank); } };
+  const total = data.installments.reduce((s, x) => s + (x.amount || 0), 0);
+  const today = new Date().toLocaleDateString('en-CA');
+  return (
+    <Section title="Installments" hint="The payment schedule on the deal, as in Pipedrive: each amount and the date it's due. Past dates are shown as due.">
+      {data.installments.length > 0 && (
+        <ul className="mb-2 divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+          {data.installments.map((x) => (
+            <li key={x.id} className="group px-3 py-2 text-sm">
+              {editing?.id === x.id ? (
+                <div className="grid grid-cols-[1fr_7rem_9rem_auto_auto] items-center gap-1.5">
+                  <input className="input text-sm" value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} aria-label="Description" />
+                  <input className="input text-sm" type="number" min={0} step="0.01" value={editing.amount} onChange={(e) => setEditing({ ...editing, amount: e.target.value })} aria-label="Amount" />
+                  <input className="input text-sm" type="date" value={editing.billing_date} onChange={(e) => setEditing({ ...editing, billing_date: e.target.value })} aria-label="Billing date" />
+                  <button type="button" className="btn-primary px-2 py-1 text-xs" onClick={async () => { await onEdit(x, editing); setEditing(null); }}>Save</button>
+                  <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(null)}>Cancel</button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setEditing({ id: x.id, description: x.description ?? '', amount: x.amount, billing_date: x.billing_date ?? '' })} title="Edit">
+                    <div className="font-medium text-slate-800">{x.description || 'Installment'}</div>
+                    <div className="text-[11px] text-slate-500">{x.billing_date ? `${shortDate(x.billing_date, { month: 'short', day: 'numeric', year: 'numeric' })}${x.billing_date <= today ? ' · due' : ' · scheduled'}` : 'No date'}</div>
+                  </button>
+                  <span className="shrink-0 tabular-nums text-slate-700">{money(x.amount, currency)}</span>
+                  <button type="button" onClick={() => onDelete(x)} aria-label="Remove installment" className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600"><Trash2 size={14} /></button>
+                </div>
+              )}
+            </li>
+          ))}
+          <li className="flex justify-between px-3 py-2 text-xs font-semibold text-slate-700"><span>Total</span><span className="tabular-nums">{money(total, currency)}</span></li>
+        </ul>
+      )}
+      <div className="grid grid-cols-[1fr_7rem_9rem_auto] gap-1.5">
+        <input className="input text-sm" value={i.description} onChange={set('description')} placeholder="Description" aria-label="Description" onKeyDown={(e) => e.key === 'Enter' && add()} />
+        <input className="input text-sm" type="number" min={0} step="0.01" value={i.amount} onChange={set('amount')} placeholder="Amount" aria-label="Amount" />
+        <input className="input text-sm" type="date" value={i.billing_date} onChange={set('billing_date')} aria-label="Billing date" />
+        <button type="button" className="btn-primary px-2" onClick={add} disabled={!i.amount || !i.billing_date} aria-label="Add installment"><Plus size={15} /></button>
+      </div>
+    </Section>
   );
 }

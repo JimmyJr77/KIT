@@ -20,7 +20,7 @@ import { ensureSample } from './sample/index.js';
 import activityRoutes from './routes/activities.js';
 import pipedriveRoutes from './routes/pipedrive.js';
 import labelRoutes from './routes/labels.js';
-import { schedulePipedriveSync } from './services/pipedrive.js';
+import { schedulePipedriveSync, scheduleProjectRefresh } from './services/pipedrive.js';
 import { handleWebhook } from './services/pipedriveLive.js';
 import { scheduleAutoSend } from './services/pipedriveSend.js';
 import travelRoutes from './routes/travel.js';
@@ -110,6 +110,7 @@ try {
 }
 
 schedulePipedriveSync();
+scheduleProjectRefresh();
 scheduleAutoSend();
 
 const port = Number(process.env.PORT) || 3001;

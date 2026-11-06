@@ -31,7 +31,7 @@ function ThreadPane({ id, onClose, onChanged, highlight, footer }) {
 
   const k = KIND[data?.comment.kind] || KIND.comment;
   const remove = async (c) => {
-    if (!confirm(c.parent_id ? 'Delete this reply?' : 'Delete this post and all of its replies?')) return;
+    if (!confirm(c.parent_id ? 'Delete this reply?' : `Delete this post and all of its replies?${c.synced ? ' The note is deleted from the deal in Pipedrive too.' : ''}`)) return;
     await api.del(`/tickets/comments/${c.id}`);
     onChanged?.();
     if (c.parent_id) load(); else onClose();

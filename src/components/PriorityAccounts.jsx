@@ -12,7 +12,7 @@ import { PlanRail, DrawerShell } from '../pages/TicketPlanning.jsx';
 import { ActivitiesDrawer } from '../pages/TicketActivities.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
-const CLOSED = ['Awarded', 'Lost'];
+import { isClosed } from '../lib/lanes.js';
 // Words too common in agency names to match on by themselves.
 const GENERIC = new Set(['the', 'and', 'for', 'of', 'command', 'department', 'office', 'agency', 'systems', 'center', 'program', 'executive', 'directorate', 'division', 'service', 'services', 'administration', 'national', 'defense', 'force', 'air', 'u.s.', 'us']);
 
@@ -225,7 +225,7 @@ function SortableAccount({ account, edit, onOpen }) {
 }
 
 function AccountChip({ account, edit, onOpen, handle, overlay }) {
-  const open = account.tickets.filter((t) => !CLOSED.includes(t.pipeline_status));
+  const open = account.tickets.filter((t) => !isClosed(t));
   return (
     <div className={`flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 text-sm ${overlay ? 'shadow-lg' : 'hover:border-brand-500'}`}>
       {edit && <span {...handle} className="cursor-grab p-1.5 text-slate-300 hover:text-slate-500 active:cursor-grabbing" aria-label={`Move ${account.name}`}><GripVertical size={14} /></span>}
@@ -247,7 +247,7 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
   const [q, setQ] = useState('');
   const [everyOrg, setEveryOrg] = useState(false);
   useEffect(() => {
-    if (edit) api.get('/tickets?scope=all&kind=bid').then((d) => setAll(d.tickets.filter((t) => !t.archived && !CLOSED.includes(t.pipeline_status))));
+    if (edit) api.get('/tickets?scope=all&kind=bid').then((d) => setAll(d.tickets.filter((t) => !t.archived && !isClosed(t))));
   }, [edit]);
   const chosen = account.tickets.map((t) => t.id);
   const setTickets = (ids) => save(api.put(`/priority-accounts/accounts/${account.id}/tickets`, { ticket_ids: ids }));
@@ -462,7 +462,7 @@ function PickList({ tickets, cards, chosen, onClose, onSave }) {
   const [q, setQ] = useState('');
   const [everyOrg, setEveryOrg] = useState(false);
   useEffect(() => {
-    api.get('/tickets?scope=all&kind=bid').then((d) => setAll(d.tickets.filter((t) => !t.archived && !CLOSED.includes(t.pipeline_status))));
+    api.get('/tickets?scope=all&kind=bid').then((d) => setAll(d.tickets.filter((t) => !t.archived && !isClosed(t))));
   }, []);
   const toggle = (id) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
   const rows = useMemo(() => {

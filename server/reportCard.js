@@ -2,7 +2,7 @@
 // over a quarter or a year. Each has a value, a plain-language detail, and a status: good, watch, or behind
 // (or "none" when there isn't enough to judge). Thresholds are below so they're easy to tune.
 import { db } from './db.js';
-import { bids, contracts, forecastLines, targets, quartersTarget, trailingQuarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES } from './financials.js';
+import { bids, contracts, forecastLines, targets, quartersTarget, trailingQuarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES, isOpen, isWon } from './financials.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
 
 export const THRESHOLDS = {
@@ -134,8 +134,8 @@ export function reportCard(director, p) {
   };
 
   // 4. Win rate: pipeline tickets won or lost in the period.
-  const decided = list.filter((tk) => ['Awarded', 'Lost'].includes(tk.pipeline_status) && within(closedOn(tk)));
-  const won = decided.filter((tk) => tk.pipeline_status === 'Awarded');
+  const decided = list.filter((tk) => !isOpen(tk) && within(closedOn(tk)));
+  const won = decided.filter(isWon);
   const winRate = {
     key: 'winRate', title: 'Win rate', question: 'Are we pursuing and winning the right work?',
     value: decided.length ? won.length / decided.length : null, format: 'percent',
@@ -145,7 +145,7 @@ export function reportCard(director, p) {
   };
 
   // 5. Pursuit progression: pipeline tickets that moved forward a stage in the period, and open pipeline tickets that have stalled.
-  const open = list.filter((tk) => OPEN_STAGES.includes(tk.pipeline_status));
+  const open = list.filter((tk) => isOpen(tk) && OPEN_STAGES.includes(tk.pipeline_status));
   const advanced = list.filter((tk) => {
     const rows = hist.get(tk.id) || [];
     return rows.some((r, i) => i > 0 && within(r.changed_at) && rank(r.pipeline_status) > rank(rows[i - 1].pipeline_status));
@@ -267,8 +267,8 @@ export function reportTrends({ weeks = 13, director = null } = {}) {
       out.newQualified.push(sum(list.filter((t) => within(firstQualified.get(t.id))), (t) => t.value));
       const pipeline = sum(list, (t) => { const st = stateOn(t, end); return st && QUALIFIED_STAGES.includes(st.pipeline_status) ? st.value : 0; });
       out.coverage.push(target ? pipeline / target : null);
-      const decided = list.filter((t) => ['Awarded', 'Lost'].includes(t.pipeline_status) && within(closedOn(t)));
-      out.winRate.push(decided.length ? decided.filter((t) => t.pipeline_status === 'Awarded').length / decided.length : null);
+      const decided = list.filter((t) => !isOpen(t) && within(closedOn(t)));
+      out.winRate.push(decided.length ? decided.filter(isWon).length / decided.length : null);
       out.progression.push(list.reduce((n, t) => n + advances.get(t.id).filter(within).length, 0));
       // The latest quarter finished by this week that has a forecast.
       const q = [...new Set(snaps.map((s) => s.quarter))].filter((x) => quarterRange(x).end < end).sort().at(-1);
