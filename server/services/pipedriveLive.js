@@ -3,8 +3,9 @@
 // Pipedrive wins on the fields it holds, except ones changed in KIT that haven't been sent, and KIT's own work is kept).
 // Like every pull, what's deleted in Pipedrive is deleted in KIT (a deleted deal's ticket is archived).
 //
-// Nothing here writes deal data to Pipedrive. The webhooks themselves are registered only when an admin turns live
-// updates on in Admin Access (and removed when they turn it off).
+// Nothing here writes deal data to Pipedrive. The webhooks themselves follow the sync direction an admin chose in Admin
+// Access: registered whenever Pipedrive → KIT is part of the sync, removed when it isn't (KIT → Pipedrive only, or off).
+// That's checked when the server starts, when the direction changes, and every hour, from the production server only.
 //
 // The webhook endpoint is public, so Pipedrive signs in to it with HTTP Basic auth: user "pipedrive" and the password in
 // PIPEDRIVE_WEBHOOK_SECRET. Without that secret, the endpoint turns every request away.
@@ -134,7 +135,7 @@ function flush() {
   }
 }
 
-// ---- Status, and turning it on and off (admins)
+// ---- Status, and keeping the webhooks in step with the sync direction
 
 /** KIT's webhooks in Pipedrive: those pointing at this server's endpoint. */
 async function ours(req) {
@@ -143,10 +144,21 @@ async function ours(req) {
   return (j.data || []).filter((w) => w.subscription_url === url);
 }
 
+/** Why this server can't register webhooks, or null when it can. */
+function blocker(req) {
+  if (!pipedriveConfigured()) return `Add PIPEDRIVE_API_KEY to the ${syncStatus().server || 'KIT API'} service in Render first.`;
+  if (!sendingAllowed()) return `Live updates are registered from the production server only. ${sendingBlockedReason()}`;
+  if (!secret()) return 'Set PIPEDRIVE_WEBHOOK_SECRET on the server to turn on live updates.';
+  const where = publicUrl(req);
+  if (!where.ok) return `Pipedrive can only send to a public HTTPS address, and this server is at ${where.url || 'an unknown address'}. Set PUBLIC_URL.`;
+  return null;
+}
+
 export async function liveStatus(req) {
   const where = publicUrl(req);
   const base = {
     secret: !!secret(), url: `${where.url}${WEBHOOK_PATH}`, public: where.ok, received, waiting: pending.size,
+    wanted: pullsAllowed(), blocker: blocker(req),
     last: json.parse(getSetting('pipedrive_last_live'), null), turned_on: json.parse(getSetting('pipedrive_live_on'), null),
     configured: syncStatus().configured, server: syncStatus().server,
   };
@@ -164,27 +176,36 @@ export async function liveStatus(req) {
   }
 }
 
-/** Register a webhook for each kind of record KIT listens for (any that are already there are kept). */
-export async function turnOn(req) {
-  if (!sendingAllowed()) throw new Error(`Live updates are registered from the production server only. ${sendingBlockedReason()}`);
-  if (!secret()) throw new Error('Set PIPEDRIVE_WEBHOOK_SECRET on the server first.');
-  const where = publicUrl(req);
-  if (!where.ok) throw new Error(`Pipedrive can only send to a public HTTPS address, and this server is at ${where.url || 'an unknown address'}. Set PUBLIC_URL.`);
+/**
+ * Make Pipedrive's webhooks match the sync direction: one for each kind of record KIT listens for while Pipedrive → KIT is
+ * part of the sync (any already there are kept), none when it isn't. Does nothing on a server that can't register them
+ * (not production, no secret, no public HTTPS address). `req` is the admin's request when the direction was just changed,
+ * so the address can be read from it; without one, PUBLIC_URL or Render's address is used.
+ */
+export async function ensureLive(req = null) {
+  if (blocker(req)) return;
   const have = await ours(req);
-  for (const object of OBJECTS.filter((o) => !have.some((w) => w.event_object === o))) {
-    await call('webhooks', {}, {
-      method: 'POST',
-      body: { subscription_url: subscriptionUrl(req), event_action: '*', event_object: object, version: '2.0', name: WEBHOOK_NAME,
-        http_auth_user: WEBHOOK_USER, http_auth_password: secret() },
-    });
+  if (pullsAllowed()) {
+    const missing = OBJECTS.filter((o) => !have.some((w) => w.event_object === o));
+    for (const object of missing) {
+      await call('webhooks', {}, {
+        method: 'POST',
+        body: { subscription_url: subscriptionUrl(req), event_action: '*', event_object: object, version: '2.0', name: WEBHOOK_NAME,
+          http_auth_user: WEBHOOK_USER, http_auth_password: secret() },
+      });
+    }
+    if (missing.length || !getSetting('pipedrive_live_on')) {
+      setSetting('pipedrive_live_on', json.str({ at: new Date().toISOString(), by: req?.user ? `${req.user.first_name} ${req.user.last_name}` : null }));
+    }
+  } else {
+    for (const w of have) await call(`webhooks/${w.id}`, {}, { method: 'DELETE' });
+    if (have.length || getSetting('pipedrive_live_on')) setSetting('pipedrive_live_on', null);
   }
-  setSetting('pipedrive_live_on', json.str({ at: new Date().toISOString(), by: req.user ? `${req.user.first_name} ${req.user.last_name}` : null }));
-  return liveStatus(req);
 }
 
-/** Remove KIT's webhooks from Pipedrive. Nightly and on-demand pulls carry on as before. */
-export async function turnOff(req) {
-  for (const w of await ours(req)) await call(`webhooks/${w.id}`, {}, { method: 'DELETE' });
-  setSetting('pipedrive_live_on', null);
-  return liveStatus(req);
+/** Check the webhooks soon after the server starts, then every hour, so they stay in step with the direction. */
+export function scheduleLive() {
+  const check = () => ensureLive().catch((e) => console.error('Pipedrive live updates:', e.message));
+  setTimeout(check, 15 * 1000).unref();
+  setInterval(check, 60 * 60 * 1000).unref();
 }

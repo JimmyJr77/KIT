@@ -144,10 +144,11 @@ function BrandAssets({ assets, q, canManage, onEdit }) {
           <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-4">
             {g.items.map((a) => (
               <article key={a.id} className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                <div className={`grid h-40 place-items-center p-4 ${g.kind === 'logo' ? 'bg-[length:16px_16px] bg-[conic-gradient(#f1f5f9_25%,#fff_0_50%,#f1f5f9_0_75%,#fff_0)]' : 'bg-slate-100'}`}>
+                {/* A flex box, not a grid: the image sizes against the box's fixed height instead of stretching it. */}
+                <div className={`flex h-40 shrink-0 items-center justify-center overflow-hidden p-4 ${g.kind === 'logo' ? 'bg-[length:16px_16px] bg-[conic-gradient(#f1f5f9_25%,#fff_0_50%,#f1f5f9_0_75%,#fff_0)]' : 'bg-slate-100'}`}>
                   {a.previewable
                     ? <img src={`/api/marketing/assets/${a.id}/view?v=${encodeURIComponent(a.updated_at || a.created_at)}`} alt={a.title} loading="lazy"
-                        className={g.kind === 'logo' ? 'max-h-full max-w-full object-contain' : 'h-full w-full rounded object-cover'} />
+                        className={`block min-h-0 min-w-0 ${g.kind === 'logo' ? 'max-h-full max-w-full object-contain' : 'h-full w-full rounded object-cover'}`} />
                     : <FileText size={32} className="text-slate-300" />}
                 </div>
                 <div className="flex flex-1 flex-col gap-1 border-t border-slate-100 p-3">

@@ -3,10 +3,11 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAdmin } from '../auth.js';
-import { startPull, lastPull, syncStatus, call, syncDirection, setSyncDirection, pullsAllowed, fileHold, decideFileHold, FILE_HOLD_AT } from '../services/pipedrive.js';
-import { startSend, lastSend, preview, linkedTickets, sendModes, savedModes, setSendModes, autoStatus, SEND_KINDS, startSync, lastSync } from '../services/pipedriveSend.js';
+import { startPull, lastPull, syncStatus, call, syncDirection, setSyncDirection, pullsAllowed, pullsBlockedReason, fileHold, decideFileHold, FILE_HOLD_AT } from '../services/pipedrive.js';
+import { startSend, lastSend, preview, linkedTickets, sendModes, savedModes, setSendModes, autoStatus, SEND_KINDS, startSync, lastSync, previewDirection, fieldLabel, autoSend, unpark } from '../services/pipedriveSend.js';
 import { fieldsOf } from '../services/pipedriveFields.js';
-import { liveStatus, turnOn, turnOff } from '../services/pipedriveLive.js';
+import { liveStatus, ensureLive } from '../services/pipedriveLive.js';
+import { conflicts, conflictCount, resolveConflicts } from '../services/pipedriveConflicts.js';
 
 const r = Router();
 
@@ -18,21 +19,35 @@ const leads = (userId) => !!db.prepare("SELECT 1 FROM user_teams WHERE user_id =
 /** The pulls this person may run. */
 const pulls = (u) => ['mine', ...(leads(u.id) ? ['team'] : []), ...(u.role === 'admin' ? ['all'] : [])];
 
-/** How Pipedrive stands for this person: what's running, their last pulls and (admins) the direction, last sync, pull and send. */
+/** How Pipedrive stands for this person: what's running, their last pull and (admins) the direction, last sync and send. */
 r.get('/', (req, res) => {
   const admin = req.user.role === 'admin';
   res.json({
-    ...syncStatus(), pulls: pullsAllowed() ? pulls(req.user) : [], pulling: pullsAllowed(), mine: lastPull(`pipedrive_last_pull_${req.user.id}`),
-    ...(admin ? { direction: syncDirection(), lastSync: lastSync(), last: lastPull('pipedrive_last_sync'), lastProjects: lastPull('pipedrive_last_projects'), lastSend: lastSend(),
-      modes: sendModes(), savedModes: savedModes(), auto: autoStatus(), fileHold: fileHold(), fileHoldAt: FILE_HOLD_AT,
-      fields: Object.fromEntries(['deal', 'person', 'organization', 'project'].map((e) => [e, fieldsOf(e).filter((f) => f.custom).length])) } : {}),
+    ...syncStatus(), pulls: pullsAllowed() ? pulls(req.user) : [], pulling: pullsAllowed(), pulling_blocked: pullsAllowed() ? null : pullsBlockedReason(),
+    mine: lastPull(`pipedrive_last_pull_${req.user.id}`),
+    ...(admin ? { direction: syncDirection(), lastSync: lastSync(), lastSend: lastSend(), conflicts: conflictCount(),
+      modes: sendModes(), savedModes: savedModes(), auto: autoStatus(), fileHold: fileHold(), fileHoldAt: FILE_HOLD_AT } : {}),
   });
 });
 
-/** Admins. Body: { direction: 'to_kit' | 'to_pipedrive' | 'both' | 'selective' }. */
-r.put('/direction', requireAdmin, (req, res) => {
+/** Admins: what the first sync in a direction would add and delete on each side, to approve before choosing it. Reads Pipedrive; writes nothing. */
+r.get('/direction/preview', requireAdmin, async (req, res) => {
+  try { res.json(await previewDirection(String(req.query.direction || ''))); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+/**
+ * Admins. Body: { direction: 'to_kit' | 'to_pipedrive' | 'both' | 'selective' | 'off', sync?: true }. The direction stays
+ * until an admin changes it here. Pipedrive's webhooks are made to match, and with `sync` the first sync starts right away.
+ */
+r.put('/direction', requireAdmin, async (req, res) => {
   const d = setSyncDirection(req.body?.direction);
-  res.json({ direction: d, modes: sendModes(), pulling: pullsAllowed() });
+  await ensureLive(req).catch((e) => console.error('Pipedrive live updates:', e.message));
+  let started = false;
+  let error = null;
+  if (req.body?.sync && d !== 'off') {
+    try { startSync(who(req.user)); started = true; } catch (e) { error = e.message; }
+  }
+  res.json({ direction: d, modes: sendModes(), pulling: pullsAllowed(), started, error });
 });
 
 /** Admins: the Sync button. Pulls everything, then sends everything waiting, as the direction allows. Poll GET / for progress. */
@@ -50,11 +65,6 @@ r.post('/file-hold', requireAdmin, (req, res) => {
 r.get('/fields/:entity', (req, res) => {
   if (!['deal', 'person', 'organization', 'project'].includes(req.params.entity)) return res.status(404).json({ error: 'Unknown entity' });
   res.json({ fields: fieldsOf(req.params.entity) });
-});
-
-/** Admins: refresh Projects and field definitions now (they have no webhooks). */
-r.post('/pull/projects', requireAdmin, (req, res) => {
-  try { startPull({ kind: 'projects' }, who(req.user)); res.json(syncStatus()); } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 /**
@@ -130,19 +140,49 @@ r.post('/send', requireAdmin, (req, res) => {
   }
 });
 
-// ---- Admins: live updates (Pipedrive's webhooks → KIT)
+// ---- Admins: conflicts (a field changed on both sides since the last pull)
+
+/** A field's value as a person would read it: names for people and territories, Yes/No for flags, else the value. */
+function readable(field, v) {
+  if (v == null || v === '') return '—';
+  if (['bd_director_id', 'assignee_id', 'owner_id'].includes(field)) {
+    const u = db.prepare('SELECT first_name, last_name FROM users WHERE id = ?').get(v);
+    return u ? `${u.first_name} ${u.last_name}`.trim() : `user ${v}`;
+  }
+  if (field === 'territory_id') return db.prepare('SELECT name FROM territories WHERE id = ?').get(v)?.name || `territory ${v}`;
+  if (typeof v === 'boolean' || ['done', 'is_enabled'].includes(field)) return v && v !== '0' ? 'Yes' : 'No';
+  if (['value', 'amount', 'item_price', 'annual_revenue'].includes(field) && Number.isFinite(Number(v))) return `$${Number(v).toLocaleString('en-US')}`;
+  return Array.isArray(v) ? v.join(', ') : String(v);
+}
+
+/** Every open conflict, with both values readable. */
+r.get('/conflicts', requireAdmin, (req, res) => {
+  res.json({
+    conflicts: conflicts().map((c) => ({
+      id: c.id, kind: c.kind, ticket_id: c.ticket_id, title: c.title, field: fieldLabel(c.field), found_at: c.found_at,
+      kit: readable(c.field, c.kit_value), pipedrive: readable(c.field, c.pipedrive_value), was: readable(c.field, c.snapshot_value),
+    })),
+  });
+});
+
+/**
+ * Body: { winner: 'kit' | 'pipedrive', ids?: [...] }. Settles the named conflicts (all of them without ids): KIT's value
+ * goes to Pipedrive with the next auto sync or push, or Pipedrive's is written into KIT.
+ */
+r.post('/conflicts/resolve', requireAdmin, (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number) : null;
+    const settled = resolveConflicts(req.body?.winner, ids);
+    if (req.body?.winner === 'kit') { unpark(); try { autoSend(); } catch { /* busy: the next run sends it */ } }
+    res.json({ settled, conflicts: conflictCount() });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ---- Admins: live updates (Pipedrive's webhooks → KIT). They follow the direction; this only reports on them.
 
 /** Whether live updates are on: the webhook address, KIT's webhooks in Pipedrive, and the last events and update. */
 r.get('/live', requireAdmin, async (req, res) => res.json(await liveStatus(req)));
-
-/** Register KIT's webhooks in Pipedrive. This changes Pipedrive's webhook settings only, never its data. */
-r.post('/live', requireAdmin, async (req, res) => {
-  try { res.json(await turnOn(req)); } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-/** Remove KIT's webhooks from Pipedrive. */
-r.delete('/live', requireAdmin, async (req, res) => {
-  try { res.json(await turnOff(req)); } catch (e) { res.status(400).json({ error: e.message }); }
-});
 
 export default r;

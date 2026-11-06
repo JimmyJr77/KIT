@@ -13,9 +13,11 @@ import { db, json, setSetting, getSetting } from '../db.js';
 import {
   call, all, allCursor, idOf, runJob, sendingAllowed, sendingBlockedReason, syncStatus, syncDirection, pullsAllowed, pull, dealView, activityView, personView, organizationView, productView, installmentView,
   kitChanges, snapshotOf, same, dealTracked, TASK_TRACKED, CONTACT_TRACKED, ORG_TRACKED, PRODUCT_TRACKED, INSTALLMENT_TRACKED, ACTIVITY_TYPES, uploadDir,
+  DIRECTIONS, pipedriveConfigured, deletedIds, dealsGone, filesGone, fileHold, FILE_HOLD_AT,
 } from './pipedrive.js';
 import { fieldByKey, fieldByName, fieldValue, labelIds, withCustom, customKeyOf, customDealFields, ACCOUNT_FIELD } from './pipedriveFields.js';
 import { projectView, taskView, projectActivityView, PROJECT_TRACKED, DTASK_TRACKED, DACT_TRACKED, PROJECT_STATUS_OF } from './pipedriveProjects.js';
+import { noteConflict } from './pipedriveConflicts.js';
 
 const TIME_ZONE = process.env.PIPEDRIVE_TIME_ZONE || 'America/New_York';
 
@@ -42,12 +44,13 @@ const LIST_MAX = 200;
 
 const MODES = ['off', 'manual', 'auto'];
 /**
- * Each kind's mode, from the sync direction: nothing goes with Pipedrive → KIT only; everything goes on its own with
- * KIT → Pipedrive only and two way; with a selective sync, each kind as the admin set it (Auto unless set).
+ * Each kind's mode, from the sync direction: nothing goes with Pipedrive → KIT only or the sync off; everything goes on
+ * its own with KIT → Pipedrive only and two way; with a selective sync, each kind as the admin set it (Auto unless set).
  */
-export function sendModes() {
-  const d = syncDirection();
-  if (d === 'to_kit') return Object.fromEntries(SEND_KINDS.map((k) => [k, 'off']));
+export const sendModes = () => modesFor(syncDirection());
+/** Each kind's mode under a given direction. */
+export function modesFor(d) {
+  if (d === 'to_kit' || d === 'off') return Object.fromEntries(SEND_KINDS.map((k) => [k, 'off']));
   if (d !== 'selective') return Object.fromEntries(SEND_KINDS.map((k) => [k, 'auto']));
   return savedModes();
 }
@@ -311,7 +314,7 @@ export function startSync(by) {
   const kinds = Object.entries(sendModes()).filter(([, m]) => m !== 'off').map(([k]) => k);
   const pulling = pullsAllowed();
   const sending = kinds.length > 0 && sendingAllowed();
-  if (!pulling && !sending) throw new Error(kinds.length ? `Nothing to sync on this server. ${sendingBlockedReason()}` : 'The sync is set to Pipedrive → KIT only and pulls are off, so there is nothing to sync.');
+  if (!pulling && !sending) throw new Error(syncDirection() === 'off' ? 'The sync is off. Choose a direction to sync.' : kinds.length ? `Nothing to sync on this server. ${sendingBlockedReason()}` : 'Nothing is pulled and nothing is set to send, so there is nothing to sync.');
   runJob('sync', async (phase) => {
     const out = {};
     if (pulling) {
@@ -326,6 +329,49 @@ export function startSync(by) {
   }, (result, e) => setSetting('pipedrive_last_full_sync', json.str({ at: new Date().toISOString(), by: by.name, pulling, sending, ok: !e, ...(e ? { error: e.message } : { result }) })));
 }
 export const lastSync = () => json.parse(getSetting('pipedrive_last_full_sync'), null);
+
+/**
+ * What the first sync in a direction would do, for an admin to approve before it starts. Nothing is written anywhere.
+ * From Pipedrive: deals and files new to KIT, and deals and files deleted in Pipedrive that KIT still has (read live from
+ * Pipedrive, as a pull would). To Pipedrive: the send preview for the kinds that direction sends.
+ */
+export async function previewDirection(direction) {
+  if (!DIRECTIONS.includes(direction)) throw new Error('Choose a direction');
+  const pulling = !['to_pipedrive', 'off'].includes(direction);
+  const kinds = Object.entries(modesFor(direction)).filter(([, m]) => m !== 'off').map(([k]) => k);
+  const out = { direction, pulling, sending: kinds.length > 0 && sendingAllowed(), sendKinds: kinds, pull: null, send: null };
+  const cut = (xs) => ({ count: xs.length, items: xs.slice(0, LIST_MAX) });
+  const quiet = () => {};
+  if (pulling && pipedriveConfigured()) {
+    const [deals, files] = await Promise.all([all('deals', { status: 'all_not_deleted' }), all('files')]);
+    const listed = new Set(deals.map((d) => d.id));
+    const titleOf = new Map(deals.map((d) => [d.id, d.title]));
+    const skipDeals = deletedIds('deal');
+    const knownDeals = new Set(db.prepare('SELECT pipedrive_id FROM tickets WHERE pipedrive_id IS NOT NULL').all().map((r) => r.pipedrive_id));
+    const dealsNew = deals.filter((d) => !knownDeals.has(d.id) && !skipDeals.has(d.id)).map((d) => d.title);
+    const goneIds = await dealsGone(listed, quiet);
+    const dealsGoneTitles = db.prepare('SELECT opportunity_title AS title FROM tickets WHERE pipedrive_id IN (SELECT value FROM json_each(?))').all(json.str(goneIds)).map((t) => t.title);
+    const knownFiles = new Set([
+      ...db.prepare('SELECT pipedrive_id FROM ticket_files WHERE pipedrive_id IS NOT NULL').all().map((f) => f.pipedrive_id),
+      ...db.prepare('SELECT pipedrive_id FROM delivery_files WHERE pipedrive_id IS NOT NULL').all().map((f) => f.pipedrive_id),
+      ...deletedIds('file'), ...deletedIds('project_file'),
+    ]);
+    const filesNew = files.filter((f) => f.deal_id && listed.has(f.deal_id) && !f.inline_flag && f.active_flag !== false && !knownFiles.has(f.id))
+      .map((f) => `${titleOf.get(f.deal_id)}: ${f.name || f.file_name || `file ${f.id}`}`);
+    const active = new Set(files.filter((f) => f.active_flag !== false).map((f) => f.id));
+    const missing = db.prepare(`SELECT f.pipedrive_id AS id, f.original_name AS name, t.opportunity_title AS title FROM ticket_files f JOIN tickets t ON t.id = f.ticket_id
+      WHERE f.pipedrive_id IS NOT NULL AND f.email_id IS NULL AND t.archive_set_id IS NULL`).all().filter((f) => !active.has(f.id));
+    const held = new Set((fileHold()?.files || []).map((f) => f.pipedrive_id));
+    const goneFileIds = new Set((await filesGone(missing.map((f) => f.id), quiet)).filter((id) => !held.has(id)));
+    const filesGoneNames = missing.filter((f) => goneFileIds.has(f.id)).map((f) => `${f.title}: ${f.name}`);
+    out.pull = {
+      deals: deals.length, dealsNew: cut(dealsNew), dealsGone: cut(dealsGoneTitles), filesNew: cut(filesNew), filesGone: cut(filesGoneNames),
+      filesHeld: filesGoneNames.length >= FILE_HOLD_AT, // that many at once are held for a decision rather than deleted
+    };
+  }
+  if (kinds.length) out.send = preview(kinds, {});
+  return out;
+}
 const forLog = ({ troubled, ...result }) => result; // eslint-disable-line no-unused-vars
 
 // ---- Auto-send
@@ -404,6 +450,9 @@ export function autoSend() {
 
 /** Auto-send's last run, and how many deals (or people) are waiting because they didn't fully go. */
 export const autoStatus = () => ({ last: json.parse(getSetting('pipedrive_last_auto'), null), waiting: parked.size });
+
+/** Forget what auto-send parked, so settled conflicts go with its next run. */
+export const unpark = () => parked.clear();
 
 export function scheduleAutoSend() {
   setInterval(() => {
@@ -494,6 +543,8 @@ async function send({ out, tickets }, phase) {
   const errors = [];
   const troubled = new Set();
   const skip = (key, text) => { skipped.push(text); troubled.add(key); };
+  // A field changed on both sides: listed here, and kept for an admin to settle (see pipedriveConflicts.js).
+  const conflict = (c) => { conflicts.push({ ticket_id: c.ticket_id ?? null, title: c.title, field: fieldLabel(c.field) }); noteConflict(c); };
   const attempt = async (what, fn, key) => {
     try { await fn(); } catch (e) { if (errors.length < LIST_MAX) errors.push(`${what}: ${e.message}`); if (key != null) troubled.add(key); }
   };
@@ -515,7 +566,7 @@ async function send({ out, tickets }, phase) {
         const snap = json.parse(row.pipedrive_snapshot, {});
         const ok = o.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
-          conflicts.push({ ticket_id: null, title: row.name, field: fieldLabel(f) });
+          conflict({ kind: 'organization', tbl: 'organizations', id: row.id, field: f, title: row.name, kit: row[f], pipedrive: view[f], snapshot: snap[f] });
           return false;
         });
         if (ok.length) {
@@ -547,7 +598,10 @@ async function send({ out, tickets }, phase) {
         const body = {};
         const sentFields = [];
         for (const f of d.fields) {
-          if (!same(now[f], snap[f])) { conflicts.push({ ticket_id: t.id, title: t.opportunity_title, field: fieldLabel(f) }); troubled.add(t.id); continue; }
+          if (!same(now[f], snap[f])) {
+            conflict({ kind: 'deal', tbl: 'tickets', id: t.id, field: f, ticket_id: t.id, title: t.opportunity_title, kit: t[f], pipedrive: now[f], snapshot: snap[f] });
+            troubled.add(t.id); continue;
+          }
           const v = t[f];
           const key = customKeyOf(f);
           if (key) {
@@ -703,7 +757,7 @@ async function send({ out, tickets }, phase) {
         const snap = json.parse(k.pipedrive_snapshot, {});
         const ok = a.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
-          conflicts.push({ ticket_id: a.ticket_id, title: `${a.title} · ${a.text}`, field: fieldLabel(f) });
+          conflict({ kind: 'activity', tbl: 'ticket_tasks', id: k.id, field: f, ticket_id: a.ticket_id, title: `${a.title} · ${a.text}`, kit: k[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(a.ticket_id);
           return false;
         });
@@ -793,7 +847,7 @@ async function send({ out, tickets }, phase) {
         const snap = json.parse(p.pipedrive_snapshot, {});
         const ok = item.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
-          conflicts.push({ ticket_id: p.ticket_id, title: `${item.title} · ${p.name}`, field: fieldLabel(f) });
+          conflict({ kind: 'product', tbl: 'ticket_products', id: p.id, field: f, ticket_id: p.ticket_id, title: `${item.title} · ${p.name}`, kit: p[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(p.ticket_id);
           return false;
         });
@@ -833,7 +887,7 @@ async function send({ out, tickets }, phase) {
         const snap = json.parse(i.pipedrive_snapshot, {});
         const ok = item.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
-          conflicts.push({ ticket_id: i.ticket_id, title: `${item.title} · installment`, field: fieldLabel(f) });
+          conflict({ kind: 'installment', tbl: 'ticket_installments', id: i.id, field: f, ticket_id: i.ticket_id, title: `${item.title} · installment`, kit: i[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(i.ticket_id);
           return false;
         });
@@ -887,7 +941,7 @@ async function send({ out, tickets }, phase) {
         const snap = json.parse(row.pipedrive_snapshot, {});
         const ok = c.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
-          conflicts.push({ ticket_id: null, title: c.text, field: fieldLabel(f) });
+          conflict({ kind: 'person', tbl: 'contacts', id: row.id, field: f, title: c.text, kit: row[f], pipedrive: view[f], snapshot: snap[f] });
           return false;
         });
         if (ok.includes('organization') && row.organization_id) await ensureOrg(db.prepare('SELECT * FROM organizations WHERE id = ?').get(row.organization_id));
@@ -937,7 +991,7 @@ async function send({ out, tickets }, phase) {
         const snap = json.parse(p.pipedrive_snapshot, {});
         const ok = x.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
-          conflicts.push({ ticket_id: x.ticket_id, title: `${x.title} · project`, field: fieldLabel(f) });
+          conflict({ kind: 'project', tbl: 'delivery_programs', id: p.id, field: f, ticket_id: x.ticket_id, title: `${x.title} · project`, kit: p[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(x.ticket_id);
           return false;
         });
@@ -1000,7 +1054,7 @@ async function send({ out, tickets }, phase) {
         const snap = json.parse(k.pipedrive_snapshot, {});
         const ok = a.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
-          conflicts.push({ ticket_id: a.ticket_id, title: `${a.title} · ${a.text}`, field: fieldLabel(f) });
+          conflict({ kind: 'project_task', tbl: 'delivery_tasks', id: k.id, field: f, ticket_id: a.ticket_id, title: `${a.title} · ${a.text}`, kit: k[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(a.ticket_id);
           return false;
         });

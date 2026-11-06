@@ -23,6 +23,7 @@ import {
   saveFields, fieldsOf, fieldByKey, fieldByName, customDealFields, fieldText, labelNames, withCustom, cfKey, customFieldsList, ACCOUNT_FIELD,
 } from './pipedriveFields.js';
 import { readProjects, writeProjects } from './pipedriveProjects.js';
+import { holdConflicts } from './pipedriveConflicts.js';
 
 const API = process.env.PIPEDRIVE_API_URL || 'https://api.pipedrive.com/v1';
 // Pipedrive calls it the API token; either name works. Stray spaces or quotes from pasting are ignored.
@@ -245,16 +246,22 @@ export function productView(p) {
 }
 export const installmentView = (i) => ({ description: i.description || null, amount: i.amount ?? 0, billing_date: i.billing_date || null });
 
-// ---- Which way the sync runs. An admin chooses in Admin Access:
-//   to_kit        one way, Pipedrive → KIT: pulls run, nothing is sent
+// ---- Which way the sync runs. An admin chooses in Admin Access. Whenever Pipedrive → KIT is part of it, live updates
+// (Pipedrive's webhooks, see pipedriveLive.js) are on; they're registered and removed to match.
+//   to_kit        one way, Pipedrive → KIT: pulls and live updates run, nothing is sent
 //   to_pipedrive  one way, KIT → Pipedrive: changes go out on their own, nothing is pulled (not even live updates)
-//   both          two way (the default): pulls run, every kind of change goes out on its own
+//   both          two way: pulls and live updates run, every kind of change goes out on its own
 //   selective     two way, with each kind of change set to Auto, On push or Off by hand
-export const DIRECTIONS = ['to_kit', 'to_pipedrive', 'both', 'selective'];
-export const syncDirection = () => (DIRECTIONS.includes(getSetting('pipedrive_sync_direction')) ? getSetting('pipedrive_sync_direction') : 'both');
+//   off           no sync (the default on a fresh install): nothing is pulled, nothing is sent, until an admin chooses
+//                 a direction and approves its first sync. An install that had already synced deals before this choice
+//                 existed was set to two way once, in db.js, so it carried on as it was.
+export const DIRECTIONS = ['to_kit', 'to_pipedrive', 'both', 'selective', 'off'];
+export const syncDirection = () => (DIRECTIONS.includes(getSetting('pipedrive_sync_direction')) ? getSetting('pipedrive_sync_direction') : 'off');
 export const setSyncDirection = (d) => { if (DIRECTIONS.includes(d)) setSetting('pipedrive_sync_direction', d); return syncDirection(); };
 /** Whether anything is read from Pipedrive into KIT (pulls, live updates, the nightly pull). */
-export const pullsAllowed = () => syncDirection() !== 'to_pipedrive';
+export const pullsAllowed = () => !['to_pipedrive', 'off'].includes(syncDirection());
+/** Why nothing is pulled, when it isn't. */
+export const pullsBlockedReason = () => (syncDirection() === 'off' ? 'The sync is off, so nothing is pulled from Pipedrive.' : 'The sync is set to KIT → Pipedrive only, so nothing is pulled from Pipedrive.');
 
 // When a pull finds this many or more of KIT's files deleted in Pipedrive at once, they're held instead of deleted, and an
 // admin decides: delete them, or keep them as KIT's own files (a ticket whose deal is gone moves to KIT's own pipeline).
@@ -265,7 +272,7 @@ export const fileHold = () => json.parse(getSetting('pipedrive_file_hold'), null
 export function queueDelete(kind, pipedriveId, dealId = null, projectId = null) {
   if (pipedriveId) db.prepare('INSERT OR IGNORE INTO pipedrive_deletes (kind, pipedrive_id, deal_id, project_id) VALUES (?, ?, ?, ?)').run(kind, pipedriveId, dealId, projectId);
 }
-const deletedIds = (kind) => new Set(db.prepare('SELECT pipedrive_id FROM pipedrive_deletes WHERE kind = ?').all(kind).map((x) => x.pipedrive_id));
+export const deletedIds = (kind) => new Set(db.prepare('SELECT pipedrive_id FROM pipedrive_deletes WHERE kind = ?').all(kind).map((x) => x.pipedrive_id));
 
 // ---- One job at a time: a pull or a send
 
@@ -292,7 +299,7 @@ export function runJob(label, work, done) {
  * `by` is who asked ({ id, name }), or null for the nightly pull.
  */
 export function startPull(scope, by = null) {
-  if (!pullsAllowed()) throw new Error('The sync is set to KIT → Pipedrive only, so nothing is pulled from Pipedrive. Change the direction in Admin Access to pull.');
+  if (!pullsAllowed()) throw new Error(`${pullsBlockedReason()} Change the sync in Admin Access to pull.`);
   const live = scope.kind === 'deals';
   const key = scope.kind === 'all' ? 'pipedrive_last_sync' : live ? 'pipedrive_last_live' : scope.kind === 'projects' ? 'pipedrive_last_projects' : `pipedrive_last_pull_${by.id}`;
   const label = scope.kind === 'all' ? 'full pull' : live ? `live update (${plural(scope.dealIds.length, 'deal')})` : scope.kind === 'projects' ? 'projects refresh'
@@ -402,7 +409,7 @@ export async function filesGone(missing, phase) {
 }
 
 /** Of KIT's tickets from deals not in the list, which deals are really gone from Pipedrive (deleted), asking about each. */
-async function dealsGone(listedIds, phase) {
+export async function dealsGone(listedIds, phase) {
   const known = db.prepare(`SELECT pipedrive_id FROM main.tickets WHERE pipedrive_id IS NOT NULL AND archive_set_id IS NULL AND pipedrive_deleted_at IS NULL
     AND pipedrive_id NOT IN (SELECT value FROM json_each(?))`).all(json.str([...listedIds])).map((t) => t.pipedrive_id);
   const gone = [];
@@ -517,6 +524,7 @@ export async function pull(scope, phase) {
       });
       if (projects) Object.assign(ctx.count, writeProjects(projects, { ...ctx, downloaded, removeFiles: true }));
       if (holdNow) ctx.count.filesHeld = holdFiles(holdNow);
+      holdConflicts(); // fields an admin hasn't settled stay as they were found
       return { ...ctx.count, accountsMatched: ctx.matched, accountsCreated: ctx.created };
     })();
     storedGone.forEach((f) => { if (f.stored_name && !f.url) fs.rmSync(path.join(uploadDir, f.stored_name), { force: true }); });

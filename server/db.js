@@ -1362,6 +1362,25 @@ addColumn('pipedrive_deletes', 'project_id', 'INTEGER'); // for project items: t
 addColumn('ticket_files', 'pipedrive_detached', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('delivery_files', 'pipedrive_detached', 'INTEGER NOT NULL DEFAULT 0');
 db.exec("DELETE FROM settings WHERE key = 'pipedrive_pull_file_deletes'"); // file deletions always sync now
+
+// A shared field changed in both KIT and Pipedrive since the last pull: kept with both values until an admin picks a side
+// (see services/pipedriveConflicts.js). Values are JSON.
+db.exec(`
+CREATE TABLE IF NOT EXISTS pipedrive_conflicts (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,            -- deal | organization | person | activity | product | installment | project | project_task
+  tbl TEXT NOT NULL,             -- the KIT table and row holding the field
+  row_id INTEGER NOT NULL,
+  field TEXT NOT NULL,           -- the shared field's key, as in the row's pipedrive_snapshot
+  ticket_id INTEGER,
+  title TEXT NOT NULL,
+  kit_value TEXT,
+  pipedrive_value TEXT,
+  snapshot_value TEXT,           -- what both sides started from
+  found_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (tbl, row_id, field)
+);
+`);
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS delivery_programs_project ON delivery_programs(pipedrive_project_id) WHERE pipedrive_project_id IS NOT NULL');
 
 // Won tickets, from before deal_status existed: Lost is lost; a ticket in Awarded, or with a contract in Delivery that isn't
@@ -1380,6 +1399,11 @@ if (!getSettingRaw('deal_status_backfilled')) {
 if (!getSettingRaw('pipedrive_modes_reset_v2')) {
   db.prepare("DELETE FROM settings WHERE key = 'pipedrive_send_modes'").run();
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('pipedrive_modes_reset_v2', '1')").run();
+}
+// A fresh install starts with no sync, until an admin chooses a direction and approves its first sync. An install that
+// had already synced deals before that choice existed carries on two way, as it was (set once, here).
+if (!getSettingRaw('pipedrive_sync_direction') && db.prepare('SELECT 1 FROM tickets WHERE pipedrive_id IS NOT NULL LIMIT 1').get()) {
+  db.prepare("INSERT INTO settings (key, value) VALUES ('pipedrive_sync_direction', 'both')").run();
 }
 // Delivery follows the deal's status now, not its stage: a ticket is a contract while it's won.
 db.exec(`

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Loader2, Check, TriangleAlert, Send, Eye, ChevronRight, Radio, Scale, FolderKanban, ArrowLeftRight, ArrowRight, ArrowLeft, SlidersHorizontal, Trash2, FileCheck } from 'lucide-react';
+import { RefreshCw, Loader2, Check, TriangleAlert, Send, Eye, ChevronRight, Radio, Scale, ArrowLeftRight, SlidersHorizontal, Ban, GitCompareArrows, Trash2, FileCheck } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { stamp } from '../lib/format.js';
@@ -39,7 +39,6 @@ function usePipedrive() {
 }
 
 const PULLS = {
-  all: { button: 'Pull everything', what: 'every deal in Pipedrive' },
   team: { button: 'Pull my team’s deals', what: 'the deals owned by everyone on the teams you lead' },
   mine: { button: 'Pull my deals', what: 'the deals you own in Pipedrive' },
 };
@@ -51,13 +50,13 @@ function Result({ ok, children }) {
 }
 
 /**
- * Pipedrive → KIT for one scope: 'all' (admins), 'team' (team leads) or 'mine' (anyone). Pipedrive wins on the fields it
- * holds, except ones changed in KIT that haven't been sent yet; KIT's own work on a ticket is kept.
+ * Pipedrive → KIT for one scope: 'team' (team leads) or 'mine' (anyone). Pipedrive wins on the fields it holds, except
+ * ones changed in KIT that haven't been sent yet; KIT's own work on a ticket is kept. Admins sync everything from the Sync section.
  */
 export function PipedrivePull({ scope, status }) {
   const [error, setError] = useState('');
   const s = status.data;
-  const last = scope === 'all' ? s?.last : s?.mine;
+  const last = s?.mine;
   const p = PULLS[scope];
 
   const pull = async () => {
@@ -69,16 +68,17 @@ export function PipedrivePull({ scope, status }) {
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
         Brings {p.what} into KIT: deals as pipeline tickets, with their people, activities, notes and files. Pipedrive wins on the fields it holds,
-        except ones changed in KIT that an admin hasn&apos;t sent yet. KIT&apos;s own work on a ticket is kept.
-        {scope === 'all' ? ' Everything is also pulled every night.' : ' Everything is pulled every night anyway; pull here to get today’s changes now.'}
+        except ones changed in KIT that an admin hasn&apos;t sent yet. KIT&apos;s own work on a ticket is kept. Changes in Pipedrive come into KIT
+        live anyway, and everything is pulled every night; pull here to be sure your deals are current now.
       </p>
-      {s && !s.configured && <NotSetUp admin={scope === 'all'} server={s.server} />}
+      {s && !s.configured && <NotSetUp admin={false} server={s.server} />}
+      {s?.configured && !s.pulling && <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{s.pulling_blocked} An admin sets the sync in Admin Access.</p>}
       {last && !s?.running && (
         <Result ok={last.ok}>
           <div className="flex items-center gap-1.5 font-medium">
             {last.ok ? <Check size={14} /> : <TriangleAlert size={14} />}
-            {last.ok ? 'Last pulled' : 'Last pull failed'} {when(last.at)}{last.by ? (scope === 'all' ? ` by ${last.by}` : '') : ' (nightly)'}
-            {scope !== 'all' && last.scope === 'team' && ' · your team’s deals'}
+            {last.ok ? 'Last pulled' : 'Last pull failed'} {when(last.at)}
+            {last.scope === 'team' && ' · your team’s deals'}
           </div>
           {last.ok ? (
             <>
@@ -91,7 +91,7 @@ export function PipedrivePull({ scope, status }) {
         </Result>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className="btn-primary" onClick={pull} disabled={!s?.configured || s?.running}>
+        <button type="button" className="btn-primary" onClick={pull} disabled={!s?.configured || !s?.pulling || s?.running}>
           {s?.running ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} {p.button}
         </button>
         {s?.running && <span className="text-sm text-slate-500">Pipedrive is busy ({s.label}): {s.phase}…</span>}
@@ -470,24 +470,43 @@ export function PipedriveSend({ status }) {
 }
 
 const DIRECTIONS = [
-  { key: 'both', label: 'Two way', icon: ArrowLeftRight, hint: 'Pipedrive changes come into KIT (nightly, live and on pulls); every change made in KIT goes to Pipedrive on its own.' },
-  { key: 'to_kit', label: 'Pipedrive → KIT only', icon: ArrowLeft, hint: 'KIT follows Pipedrive. Nothing made or changed in KIT is ever sent.' },
-  { key: 'to_pipedrive', label: 'KIT → Pipedrive only', icon: ArrowRight, hint: 'Pipedrive follows KIT. Nothing is pulled, not even live updates, so KIT always wins.' },
-  { key: 'selective', label: 'Selective', icon: SlidersHorizontal, hint: 'Pipedrive changes come in; each kind of KIT change is set to Auto, On push or Off below.' },
+  { key: 'both', label: 'Two way', icon: ArrowLeftRight, hint: 'Changes in Pipedrive come into KIT the moment they’re made; every change made in KIT goes to Pipedrive on its own.' },
+  { key: 'to_kit', label: 'Pipedrive → KIT only', hint: 'KIT follows Pipedrive, live. Nothing made or changed in KIT is ever sent.' },
+  { key: 'to_pipedrive', label: 'KIT → Pipedrive only', hint: 'Pipedrive follows KIT. Nothing is pulled, not even live changes, so KIT always wins.' },
+  { key: 'selective', label: 'Selective', icon: SlidersHorizontal, hint: 'Changes in Pipedrive come in live; each kind of KIT change is set to Auto, On push or Off below.' },
+  { key: 'off', label: 'No sync', icon: Ban, hint: 'Nothing is pulled from Pipedrive and nothing is sent to it, until an admin chooses a direction here.' },
 ];
+const flows = (d) => (d === 'to_kit' ? 'from Pipedrive into KIT' : d === 'to_pipedrive' ? 'from KIT to Pipedrive' : 'both ways');
 
-/** Admins: which way the sync runs, the Sync button, and files held for a decision. */
+/**
+ * Admins: which way the sync runs, the Sync button, live updates and files held for a decision. Choosing a direction
+ * first shows what its first sync would add and delete on each side; once approved it starts and stays set until an
+ * admin changes it here. The active card is shaded; the one awaiting approval has the blue outline.
+ */
 function PipedriveSync({ status }) {
   const s = status.data;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const choose = async (direction) => {
-    const d = DIRECTIONS.find((x) => x.key === direction);
-    if (direction === 'to_pipedrive' && !confirm('KIT → Pipedrive only: nothing is pulled from Pipedrive any more (not even live updates), and every change in KIT overwrites Pipedrive. Continue?')) return;
+  const [proposed, setProposed] = useState(null); // a direction chosen here, until approved
+  const [pv, setPv] = useState(null);
+  const [looking, setLooking] = useState(false);
+  const save = async (direction, sync) => {
     setBusy(true); setError('');
-    try { await api.put('/pipedrive/direction', { direction }); status.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
-    return d;
+    try {
+      const r = await api.put('/pipedrive/direction', { direction, sync });
+      if (r.error) setError(`The direction is set, but the first sync didn’t start: ${r.error}`);
+      setProposed(null); setPv(null); status.reload();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
+  const choose = async (direction) => {
+    if (direction === 'off') {
+      if (confirm('Turn the sync off? Nothing is pulled from Pipedrive and nothing is sent to it until an admin chooses a direction again.')) save('off', false);
+      return;
+    }
+    setProposed(direction); setPv(null); setError(''); setLooking(true);
+    try { setPv(await api.get(`/pipedrive/direction/preview?direction=${direction}`)); } catch (e) { setError(e.message); setProposed(null); } finally { setLooking(false); }
+  };
+  const cancel = () => { setProposed(null); setPv(null); };
   const sync = async () => {
     const d = s?.direction;
     const what = d === 'to_kit' ? 'pull everything from Pipedrive' : d === 'to_pipedrive' ? 'send everything waiting in KIT to Pipedrive' : 'pull everything from Pipedrive, then send everything waiting in KIT';
@@ -496,31 +515,42 @@ function PipedriveSync({ status }) {
     try { await api.post('/pipedrive/sync', {}); status.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
   const last = s?.lastSync;
+  const off = s?.direction === 'off';
   return (
     <div className="space-y-3">
-      <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Sync direction">
-        {DIRECTIONS.map((d) => (
-          <button key={d.key} type="button" role="radio" aria-checked={s?.direction === d.key} disabled={busy || !s} onClick={() => s?.direction !== d.key && choose(d.key)}
-            className={`rounded-lg border p-3 text-left transition ${s?.direction === d.key ? 'border-brand-500 bg-white ring-2 ring-brand-100' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
-            <div className={`flex items-center gap-1.5 text-sm font-semibold ${s?.direction === d.key ? 'text-brand-700' : 'text-slate-700'}`}><d.icon size={15} /> {d.label}</div>
-            <div className="mt-0.5 text-[11px] leading-snug text-slate-500">{d.hint}</div>
-          </button>
-        ))}
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" role="radiogroup" aria-label="Sync direction">
+        {DIRECTIONS.map((d) => {
+          const active = s?.direction === d.key;
+          const next = proposed === d.key;
+          return (
+            <button key={d.key} type="button" role="radio" aria-checked={active} disabled={busy || looking || !s} onClick={() => (active ? cancel() : choose(d.key))}
+              className={`rounded-lg border p-3 text-left transition ${next ? 'border-brand-500 bg-white ring-2 ring-brand-200' : active ? 'border-brand-200 bg-brand-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+              <div className={`flex items-start justify-between gap-2 text-sm font-semibold ${active || next ? 'text-brand-700' : 'text-slate-700'}`}>
+                <span className="flex min-w-0 items-center gap-1.5">{d.icon && <d.icon size={15} className="shrink-0" />} {d.label}</span>
+                {active && <span className="flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold text-white"><Check size={10} /> Active</span>}
+                {next && <span className="shrink-0 whitespace-nowrap rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold text-brand-700 ring-1 ring-brand-300">Awaiting approval</span>}
+              </div>
+              <div className="mt-0.5 text-[11px] leading-snug text-slate-500">{d.hint}</div>
+            </button>
+          );
+        })}
       </div>
+      {proposed && <DirectionApproval d={DIRECTIONS.find((x) => x.key === proposed)} pv={pv} looking={looking} busy={busy} onStart={() => save(proposed, true)} onCancel={cancel} />}
       <p className="text-xs text-slate-500">
-        Files deleted on one side are always deleted on the other. If a pull finds {s?.fileHoldAt || 20} or more of KIT&apos;s files deleted in Pipedrive at once, they&apos;re
-        held instead and you decide here. Whatever is set, a server that isn&apos;t the production server never writes to Pipedrive.
+        The direction stays as set until an admin changes it here. Files deleted on one side are always deleted on the other. If a pull finds {s?.fileHoldAt || 20} or more of
+        KIT&apos;s files deleted in Pipedrive at once, they&apos;re held instead and you decide here. Whatever is set, a server that isn&apos;t the production server never writes to Pipedrive.
       </p>
+      {s?.pulling && <LiveLine />}
       {s?.fileHold && <FileHold status={status} />}
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" className="btn-primary" onClick={sync} disabled={busy || !s?.configured || s?.running || (!s?.pulling && !s?.sending)}
-          title={!s?.pulling && !s?.sending ? 'Nothing to sync on this server with this direction' : undefined}>
+          title={off ? 'The sync is off' : !s?.pulling && !s?.sending ? 'Nothing to sync on this server with this direction' : undefined}>
           {s?.running ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} Sync now
         </button>
         {s?.running && <span className="text-sm text-slate-500">Pipedrive is busy ({s.label}): {s.phase}…</span>}
         {s && !s.running && <span className="text-xs text-slate-500">
-          {s.direction === 'to_kit' ? 'Pulls everything from Pipedrive.' : s.direction === 'to_pipedrive' ? 'Sends everything waiting in KIT.' : 'Pulls everything, then sends everything waiting.'}
-          {!s.sending && s.direction !== 'to_kit' && ' (Not sending from this server.)'}
+          {off ? 'The sync is off.' : s.direction === 'to_kit' ? 'Pulls everything from Pipedrive.' : s.direction === 'to_pipedrive' ? 'Sends everything waiting in KIT.' : 'Pulls everything, then sends everything waiting.'}
+          {!off && !s.sending && s.direction !== 'to_kit' && ' (Not sending from this server.)'}
         </span>}
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -535,6 +565,99 @@ function PipedriveSync({ status }) {
           ) : <div className="mt-0.5 text-xs">{last.error}</div>}
         </Result>
       )}
+    </div>
+  );
+}
+
+/** One line of a direction preview: a count, the first few items, and the rest behind "show all". */
+function Count({ x, word, many, note }) {
+  const [open, setOpen] = useState(false);
+  if (!x?.count) return null;
+  const few = 6;
+  const shown = open ? x.items : x.items.slice(0, few);
+  const rest = x.count - shown.length;
+  return (
+    <li>
+      <b>{plural(x.count, word, many)}</b>{note ? ` ${note}` : ''}:{' '}
+      <span className="text-slate-500">{shown.join('; ')}</span>
+      {rest > 0 && (
+        x.items.length > shown.length
+          ? <button type="button" className="ml-1 text-brand-700 hover:underline" onClick={() => setOpen(true)}>…and {rest.toLocaleString()} more</button>
+          : <span className="text-slate-400">; …and {rest.toLocaleString()} more</span>
+      )}
+      {open && x.items.length > few && <button type="button" className="ml-1 text-brand-700 hover:underline" onClick={() => setOpen(false)}>show fewer</button>}
+    </li>
+  );
+}
+
+/** What the first sync in a chosen direction would add and delete on each side, with Start and Cancel. */
+function DirectionApproval({ d, pv, looking, busy, onStart, onCancel }) {
+  const pull = pv?.pull;
+  const anyPull = pull && (pull.dealsNew.count || pull.dealsGone.count || pull.filesNew.count || pull.filesGone.count);
+  return (
+    <div className="space-y-3 rounded-lg border border-brand-300 bg-brand-50/40 p-3">
+      <div className="text-sm font-semibold text-slate-800">Start {d.label}?</div>
+      <p className="text-xs text-slate-600">
+        Here is what the first sync adds and deletes. From then on, changes flow {flows(d.key)} as they&apos;re made, and the sync stays on until an admin changes it here.
+        {d.key === 'to_pipedrive' && <b> Nothing is pulled from Pipedrive any more, and every change in KIT overwrites Pipedrive.</b>}
+      </p>
+      {looking ? <p className="flex items-center gap-2 text-sm text-slate-500"><Loader2 size={14} className="animate-spin" /> Comparing KIT with Pipedrive…</p> : pv && (
+        <>
+          {pv.pulling && (
+            <div>
+              <div className="text-xs font-semibold text-slate-700">From Pipedrive into KIT</div>
+              {!pull ? <p className="text-xs text-amber-800">Pipedrive isn&apos;t set up on this server, so nothing can be compared.</p>
+                : anyPull ? (
+                  <ul className="mt-1 ml-4 list-disc space-y-0.5 text-xs text-slate-700">
+                    <Count x={pull.dealsNew} word="new deal" note="added to KIT" />
+                    <Count x={pull.dealsGone} word="deal" note="deleted in Pipedrive, archived in KIT" />
+                    <Count x={pull.filesNew} word="new file" note="added to KIT" />
+                    <Count x={pull.filesGone} word="file" note={pull.filesHeld ? 'deleted in Pipedrive, held in KIT for a decision' : 'deleted in Pipedrive, deleted in KIT too'} />
+                  </ul>
+                ) : <p className="text-xs text-slate-600">Nothing new and nothing deleted. Every deal&apos;s fields are refreshed from Pipedrive ({plural(pull.deals, 'deal')}).</p>}
+            </div>
+          )}
+          {pv.sendKinds.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-xs font-semibold text-slate-700">From KIT to Pipedrive</div>
+              {!pv.sending && <p className="text-xs text-amber-800">Not from this server: only the production server writes to Pipedrive. On production this would go.</p>}
+              {pv.send && <Preview p={pv.send} />}
+            </div>
+          )}
+        </>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn-primary" onClick={onStart} disabled={busy || looking || !pv}>{busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Start sync</button>
+        <button type="button" className="btn" onClick={onCancel} disabled={busy}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Live updates from Pipedrive follow the direction: on whenever Pipedrive → KIT is part of the sync, from the production
+ * server. One line says whether they're on and what has arrived.
+ */
+function LiveLine() {
+  const live = useApi('/pipedrive/live');
+  const l = live.data;
+  useEffect(() => {
+    const t = setTimeout(() => live.reload(), 60000);
+    return () => clearTimeout(t);
+  }, [l]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!l) return null;
+  const on = !!l.webhooks?.length;
+  const complete = on && !l.missing?.length;
+  const state = !on ? (l.blocker ? `not on this server. ${l.blocker}` : l.error ? `couldn’t be checked (${l.error})` : 'turning on…')
+    : complete ? 'on' : `partly on (no webhook for ${l.missing.join(', ')}; checked again within the hour)`;
+  return (
+    <div className={`flex items-start gap-1.5 text-xs ${on && !complete ? 'text-amber-700' : 'text-slate-500'}`}>
+      <Radio size={12} className={`mt-0.5 shrink-0 ${complete ? 'text-emerald-600' : ''}`} />
+      <span>
+        Live updates from Pipedrive: {state}
+        {on && l.received.count > 0 && ` · ${plural(l.received.count, 'event')} since the server started, last ${when(l.received.last_at)}`}
+        {on && l.last && ` · last update ${when(l.last.at)}${l.last.ok ? '' : ' failed'}`}
+      </span>
     </div>
   );
 }
@@ -574,39 +697,34 @@ function FileHold({ status }) {
   );
 }
 
-/** Admins: the sync's direction and Sync button, pulls, live updates, what goes to Pipedrive, projects and the parity check. */
+/** Admins: the sync's direction and Sync button, conflicts to settle, what goes to Pipedrive, and the parity check. */
 export default function PipedrivePanel() {
   const status = usePipedrive();
-  const d = status.data?.direction;
+  const s = status.data;
+  const d = s?.direction;
   return (
     <div className="panel space-y-5">
       <h2 className="section-title flex items-center gap-2"><RefreshCw size={16} className="text-brand-600" /> Pipedrive</h2>
+      {s && !s.configured && <NotSetUp admin server={s.server} />}
       <section className="space-y-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><ArrowLeftRight size={14} className="text-brand-600" /> Sync</h3>
         <PipedriveSync status={status} />
       </section>
-      {d !== 'to_pipedrive' && (
+      {s?.conflicts > 0 && (
         <section className="space-y-2 border-t border-slate-100 pt-4">
-          <h3 className="text-sm font-semibold text-slate-800">Pull from Pipedrive</h3>
-          <PipedrivePull scope="all" status={status} />
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+            <GitCompareArrows size={14} className="text-amber-600" /> Conflicts
+            <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">{s.conflicts}</span>
+          </h3>
+          <Conflicts status={status} />
         </section>
       )}
-      {d !== 'to_pipedrive' && (
-        <section className="space-y-2 border-t border-slate-100 pt-4">
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><Radio size={14} className="text-brand-600" /> Live updates from Pipedrive</h3>
-          <PipedriveLive />
-        </section>
-      )}
-      {d !== 'to_kit' && (
+      {d !== 'to_kit' && d !== 'off' && (
         <section className="space-y-2 border-t border-slate-100 pt-4">
           <h3 className="text-sm font-semibold text-slate-800">Send to Pipedrive</h3>
           <PipedriveSend status={status} />
         </section>
       )}
-      <section className="space-y-2 border-t border-slate-100 pt-4">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><FolderKanban size={14} className="text-brand-600" /> Projects and fields</h3>
-        <PipedriveProjects status={status} />
-      </section>
       <section className="space-y-2 border-t border-slate-100 pt-4">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><Scale size={14} className="text-brand-600" /> Do the numbers match?</h3>
         <PipedriveParity />
@@ -615,30 +733,73 @@ export default function PipedrivePanel() {
   );
 }
 
-/** Admins: Pipedrive has no webhooks for Projects, tasks or field definitions, so they're refreshed every ten minutes; here they can be refreshed now. */
-function PipedriveProjects({ status }) {
+/**
+ * Admins: fields changed in both KIT and Pipedrive since the last pull. Each is held with both versions until a side is
+ * picked here, one at a time, by ticket, or all at once. KIT's version goes to Pipedrive with the next auto sync or push;
+ * Pipedrive's is written into KIT.
+ */
+function Conflicts({ status }) {
+  const list = useApi('/pipedrive/conflicts');
+  const [picked, setPicked] = useState(new Set());
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const s = status.data;
-  const last = s?.lastProjects;
-  const refresh = async () => {
-    setError('');
-    try { await api.post('/pipedrive/pull/projects', {}); status.reload(); } catch (e) { setError(e.message); }
+  const rows = list.data?.conflicts || [];
+  useEffect(() => { setPicked((p) => new Set([...p].filter((id) => rows.some((r) => r.id === id)))); }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
+  const resolve = async (winner, ids) => {
+    const n = ids ? ids.length : rows.length;
+    const side = winner === 'kit' ? 'KIT’s' : 'Pipedrive’s';
+    const then = winner === 'kit' ? 'KIT’s values go to Pipedrive with the next auto sync (within a minute) or push, overwriting what’s there.' : 'Pipedrive’s values are written into KIT, replacing what was entered here.';
+    if (!confirm(`Keep ${side} version for ${plural(n, 'conflict')}? ${then}`)) return;
+    setBusy(true); setError('');
+    try { await api.post('/pipedrive/conflicts/resolve', { winner, ids: ids || undefined }); setPicked(new Set()); await list.reload(); status.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
+  const toggle = (id) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const chosen = [...picked];
+  const ids = chosen.length ? chosen : null;
+  const scope = chosen.length ? `${plural(chosen.length, 'chosen conflict')}` : 'all';
+  if (list.error) return <p className="text-sm text-red-600">{list.error.message}</p>;
   return (
     <div className="space-y-2">
       <p className="text-xs text-slate-500">
-        Pipedrive Projects are the plan on won contracts in Delivery: overview, phase, tasks, activities, notes and documents, both ways. Pipedrive has no live
-        events for projects or for field definitions, so KIT refreshes them every ten minutes and on every pull. Custom fields now known:{' '}
-        {s?.fields ? `${s.fields.deal} on deals, ${s.fields.person} on people, ${s.fields.organization} on organizations` : '…'}.
+        These fields changed in both KIT and Pipedrive since the last pull, so the sync left them alone rather than overwrite either side. Both versions are kept
+        until you pick one here. Tick some to settle just those, or settle them all at once.
       </p>
-      {last && (
-        <Result ok={last.ok}>
-          <div className="flex items-center gap-1.5 font-medium">{last.ok ? <Check size={14} /> : <TriangleAlert size={14} />} {last.ok ? 'Last refreshed' : 'Last refresh failed'} {when(last.at)}</div>
-          <div className="mt-0.5 text-xs">{last.ok ? summary(last.result) || 'Nothing changed.' : last.error}</div>
-        </Result>
-      )}
-      <button type="button" className="btn text-sm" onClick={refresh} disabled={!s?.configured || s?.running}><RefreshCw size={14} /> Refresh projects and fields now</button>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn text-xs" onClick={() => resolve('kit', ids)} disabled={busy || !rows.length}><Send size={13} /> KIT wins ({scope})</button>
+        <button type="button" className="btn text-xs" onClick={() => resolve('pipedrive', ids)} disabled={busy || !rows.length}><RefreshCw size={13} /> Pipedrive wins ({scope})</button>
+        {chosen.length > 0 && <button type="button" className="btn-ghost text-xs" onClick={() => setPicked(new Set())} disabled={busy}>Clear choice</button>}
+        {busy && <Loader2 size={14} className="animate-spin text-slate-400" />}
+      </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
+      {rows.length > 0 && (
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
+              <tr>
+                <th className="w-8 px-3 py-2"><input type="checkbox" aria-label="Choose all" checked={picked.size === rows.length} onChange={(e) => setPicked(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set())} /></th>
+                <th className="px-3 py-2">Record · field</th><th className="px-3 py-2">KIT</th><th className="px-3 py-2">Pipedrive</th><th className="px-3 py-2">Was</th><th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((c) => (
+                <tr key={c.id} className="border-t border-slate-100 align-top">
+                  <td className="px-3 py-2"><input type="checkbox" aria-label={`Choose ${c.title} ${c.field}`} checked={picked.has(c.id)} onChange={() => toggle(c.id)} /></td>
+                  <td className="px-3 py-2"><div className="font-medium text-slate-800">{c.title}</div><div className="text-xs text-slate-500">{c.field} · found {when(c.found_at)}</div></td>
+                  <td className="px-3 py-2 text-slate-800">{c.kit}</td>
+                  <td className="px-3 py-2 text-slate-800">{c.pipedrive}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500">{c.was}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-1">
+                      <button type="button" className="btn px-2 py-1 text-xs" onClick={() => resolve('kit', [c.id])} disabled={busy} title="Send KIT’s value to Pipedrive">Keep KIT’s</button>
+                      <button type="button" className="btn px-2 py-1 text-xs" onClick={() => resolve('pipedrive', [c.id])} disabled={busy} title="Write Pipedrive’s value into KIT">Keep Pipedrive’s</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -688,88 +849,6 @@ function PipedriveParity() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Admins: Pipedrive's webhooks tell KIT the moment a deal, activity, note, person, pipeline or stage changes, and KIT
- * pulls just those deals. Turning it on or off changes only Pipedrive's webhook settings, never its data.
- */
-function PipedriveLive() {
-  const live = useApi('/pipedrive/live');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const l = live.data;
-  const on = !!l?.webhooks?.length;
-  const complete = on && !l.missing?.length;
-  // Check again every 15 seconds while it's on, so new events and updates show.
-  useEffect(() => {
-    if (!on) return undefined;
-    const t = setTimeout(() => live.reload(), 15000);
-    return () => clearTimeout(t);
-  }, [l]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const change = async (turnOn) => {
-    if (!turnOn && !window.confirm('Turn off live updates? KIT will only get Pipedrive changes from the nightly pull and pulls people run.')) return;
-    setBusy(true);
-    setError('');
-    try { await (turnOn ? api.post('/pipedrive/live', {}) : api.del('/pipedrive/live')); await live.reload(); } catch (e) { setError(e.message); } finally { setBusy(false); }
-  };
-
-  if (live.error) return <p className="text-sm text-red-600">{live.error.message}</p>;
-  if (!l) return <p className="text-sm text-slate-400">Checking…</p>;
-  const blocker = !l.configured ? `Add PIPEDRIVE_API_KEY to the ${l.server || 'KIT API'} service in Render first (see Pull from Pipedrive above).`
-    : !l.secret ? 'Set PIPEDRIVE_WEBHOOK_SECRET on the server to turn on live updates.'
-      : !l.public ? `Pipedrive can only send to a public HTTPS address, and this server is at ${l.url.replace('/api/pipedrive/webhook', '')}. Live updates work on the production server.`
-        : null;
-  const last = l.last;
-
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-slate-500">
-        Pipedrive tells KIT as soon as a deal, activity, note, person, pipeline or stage changes, and KIT pulls those deals a few seconds later, the same
-        way a pull does. Deletions in Pipedrive aren&apos;t copied, as with any pull. Turning this on or off changes only Pipedrive&apos;s webhook settings.
-      </p>
-      {blocker && !on && <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{blocker}</p>}
-      {l.error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">Couldn&apos;t read Pipedrive&apos;s webhooks: {l.error}</p>}
-      {on && (
-        <Result ok={complete && l.webhooks.every((w) => w.active)}>
-          <div className="flex items-center gap-1.5 font-medium">
-            {complete ? <Check size={14} /> : <TriangleAlert size={14} />}
-            {complete ? 'On' : `Partly on: no webhook for ${l.missing.join(', ')}`}
-            {l.turned_on?.by && <span className="font-normal">· turned on by {l.turned_on.by} {when(l.turned_on.at)}</span>}
-          </div>
-          <div className="mt-0.5 space-y-0.5 text-xs">
-            <div>Sending to {l.url}</div>
-            {l.webhooks.some((w) => !w.active) && <div>Pipedrive has paused {l.webhooks.filter((w) => !w.active).map((w) => w.object).join(', ')}. Turn live updates off and on again.</div>}
-            <div>
-              {l.received.count ? `${plural(l.received.count, 'event')} since the server started; last ${when(l.received.last_at)} (${l.received.last})` : 'No events since the server started.'}
-              {l.waiting > 0 && ` · ${plural(l.waiting, 'deal')} waiting to be pulled`}
-              {l.received.rejected > 0 && ` · ${plural(l.received.rejected, 'request')} turned away`}
-            </div>
-          </div>
-        </Result>
-      )}
-      {last && (
-        <Result ok={last.ok}>
-          <div className="flex items-center gap-1.5 font-medium">
-            {last.ok ? <Check size={14} /> : <TriangleAlert size={14} />}
-            {last.ok ? 'Last live update' : 'Last live update failed'} {when(last.at)} · {plural(last.deals || 0, 'deal')}
-          </div>
-          <div className="mt-0.5 text-xs">{last.ok ? summary(last.result) || 'Nothing changed.' : last.error}</div>
-        </Result>
-      )}
-      <div className="flex flex-wrap items-center gap-3">
-        {(!on || !complete) && (
-          <button type="button" className="btn-primary" onClick={() => change(true)} disabled={busy || !!blocker}>
-            {busy ? <Loader2 size={15} className="animate-spin" /> : <Radio size={15} />} {on ? 'Finish turning on' : 'Turn on live updates'}
-          </button>
-        )}
-        {on && <button type="button" className="btn" onClick={() => change(false)} disabled={busy}>Turn off</button>}
-        <button type="button" className="btn-ghost text-sm" onClick={() => live.reload()} disabled={busy}><RefreshCw size={14} /> Check</button>
-      </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
     </div>
   );
 }
