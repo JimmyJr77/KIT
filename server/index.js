@@ -17,7 +17,7 @@ import financialRoutes from './routes/financials.js';
 import archiveRoutes from './routes/archive.js';
 import backupRoutes from './routes/backup.js';
 import sampleRoutes from './routes/sample.js';
-import { ensureSample } from './sample/index.js';
+import { ensureSample, cleanProduction } from './sample/index.js';
 import activityRoutes from './routes/activities.js';
 import pipedriveRoutes from './routes/pipedrive.js';
 import labelRoutes from './routes/labels.js';
@@ -105,11 +105,15 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Server error' });
 });
 
-// The sample data is always available to show; load it the first time the server starts.
+// The sample data is for development servers: loaded the first time one starts. Production never loads it, and takes
+// off a copy left from before when nothing real depends on it.
 try {
-  if (ensureSample()) console.log('Loaded the sample data');
+  const cleaned = cleanProduction();
+  if (cleaned?.removed) console.log(`Removed the sample data from production: ${JSON.stringify(cleaned.removed.sample)}`);
+  else if (cleaned?.kept) console.warn(`The sample data is still here, hidden: real records depend on it. Remove it from Admin Access. ${JSON.stringify(cleaned.kept)}`);
+  else if (ensureSample()) console.log('Loaded the sample data');
 } catch (e) {
-  console.error(`Couldn't load the sample data: ${e.message}`);
+  console.error(`Sample data: ${e.message}`);
 }
 
 schedulePipedriveSync();
