@@ -6,7 +6,7 @@ import { api } from '../lib/api.js';
 import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
-import { PROCESS_TYPES, REVIEW_AREAS } from '../lib/process.js';
+import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, milestoneOf } from '../lib/process.js';
 import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
@@ -16,7 +16,7 @@ export const PLAN_TOOLS = [
   { key: 'activities', label: 'Activity', icon: CalendarCheck, account: true },
   { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
   { key: 'people', label: 'People', icon: ContactRound },
-  { key: 'process', label: 'Process flow', icon: Workflow, bidOnly: true },
+  { key: 'process', label: 'Milestones', icon: Workflow, bidOnly: true },
   { key: 'details', label: 'Deal details', icon: ClipboardList, bidOnly: true },
 ];
 
@@ -169,11 +169,13 @@ function LinkFromCrm({ ticket, linked, onLinked }) {
 
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 const today = () => new Date().toLocaleDateString('en-CA');
-const stepForm = (s) => ({ step_type: s.step_type, step_date: s.step_date || '', notes: s.notes, reviews: s.reviews });
+const stepForm = (s) => ({ step_type: s.step_type, step_date: s.step_date || '', notes: s.notes, reviews: s.reviews, decision: s.decision || '', pricing: s.pricing || '' });
+const DECISION_STYLE = { Proceed: 'bg-emerald-100 text-emerald-800', Revise: 'bg-amber-100 text-amber-800', 'No-Bid': 'bg-red-100 text-red-800' };
 
 /**
- * A timeline of the formal process steps on a pipeline ticket (RFI, RFP, gate reviews, ROM, proposal…), oldest first.
- * Steps can be added at any time. Each records who was involved in its reviews, notes, and documents.
+ * The milestones of a pipeline ticket (RFI, RFP, gate reviews, ROM, proposal…), oldest first. Milestones can be added at
+ * any time. Each records who was there and who approved, by role, a gate's decision and price considerations, notes and documents.
+ * The Process view lays them out left to right with everything that happened in between.
  */
 function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
   const [steps, setSteps] = useState(null);
@@ -215,23 +217,23 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
   const byId = (id) => users.find((u) => u.id === id);
 
   return (
-    <DrawerShell title="Process flow" subtitle="The formal steps of this pursuit, with their reviews and documents" onClose={onClose}>
+    <DrawerShell title="Milestones" subtitle="The formal steps of this pursuit: who was there, who approved, decisions and documents" onClose={onClose}>
       <div className="space-y-4">
         <section className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-          <span className="text-xs font-semibold tracking-wide text-slate-600 uppercase">New process step</span>
+          <span className="text-xs font-semibold tracking-wide text-slate-600 uppercase">New milestone</span>
           <div className="flex gap-2">
-            <select className="input flex-1 text-sm" value={type} onChange={(e) => setType(e.target.value)} aria-label="Step type">
+            <select className="input flex-1 text-sm" value={type} onChange={(e) => setType(e.target.value)} aria-label="Milestone">
               {PROCESS_TYPES.map((t) => <option key={t}>{t}</option>)}
             </select>
-            <input type="date" className="input w-36 text-sm" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Step date" />
+            <input type="date" className="input w-36 text-sm" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Milestone date" />
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span className={`text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>{error || 'Add steps in any order; the timeline sorts by date'}</span>
-            <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={add} disabled={busy}>{busy ? 'Adding…' : <><Plus size={13} /> Add step</>}</button>
+            <span className={`text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>{error || milestoneOf(type).about || 'Add milestones in any order; they sort by date'}</span>
+            <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={add} disabled={busy}>{busy ? 'Adding…' : <><Plus size={13} /> Add milestone</>}</button>
           </div>
         </section>
 
-        {steps && !steps.length && <p className="text-sm text-slate-400">No process steps yet. Add the first one above.</p>}
+        {steps && !steps.length && <p className="text-sm text-slate-400">No milestones yet. Add the first one above.</p>}
         {steps && steps.length > 0 && (
           <ol className="relative space-y-3 before:absolute before:top-3 before:bottom-3 before:left-[11px] before:w-px before:bg-slate-200">
             {steps.map((s) => (
@@ -261,13 +263,14 @@ function ProcessStep({ step: s, open, onToggle, byId, userOptions, onDirty, appl
             <div className="flex flex-wrap items-baseline gap-x-2">
               <span className="text-sm font-semibold text-slate-800">{s.step_type}</span>
               <span className="text-xs text-slate-500">{s.step_date ? shortDate(s.step_date) : 'No date'}</span>
+              {s.decision && <span className={`rounded px-1.5 py-px text-[11px] font-semibold ${DECISION_STYLE[s.decision] || 'bg-slate-100 text-slate-700'}`}>{s.decision}</span>}
             </div>
             {!open && (
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
                 {involved.map((a) => <span key={a.key} className="rounded bg-slate-100 px-1.5 py-0.5">{a.label}</span>)}
                 {s.files.length > 0 && <span className="flex items-center gap-0.5"><FileText size={11} /> {s.files.length}</span>}
                 {people.length > 0 && <span className="flex -space-x-1">{people.slice(0, 5).map((u) => <Avatar key={u.id} user={u} size="xs" className="ring-2 ring-white" />)}</span>}
-                {!involved.length && !s.files.length && !s.notes && <span className="text-slate-400">Nothing recorded yet</span>}
+                {!involved.length && !s.files.length && !s.notes && !s.pricing && <span className="text-slate-400">Nothing recorded yet</span>}
               </div>
             )}
             {!open && s.notes && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{s.notes}</p>}
@@ -292,6 +295,9 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setReview = (area, k, v) => setForm((f) => ({ ...f, reviews: { ...f.reviews, [area]: { ...f.reviews[area], [k]: v } } }));
+  // Only people who were there can have approved.
+  const setPeople = (area, v) => setForm((f) => ({ ...f, reviews: { ...f.reviews, [area]: { ...f.reviews[area], people: v, approved: f.reviews[area].approved.filter((id) => v.includes(id)) } } }));
+  const milestone = milestoneOf(form.step_type);
 
   const save = async () => {
     setBusy(true);
@@ -308,7 +314,7 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
     }
   };
   const remove = async () => {
-    if (!confirm(`Delete this ${s.step_type} step? Its documents stay on the ticket.`)) return;
+    if (!confirm(`Delete this ${s.step_type} milestone? Its documents stay on the ticket.`)) return;
     try { await apply(api.del(`/tickets/process/${s.id}`)); onDeleted(); } catch (e) { setError(e.message); }
   };
   const upload = async (file) => {
@@ -326,7 +332,7 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
     <div className="space-y-4 border-t border-slate-100 px-3 pt-3 pb-3">
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-type-${s.id}`}>Step</label>
+          <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-type-${s.id}`}>Milestone</label>
           <select id={`ps-type-${s.id}`} className="input py-1.5 text-sm" value={form.step_type} onChange={(e) => set('step_type', e.target.value)}>
             {PROCESS_TYPES.map((t) => <option key={t}>{t}</option>)}
           </select>
@@ -336,18 +342,49 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
           <input id={`ps-date-${s.id}`} type="date" className="input py-1.5 text-sm" value={form.step_date} onChange={(e) => set('step_date', e.target.value)} />
         </div>
       </div>
+      {milestone.about && <p className="-mt-2 text-[11px] text-slate-500">{milestone.phase} · {milestone.about}</p>}
+
+      {milestone.gate && (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-decision-${s.id}`}>Decision</label>
+            <select id={`ps-decision-${s.id}`} className="input py-1.5 text-sm" value={form.decision} onChange={(e) => set('decision', e.target.value)}>
+              <option value="">Not decided yet</option>
+              {DECISIONS.map((d) => <option key={d}>{d}</option>)}
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-pricing-${s.id}`}>Price considerations</label>
+            <textarea id={`ps-pricing-${s.id}`} rows={2} className="input resize-y py-1.5 text-sm" value={form.pricing} onChange={(e) => set('pricing', e.target.value)}
+              placeholder="Initial price, ROM, price-to-win, margin, B&P budget…" />
+          </div>
+        </div>
+      )}
 
       <section>
-        <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Users size={12} /> Who was involved</h4>
+        <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Users size={12} /> Who was there, and who approved</h4>
         <div className="space-y-2.5">
-          {REVIEW_AREAS.map((a) => (
-            <div key={a.key} className="rounded-md bg-slate-50 p-2.5">
-              <div className="mb-1 text-xs font-semibold text-slate-700">{a.label}</div>
-              <MultiSelect compact options={userOptions} value={form.reviews[a.key].people} onChange={(v) => setReview(a.key, 'people', v)} placeholder="Add people…" />
-              <textarea rows={2} className="input mt-1.5 resize-y py-1.5 text-sm" placeholder={`${a.label} notes, outcome, or people outside KIT…`}
-                value={form.reviews[a.key].notes} onChange={(e) => setReview(a.key, 'notes', e.target.value)} aria-label={`${a.label} notes`} />
-            </div>
-          ))}
+          {REVIEW_AREAS.map((a) => {
+            const r = form.reviews[a.key];
+            const expected = a.at.includes(form.step_type);
+            const there = userOptions.filter((o) => r.people.includes(o.value));
+            return (
+              <div key={a.key} className={`rounded-md p-2.5 ${expected ? 'bg-brand-50/60 ring-1 ring-brand-100' : 'bg-slate-50'}`}>
+                <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2">
+                  <span className="text-xs font-semibold text-slate-700">{a.label}</span>
+                  {expected && <span className="text-[10px] font-medium text-brand-700" title={a.about}>Expected at this milestone</span>}
+                </div>
+                <MultiSelect compact options={userOptions} value={r.people} onChange={(v) => setPeople(a.key, v)} placeholder="Who was there…" />
+                {there.length > 0 && (
+                  <div className="mt-1.5">
+                    <MultiSelect compact options={there} value={r.approved} onChange={(v) => setReview(a.key, 'approved', v)} placeholder="Who approved…" />
+                  </div>
+                )}
+                <textarea rows={2} className="input mt-1.5 resize-y py-1.5 text-sm" placeholder={`${a.short} notes, outcome, or people outside KIT…`}
+                  value={r.notes} onChange={(e) => setReview(a.key, 'notes', e.target.value)} aria-label={`${a.label} notes`} />
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -387,7 +424,7 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
         </span>
         <span className="flex shrink-0 gap-1.5">
           {(s.author?.id === user.id || user.role === 'admin') && (
-            <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500 hover:text-red-600" onClick={remove} aria-label="Delete step" title="Delete step"><Trash2 size={13} /></button>
+            <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500 hover:text-red-600" onClick={remove} aria-label="Delete milestone" title="Delete milestone"><Trash2 size={13} /></button>
           )}
           <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={save} disabled={!dirty || busy}>
             {busy ? <><Loader2 size={12} className="animate-spin" /> Saving…</> : 'Save'}

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -12,6 +12,7 @@ import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx'
 import { ReplyBox } from './CommentPanel.jsx';
 import { PlanRail, PlanDrawer } from './TicketPlanning.jsx';
 import { AssignmentBar } from './TicketAssignment.jsx';
+import ProcessTimeline from '../components/ProcessTimeline.jsx';
 
 const FILTERS = [
   ['all', 'Everything', () => true],
@@ -26,23 +27,28 @@ const eventKey = (e) => `${e.type}-${e.activity?.id ?? e.comment?.id ?? e.file?.
 
 /**
  * Right-hand pane with everything that has happened on a master ticket, newest first.
- * `focus` ("c-12" for a comment) scrolls to and highlights one item; `activityId` opens that activity in the Activity pane.
+ * `focus` ("c-12" for a comment) scrolls to and highlights one item; `activityId` opens that activity in the Activity pane;
+ * `initialTool` opens the pane on one of its tools (strategy, process…). A pipeline ticket's Process view opens over the pane
+ * and closing it returns here.
  */
-export default function TicketTimeline({ ticketId, focus, activityId, onClose, onChanged }) {
+export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, onClose, onChanged }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('all');
-  const [tool, setTool] = useState(activityId !== undefined ? 'activities' : null); // a pane off the left edge
+  const [tool, setTool] = useState(activityId !== undefined ? 'activities' : initialTool); // a pane off the left edge
   const [openActivity, setOpenActivity] = useState(activityId ?? null); // the activity the Activity pane opens on
+  const [processOpen, setProcessOpen] = useState(false);
+  const [processKey, setProcessKey] = useState(0);
   const toolDirty = useRef(false);
   const setToolDirty = (v) => { toolDirty.current = v; };
   const leaveTool = () => !toolDirty.current || confirm('You have unsaved changes. Discard them?');
   const switchTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setTool(next); } };
   const showActivity = (id) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(id); setTool('activities'); } };
+  const showTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setTool(next); } };
   const close = () => { if (leaveTool()) onClose(); };
   const load = () => api.get(`/tickets/${ticketId}/timeline`).then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [ticketId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const refresh = () => { load(); onChanged?.(); };
+  const refresh = () => { load(); onChanged?.(); setProcessKey((k) => k + 1); };
 
   // Bring the linked comment or note into view once, with a brief highlight.
   const focused = useRef(false);
@@ -61,8 +67,9 @@ export default function TicketTimeline({ ticketId, focus, activityId, onClose, o
   const events = (data?.events || []).filter(test);
 
   return (
+    <>
     <SidePanel wide onClose={close} title={t ? t.opportunity_title : 'Loading…'}
-      onEscape={tool ? () => switchTool(null) : close}
+      onEscape={processOpen ? () => setProcessOpen(false) : tool ? () => switchTool(null) : close}
       rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} skip={t.ticket_type === 'account' ? ['strategy'] : []} />}
       drawer={t && tool && <PlanDrawer key={`${tool}-${openActivity}`} tool={tool} ticket={t} activityId={openActivity} onClose={() => switchTool(null)} onChanged={refresh} onDirty={setToolDirty} />}
       subtitle={t && (
@@ -88,6 +95,12 @@ export default function TicketTimeline({ ticketId, focus, activityId, onClose, o
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {data && (
         <div className="space-y-5">
+          {t.ticket_type === 'bid' && (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <span className="flex items-center gap-1.5"><Workflow size={14} className="text-brand-600" /> The pursuit left to right: lead, strategy, shaping and milestones.</span>
+              <button type="button" className="btn-primary shrink-0 px-2.5 py-1 text-xs" onClick={() => setProcessOpen(true)}>Process view</button>
+            </div>
+          )}
           {t.ticket_type !== 'account' && <ArchiveBar ticket={t} onChanged={refresh} />}
           {t.ticket_type === 'bid' && <AssignmentBar ticket={t} onChanged={refresh} />}
           {t.ticket_type === 'bid' && <OutcomeBar ticket={t} onChanged={refresh} />}
@@ -111,6 +124,19 @@ export default function TicketTimeline({ ticketId, focus, activityId, onClose, o
         </div>
       )}
     </SidePanel>
+    {processOpen && t && (
+      <div className="fixed inset-0 z-[60] flex flex-col bg-slate-50" role="dialog" aria-label={`Process view of ${t.opportunity_title}`}>
+        <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-6 py-2.5">
+          <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => setProcessOpen(false)}><ArrowLeft size={13} /> Back to ticket</button>
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-700"><Workflow size={15} className="text-brand-600" /> Process view</span>
+          <span className="w-28 text-right text-[11px] text-slate-400">Esc to go back</span>
+        </header>
+        <div className="min-h-0 flex-1">
+          <ProcessTimeline ticketId={t.id} reloadKey={processKey} onOpenTool={(next) => { setProcessOpen(false); if (next) showTool(next); }} />
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -493,27 +519,43 @@ function OutcomeBar({ ticket: t, onChanged }) {
 
 function ArchiveBar({ ticket, onChanged }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const isBid = ticket.ticket_type === 'bid';
   const set = async (archived) => {
     setBusy(true);
-    try { await api.put(`/tickets/${ticket.id}/lane`, { archived }); onChanged(); } finally { setBusy(false); }
+    setError('');
+    try { await api.put(`/tickets/${ticket.id}/lane`, { archived }); onChanged(); } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
   if (ticket.archived) {
+    const how = ticket.pipedrive_deleted_at ? 'was deleted in Pipedrive, so it is archived here' : ticket.pipedrive_archived_at ? 'is archived in Pipedrive, so it is archived here too' : 'is archived';
     return (
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">
-        <span className="flex items-center gap-1.5"><Archive size={14} /> This ticket is archived and off the boards.</span>
-        <span className="flex items-center gap-2">
-          <Link to={`/archive?tab=${ticket.ticket_type === 'work' ? 'work' : 'bid'}`} className="text-xs text-brand-700 hover:underline">Open the archive</Link>
-          <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => set(false)} disabled={busy}><RotateCcw size={13} /> Restore</button>
-        </span>
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">
+          <span className="flex items-center gap-1.5"><Archive size={14} /> This ticket {how} and off the boards.</span>
+          <span className="flex items-center gap-2">
+            {isBid
+              ? <Link to="/closed-deals" className="text-xs text-brand-700 hover:underline">Open Closed deals</Link>
+              : <Link to="/tickets/done" className="text-xs text-brand-700 hover:underline">Open the Done archive</Link>}
+            {ticket.pipedrive_archived_at
+              ? <span className="text-xs text-slate-500">Unarchive it in Pipedrive and it comes back on the next pull.</span>
+              : <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => set(false)} disabled={busy}><RotateCcw size={13} /> Restore</button>}
+          </span>
+        </div>
+        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       </div>
     );
   }
+  // A won deal is reopened first (its contract goes on hold), then archived or marked lost: see the Reopen button below.
+  if (isBid && ticket.deal_status === 'won') return null;
   return (
-    <div className="flex justify-end">
-      <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500" onClick={() => set(true)} disabled={busy}
-        title="Take this ticket off the boards. Restore it any time from the Archive page.">
-        <Archive size={13} /> Archive ticket
-      </button>
+    <div className="space-y-1">
+      <div className="flex justify-end">
+        <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500" onClick={() => set(true)} disabled={busy}
+          title={isBid ? 'Take this deal off the boards. It goes to Closed deals under Other, and can be restored from here.' : 'Move this ticket to the Done archive. Restore it from there any time.'}>
+          <Archive size={13} /> {isBid ? 'Archive ticket' : 'Move to the Done archive'}
+        </button>
+      </div>
+      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
     </div>
   );
 }

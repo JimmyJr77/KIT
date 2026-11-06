@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { Lock, LockOpen, Archive, Clock } from 'lucide-react';
+import { Archive, Clock } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullStamp, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
@@ -15,12 +15,12 @@ const HINT = {
   todo: 'New tickets, and PL tickets quiet for 14+ days',
   in_work: 'PL tickets with activity in the last 7 days',
   stale: 'PL tickets quiet for 7–14 days',
-  done: `Won, lost, or finished. Archives after 14 days.`,
+  done: 'Won, lost, or finished. Work tickets archive after 14 days; won and lost deals stay, and are in Closed deals.',
 };
 
 /**
- * Tickets as swim lanes: To-do, In work, Stale / waiting, Done. Drag a card to move it. Work tickets only move
- * when dragged; pipeline tickets move on their own unless locked (dragging one locks it where it lands).
+ * Tickets as swim lanes: To-do, In work, Stale / waiting, Done. Work tickets are dragged between lanes and archived from
+ * Done. Pipeline tickets are read-only here: they move on their own from the deal's activity and status.
  */
 export default function TicketLanes({ tickets, onOpen, onOpenStep, onChanged }) {
   const [board, setBoard] = useState(tickets);
@@ -49,10 +49,9 @@ export default function TicketLanes({ tickets, onOpen, onOpenStep, onChanged }) 
   const onDragEnd = ({ active, over }) => {
     setDragId(null);
     const t = board.find((x) => x.id === active.id);
-    if (!over || !t || t.lane === over.id) return;
-    change(t, { lane: over.id }, { lane: over.id, lane_locked: t.ticket_type === 'bid' ? 1 : 0 });
+    if (!over || !t || t.ticket_type !== 'work' || t.lane === over.id) return;
+    change(t, { lane: over.id }, { lane: over.id });
   };
-  const toggleLock = (t) => change(t, t.lane_locked ? { locked: false } : { locked: true, current: t.lane }, { lane_locked: t.lane_locked ? 0 : 1 });
   const archive = (t) => change(t, { archived: true }, { archived: true });
 
   const dragging = dragId && board.find((t) => t.id === dragId);
@@ -65,7 +64,7 @@ export default function TicketLanes({ tickets, onOpen, onOpenStep, onChanged }) 
         <div className="grid min-h-96 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           {LANES.map((l) => (
             <Lane key={l.key} lane={l} tickets={live.filter((t) => t.lane === l.key)} dragId={dragId} now={now}
-              onOpen={onOpen} onOpenStep={onOpenStep} onLock={toggleLock} onArchive={archive} />
+              onOpen={onOpen} onOpenStep={onOpenStep} onArchive={archive} />
           ))}
         </div>
         <DragOverlay>{dragging && <LaneCard ticket={dragging} now={now} overlay />}</DragOverlay>
@@ -74,7 +73,7 @@ export default function TicketLanes({ tickets, onOpen, onOpenStep, onChanged }) 
   );
 }
 
-function Lane({ lane, tickets, dragId, now, onOpen, onOpenStep, onLock, onArchive }) {
+function Lane({ lane, tickets, dragId, now, onOpen, onOpenStep, onArchive }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane.key });
   return (
     <section ref={setNodeRef} aria-label={`${lane.label} lane`}
@@ -88,7 +87,7 @@ function Lane({ lane, tickets, dragId, now, onOpen, onOpenStep, onLock, onArchiv
       </header>
       <div className="flex flex-1 flex-col gap-2 p-2">
         {tickets.map((t) => (
-          <DraggableCard key={t.id} ticket={t} hidden={dragId === t.id} now={now} onOpen={onOpen} onOpenStep={onOpenStep} onLock={onLock} onArchive={onArchive} />
+          <DraggableCard key={t.id} ticket={t} hidden={dragId === t.id} now={now} onOpen={onOpen} onOpenStep={onOpenStep} onArchive={onArchive} />
         ))}
         {!tickets.length && (
           <p className={`rounded-lg border-2 border-dashed px-3 py-6 text-center text-xs ${isOver ? 'border-brand-500 text-brand-600' : 'border-slate-200 text-slate-400'}`}>
@@ -100,8 +99,9 @@ function Lane({ lane, tickets, dragId, now, onOpen, onOpenStep, onLock, onArchiv
   );
 }
 
+/** Work tickets drag between lanes; pipeline tickets only open. */
 function DraggableCard({ ticket, hidden, ...rest }) {
-  const { attributes, listeners, setNodeRef } = useDraggable({ id: ticket.id });
+  const { attributes, listeners, setNodeRef } = useDraggable({ id: ticket.id, disabled: ticket.ticket_type !== 'work' });
   return (
     <div ref={setNodeRef} {...attributes} {...listeners} onClick={() => rest.onOpen(ticket.id)} className={hidden ? 'opacity-30' : ''}>
       <LaneCard ticket={ticket} {...rest} />
@@ -109,7 +109,7 @@ function DraggableCard({ ticket, hidden, ...rest }) {
   );
 }
 
-function LaneCard({ ticket: t, now, overlay, onOpenStep, onLock, onArchive }) {
+function LaneCard({ ticket: t, now, overlay, onOpenStep, onArchive }) {
   const owner = t.owner_first_name ? { id: t.created_by, first_name: t.owner_first_name, last_name: t.owner_last_name } : null;
   const isBid = t.ticket_type !== 'work';
   // In work and Stale share one running clock: the same activity bar as on BD Pipeline.
@@ -119,8 +119,8 @@ function LaneCard({ ticket: t, now, overlay, onOpenStep, onLock, onArchive }) {
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
 
   return (
-    <div className={`relative cursor-grab overflow-hidden rounded-lg border bg-white p-3 pr-11 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${
-      t.lane_locked ? 'border-brand-300' : 'border-slate-200'} ${overlay ? 'w-72 rotate-2 shadow-xl' : ''}`}>
+    <div className={`relative overflow-hidden rounded-lg border bg-white p-3 pr-11 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md ${
+      isBid ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} border-slate-200 ${overlay ? 'w-72 rotate-2 shadow-xl' : ''}`}>
       <NextStepBadge step={t.next_step} onOpen={() => onOpenStep?.(t)} className="absolute top-1/2 right-2.5 -translate-y-1/2" />
       <div className="flex items-start justify-between gap-2">
         <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
@@ -132,21 +132,13 @@ function LaneCard({ ticket: t, now, overlay, onOpenStep, onLock, onArchive }) {
         <span className="flex min-w-0 items-center gap-1.5">
           {t.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700">{money(t.value)}</span>}
           {owner && <Avatar user={owner} size="xs" />}
-          {t.lane === 'done' && <span title={`Archives ${daysToArchive(t, now) ? `in ${daysToArchive(t, now)} days` : 'today'}`}>Archives in {daysToArchive(t, now)}d</span>}
+          {t.lane === 'done' && daysToArchive(t, now) != null && <span title={`Archives ${daysToArchive(t, now) ? `in ${daysToArchive(t, now)} days` : 'today'}`}>Archives in {daysToArchive(t, now)}d</span>}
           {timed && counter && <span className="flex items-center gap-0.5 font-medium text-slate-500" title={`${Math.floor(days)} days since last activity (${fullStamp(t.last_activity)})`}><Clock size={11} /> {counter}</span>}
         </span>
         <span className="flex shrink-0 items-center gap-0.5">
-          {t.lane === 'done' && onArchive && (
-            <button type="button" onPointerDown={(e) => e.stopPropagation()} onClick={stop(() => onArchive(t))} title="Archive now" aria-label="Archive now"
+          {!isBid && t.lane === 'done' && onArchive && (
+            <button type="button" onPointerDown={(e) => e.stopPropagation()} onClick={stop(() => onArchive(t))} title="Move to the Done archive now" aria-label="Move to the Done archive now"
               className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><Archive size={14} /></button>
-          )}
-          {isBid && t.lane !== 'done' && onLock && (
-            <button type="button" onPointerDown={(e) => e.stopPropagation()} onClick={stop(() => onLock(t))}
-              title={t.lane_locked ? 'Locked in this lane. Click to let it move on its own again.' : 'Lock in this lane so it doesn’t move as it goes stale'}
-              aria-label={t.lane_locked ? 'Unlock' : 'Lock in this lane'} aria-pressed={!!t.lane_locked}
-              className={`rounded p-1 ${t.lane_locked ? 'text-brand-600 hover:bg-brand-50' : 'text-slate-300 hover:bg-slate-100 hover:text-slate-600'}`}>
-              {t.lane_locked ? <Lock size={14} /> : <LockOpen size={14} />}
-            </button>
           )}
         </span>
       </div>

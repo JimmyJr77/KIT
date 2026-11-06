@@ -8,14 +8,14 @@ import path from 'node:path';
 import { db, json, getSetting, setSetting, withTeams, defaultAssignment, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED } from '../db.js';
 import { requireAdmin } from '../auth.js';
 import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../src/lib/assessment.js';
-import { LANES, laneFor, isArchived, isClosed } from '../../src/lib/lanes.js';
+import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
 import { recordWork } from '../worklog.js';
 import { notifyMentions } from '../mentions.js';
 import { ticketFields } from './priorities.js';
 import { statusesFor, listPipelines } from '../pipelines.js';
 import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields } from '../services/pipedriveFields.js';
-import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
+import { PROCESS_TYPES, DECISIONS, cleanReviews } from '../../src/lib/process.js';
 import { NEXT_STEP_SQL } from '../activities.js';
 
 const r = Router();
@@ -309,21 +309,30 @@ r.put('/:id/lane', (req, res) => {
   if (lane != null && !LANES.some((l) => l.key === lane)) return res.status(400).json({ error: 'Unknown lane' });
   const set = (sql, ...args) => db.prepare(`UPDATE tickets SET ${sql} WHERE id = ?`).run(...args, t.id);
 
-  if (lane) {
-    if (t.ticket_type === 'bid' && isClosed(t) && lane !== 'done') {
-      return res.status(400).json({ error: `This pipeline ticket is ${t.deal_status}, so it stays in Done. Reopen it to move it.` });
-    }
-    set(`lane = ?, lane_locked = ?, archived_at = NULL, archive_set_id = NULL,
-      done_at = CASE WHEN ? = 'done' THEN COALESCE(done_at, datetime('now')) ELSE NULL END`, lane, t.ticket_type === 'bid' ? 1 : 0, lane);
+  // Pipeline tickets are read-only on the Tickets page: their lane follows the deal's activity and status.
+  if (t.ticket_type === 'bid' && (lane || typeof b.locked === 'boolean')) {
+    return res.status(400).json({ error: 'Pipeline tickets move on their own, from the deal’s activity and status. They can’t be moved or locked by hand.' });
   }
-  if (typeof b.locked === 'boolean' && t.ticket_type === 'bid') {
-    if (b.locked) set('lane = COALESCE(?, lane), lane_locked = 1', lane || b.current || null);
-    else set("lane = NULL, lane_locked = 0, done_at = CASE WHEN deal_status IN ('won', 'lost') THEN done_at ELSE NULL END");
+  if (lane) {
+    set(`lane = ?, lane_locked = 0, archived_at = NULL, archive_set_id = NULL,
+      done_at = CASE WHEN ? = 'done' THEN COALESCE(done_at, datetime('now')) ELSE NULL END`, lane, lane);
   }
   if (typeof b.archived === 'boolean') {
-    if (b.archived) set("archived_at = datetime('now')");
-    // Restored: back on the board. A Done ticket gets another 14 days before it archives itself again.
-    else set("archived_at = NULL, archive_set_id = NULL, done_at = CASE WHEN done_at IS NOT NULL THEN datetime('now') END");
+    if (b.archived) {
+      // A won deal's contract is in Delivery and in the books; archiving it would silently take it out. Reopening the deal
+      // puts the contract on hold first, and then the ticket can be archived or marked lost.
+      if (t.ticket_type === 'bid' && t.deal_status === 'won') {
+        return res.status(400).json({ error: 'A won deal can’t be archived while its contract is in Delivery. Reopen the deal first (its contract goes on hold), then archive it or mark it lost.' });
+      }
+      // A work ticket archived from any lane is finished: it joins the Done archive.
+      if (t.ticket_type === 'work') set("archived_at = datetime('now'), lane = 'done', done_at = COALESCE(done_at, datetime('now'))");
+      else set("archived_at = datetime('now')");
+    } else {
+      if (t.pipedrive_archived_at) return res.status(400).json({ error: 'This deal is archived in Pipedrive. Unarchive it there and it comes back on the next pull.' });
+      // Restored: back on the board. A Done work ticket gets another 14 days before it archives itself again; a pipeline
+      // ticket keeps the date its deal closed.
+      set("archived_at = NULL, archive_set_id = NULL, done_at = CASE WHEN done_at IS NOT NULL AND ticket_type = 'work' THEN datetime('now') ELSE done_at END");
+    }
   }
   res.json({ ok: true });
 });
@@ -382,15 +391,17 @@ r.put('/:id/outcome', (req, res) => {
 
 // ---- Full timeline of a master ticket, newest first
 
-r.get('/:id/timeline', (req, res) => {
+/** A ticket as the timeline shows it, with everything that has happened on it, newest first; null for an unknown ticket. */
+export function ticketTimeline(id) {
   const t = db.prepare(`SELECT t.*, u.first_name, u.last_name, e.name AS event_name, m.name AS work_team_name FROM tickets t
-    LEFT JOIN users u ON u.id = t.created_by LEFT JOIN events e ON e.id = t.event_id LEFT JOIN teams m ON m.id = t.work_team_id WHERE t.id = ?`).get(req.params.id);
-  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+    LEFT JOIN users u ON u.id = t.created_by LEFT JOIN events e ON e.id = t.event_id LEFT JOIN teams m ON m.id = t.work_team_id WHERE t.id = ?`).get(id);
+  if (!t) return null;
   const ticket = { id: t.id, ticket_type: t.ticket_type, owner_id: t.created_by, opportunity_title: t.opportunity_title, organization: t.organization, pipeline_status: t.pipeline_status, value: t.value, created_at: t.created_at,
     pwin: ticketPwin(t), event_id: t.event_id ?? null, event_name: t.event_name ?? null,
     team_name: t.ticket_type === 'bid' ? 'BD' : t.work_team_name ?? null,
     // Whether it has left the board: archived by hand, or Done long enough (being Done doesn't depend on recent activity).
     archived: isArchived(t, laneFor({ ...t, last_activity: t.updated_at })),
+    pipedrive_archived_at: t.pipedrive_archived_at ?? null, pipedrive_deleted_at: t.pipedrive_deleted_at ?? null,
     bd_director_id: t.bd_director_id ?? null, territory_id: t.territory_id ?? null,
     projected_win_date: t.projected_win_date ?? null, win_date_undetermined: !!t.win_date_undetermined,
     lost_reason: t.lost_reason ?? null, probability: t.probability ?? null, currency: t.currency ?? null,
@@ -430,7 +441,7 @@ r.get('/:id/timeline', (req, res) => {
     LEFT JOIN ticket_process_steps p ON p.id = f.process_step_id WHERE f.ticket_id = ?`).all(t.id)
     .forEach((f) => events.push({
       type: 'file', at: f.created_at, author: f.first_name ? { id: f.uploaded_by, first_name: f.first_name, last_name: f.last_name } : null,
-      file: { id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, step_type: f.step_type ?? null, url: f.url ?? null, email_id: f.email_id ?? null, synced: !!(f.pipedrive_id || f.pipedrive_note_id) },
+      file: { id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, step_type: f.step_type ?? null, step_id: f.process_step_id ?? null, url: f.url ?? null, email_id: f.email_id ?? null, synced: !!(f.pipedrive_id || f.pipedrive_note_id) },
     }));
 
   db.prepare('SELECT * FROM ticket_emails WHERE ticket_id = ?').all(t.id).forEach((m) => events.push({
@@ -447,7 +458,13 @@ r.get('/:id/timeline', (req, res) => {
   // Newest first, with pinned notes on top.
   const pinned = (e) => (e.comment?.pinned ? 1 : 0);
   events.sort((a, b) => pinned(b) - pinned(a) || (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
-  res.json({ ticket, events });
+  return { ticket, events, row: t };
+}
+
+r.get('/:id/timeline', (req, res) => {
+  const tl = ticketTimeline(req.params.id);
+  if (!tl) return res.status(404).json({ error: 'Ticket not found' });
+  res.json({ ticket: tl.ticket, events: tl.events });
 });
 
 // ---- Questions, comments and replies
@@ -557,6 +574,7 @@ function listProcess(ticketId) {
     WHERE p.ticket_id = ? ORDER BY COALESCE(p.step_date, substr(p.created_at, 1, 10)), p.created_at, p.id`).all(ticketId)
     .map((p) => ({
       id: p.id, step_type: p.step_type, step_date: p.step_date, notes: p.notes || '', reviews: cleanReviews(json.parse(p.reviews, {})),
+      decision: p.decision || '', pricing: p.pricing || '',
       created_at: p.created_at, updated_at: p.updated_at,
       author: p.first_name ? { id: p.author_id, first_name: p.first_name, last_name: p.last_name } : null,
       updated_by: p.e_first_name ? { id: p.updated_by, first_name: p.e_first_name, last_name: p.e_last_name } : null,
@@ -582,17 +600,20 @@ r.post('/:id/process', (req, res) => {
   res.json({ id, steps: listProcess(t.id) });
 });
 
-/** Body may hold step_type, step_date, reviews and notes. Anyone can update a step. */
+/** Body may hold step_type, step_date, reviews, notes, decision (Proceed, Revise, No-Bid or none) and pricing. Anyone can update a milestone. */
 r.put('/process/:pid', (req, res) => {
   const p = processRow(req.params.pid);
   if (!p) return res.status(404).json({ error: 'Process step not found' });
   const b = req.body || {};
-  if (b.step_type !== undefined && !PROCESS_TYPES.includes(b.step_type)) return res.status(400).json({ error: 'Choose a step type' });
-  db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`).run(
+  if (b.step_type !== undefined && !PROCESS_TYPES.includes(b.step_type)) return res.status(400).json({ error: 'Choose a milestone' });
+  if (b.decision !== undefined && b.decision && !DECISIONS.includes(b.decision)) return res.status(400).json({ error: 'Choose a decision' });
+  db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, decision = ?, pricing = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`).run(
     b.step_type ?? p.step_type,
     b.step_date !== undefined ? isoDate(b.step_date) : p.step_date,
     b.reviews !== undefined ? json.str(cleanReviews(b.reviews)) : p.reviews,
     typeof b.notes === 'string' ? b.notes.trim() : p.notes,
+    b.decision !== undefined ? (b.decision || null) : p.decision,
+    typeof b.pricing === 'string' ? b.pricing.trim() : p.pricing,
     req.user.id, p.id,
   );
   touch(p.ticket_id);
@@ -622,6 +643,71 @@ r.post('/process/:pid/files', upload.single('file'), (req, res) => {
   recordWork(req.user, { kind: 'file', ticket_id: p.ticket_id, ref_id: id, summary: req.file.originalname });
   touch(p.ticket_id);
   res.json({ steps: listProcess(p.ticket_id) });
+});
+
+// ---- Process view: the whole pursuit left to right, from how the lead came in, through strategy and shaping, to each milestone
+
+/**
+ * Everything the Process view shows for a pipeline ticket:
+ *   lead: how the lead came in, oldest first (the ticket's creation and source, the event it came from, marketing spend on
+ *     it, the contacts involved and what was logged with them);
+ *   strategy: the ticket under each person's priority accounts (tier, account and the account strategy), where it sits on
+ *     each person's priority list, the ticket's own strategy, and its win assessment and PWIN;
+ *   milestones: the process steps, oldest first; events: the rest of the timeline (comments, activities, documents, emails),
+ *     which the view splits by milestone date; people: everyone the milestones name, by id.
+ */
+r.get('/:id/process-view', (req, res) => {
+  const tl = ticketTimeline(req.params.id);
+  if (!tl) return res.status(404).json({ error: 'Ticket not found' });
+  const t = tl.row;
+  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets have a process view' });
+  const userRow = (id) => (id ? db.prepare('SELECT id, first_name, last_name FROM users WHERE id = ?').get(id) || null : null);
+  const pipeline = listPipelines().find((p) => (p.id ?? null) === (t.pipeline_id ?? null));
+  const director = userRow(t.bd_director_id);
+  const ticket = {
+    ...tl.ticket, owner: userRow(t.created_by), director, territory: t.territory_id ? db.prepare('SELECT name FROM territories WHERE id = ?').get(t.territory_id)?.name || null : null,
+    source_origin: t.source_origin ?? null, pipeline_name: pipeline?.name || null, projected_win_date: t.projected_win_date ?? null,
+    updated_at: t.updated_at, archived_at: t.archived_at ?? null,
+  };
+
+  // ---- Lead generated by
+  const lead = [{ type: 'created', at: t.created_at, by: ticket.owner, source: t.source ?? null, origin: t.source_origin ?? null, pipedrive: !!t.pipedrive_id }];
+  if (t.event_id) {
+    const e = db.prepare('SELECT id, name, date_from, date_to FROM events WHERE id = ?').get(t.event_id);
+    if (e) lead.push({ type: 'event', at: e.date_from || t.created_at, event: e });
+  }
+  db.prepare(`SELECT s.*, e.name AS event_name, u.first_name || ' ' || u.last_name AS user_name FROM marketing_spend s
+    LEFT JOIN events e ON e.id = s.event_id LEFT JOIN users u ON u.id = s.user_id WHERE s.ticket_id = ? ORDER BY s.spent_on, s.id`).all(t.id)
+    .forEach((s) => lead.push({ type: 'spend', at: s.spent_on, spend: { id: s.id, amount: s.amount, description: s.description, category: s.category, vendor: s.vendor, event_name: s.event_name, user_name: s.user_name, note: s.note } }));
+  const contacts = db.prepare(`SELECT c.*, tc.created_at AS linked_at, tc.is_primary, a.first_name AS a_first, a.last_name AS a_last FROM ticket_contacts tc
+    JOIN contacts c ON c.id = tc.contact_id LEFT JOIN users a ON a.id = tc.added_by WHERE tc.ticket_id = ? ORDER BY tc.created_at, c.id`).all(t.id);
+  contacts.forEach((c) => {
+    lead.push({ type: 'contact', at: c.linked_at, contact: { id: c.id, first_name: c.first_name, last_name: c.last_name, organization: c.organization, role: c.role, relationship: c.relationship, is_primary: !!c.is_primary },
+      by: c.a_first ? `${c.a_first} ${c.a_last}` : null });
+    db.prepare(`SELECT i.*, u.first_name, u.last_name FROM contact_interactions i LEFT JOIN users u ON u.id = i.author_id WHERE i.contact_id = ? ORDER BY i.created_at, i.id`).all(c.id)
+      .forEach((i) => lead.push({ type: 'interaction', at: i.created_at, contact: { id: c.id, first_name: c.first_name, last_name: c.last_name }, body: i.body, by: i.first_name ? `${i.first_name} ${i.last_name}` : null }));
+  });
+  lead.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+
+  // ---- Strategy: tiers, priority lists, the ticket's own strategy and its assessment
+  const tiers = db.prepare(`SELECT tr.user_id, tr.name AS tier, a.name AS account, a.strategy AS account_strategy, pt.position,
+      (SELECT COUNT(*) FROM priority_account_tickets x WHERE x.account_id = a.id) AS account_tickets
+    FROM priority_account_tickets pt JOIN priority_accounts a ON a.id = pt.account_id JOIN priority_tiers tr ON tr.id = a.tier_id
+    WHERE pt.ticket_id = ? ORDER BY tr.position, a.position`).all(t.id)
+    .map((x) => ({ user: userRow(x.user_id), tier: x.tier, account: x.account, account_strategy: x.account_strategy || '', position: x.position + 1, account_tickets: x.account_tickets }));
+  const lists = db.prepare('SELECT user_id, position, (SELECT COUNT(*) FROM priority_list_tickets y WHERE y.user_id = l.user_id) AS total FROM priority_list_tickets l WHERE ticket_id = ?').all(t.id)
+    .map((x) => ({ user: userRow(x.user_id), position: x.position + 1, total: x.total }));
+  const strategy = {
+    tiers, lists,
+    text: t.strategy || '', updated_at: t.strategy_updated_at ?? null, updated_by: nameOf(t.strategy_updated_by),
+    assessment: json.parse(t.assessment, {}), assessment_updated_at: t.assessment_updated_at ?? null, assessment_updated_by: nameOf(t.assessment_updated_by),
+    pwin: ticketPwin(t), model: pwinModel(),
+  };
+
+  const milestones = listProcess(t.id);
+  const people = {};
+  milestones.forEach((m) => Object.values(m.reviews).forEach((a) => [...a.people, ...a.approved].forEach((id) => { if (!people[id]) people[id] = userRow(id); })));
+  res.json({ ticket, lead, strategy, milestones, events: tl.events.filter((e) => e.type !== 'ticket'), people });
 });
 
 // ---- Documents

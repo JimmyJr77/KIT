@@ -19,8 +19,8 @@ export const CLOSED_STAGES = ['Awarded', 'Lost'];
 export const localToday = () => new Date().toLocaleDateString('en-CA');
 /**
  * Whether a ticket is still in the books. Archiving a ticket (by hand or by a full reset) takes it out of every figure,
- * past and present, until it's restored; deleting it takes its contract and forecast lines with it. A closed ticket that
- * simply aged off the board after 14 days stays in: it has no archived_at, and its win or loss still happened.
+ * past and present, until it's restored; deleting it takes its contract and forecast lines with it. A closed pipeline
+ * ticket never ages off the board on its own, so it stays in until someone archives it, here or in Pipedrive.
  */
 export const inBooks = (t = 't') => `${t}.archived_at IS NULL AND ${t}.archive_set_id IS NULL`;
 

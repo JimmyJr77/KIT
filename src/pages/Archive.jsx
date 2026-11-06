@@ -19,7 +19,7 @@ const contents = (d) => {
 
 /**
  * Everything taken off the boards: pipeline tickets, work tickets and priority cards. Select some or all to restore them,
- * or (admins) delete them for good. A full reset in Admin Access leaves a dataset here, which admins can load back or delete.
+ * or (admins) delete them for good. Datasets left by earlier full resets stay here for admins to load back or delete.
  */
 export default function Archive() {
   const navigate = useNavigate();
@@ -146,7 +146,10 @@ export default function Archive() {
                       </td>
                       <td className="px-3 py-2.5 text-slate-600">{tab === 'bid' ? [r.pipeline_status, money(r.value)].filter(Boolean).join(' · ') || '—' : r.owner || '—'}</td>
                       <td className="px-3 py-2.5 text-right text-slate-600 tabular-nums">{r.card_count}</td>
-                      <td className="px-3 py-2.5 whitespace-nowrap text-slate-500">{r.archived_at ? stamp(r.archived_at) : `Done ${stamp(r.done_at)} (auto)`}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-slate-500">
+                        {r.archived_at ? stamp(r.archived_at) : `Done ${stamp(r.done_at)} (auto)`}
+                        {r.pipedrive_deleted_at ? <div className="text-xs text-slate-400">Deleted in Pipedrive</div> : r.pipedrive_archived_at ? <div className="text-xs text-slate-400">Archived in Pipedrive</div> : null}
+                      </td>
                     </>
                   )}
                 </tr>
@@ -160,13 +163,13 @@ export default function Archive() {
   );
 }
 
-/** Datasets left by a full reset: load one back onto the boards, or delete it for good. */
+/** Datasets left by earlier full resets: load one back onto the boards, or delete it for good. */
 function Datasets({ list, canManage, busy, onLoad, onDelete }) {
   if (!list.length) {
     return (
       <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
         <Layers size={28} className="mx-auto mb-2 text-slate-300" />
-        No datasets yet.{canManage ? ' A full reset in Admin Access puts everything here as one.' : ''}
+        No datasets.
       </div>
     );
   }

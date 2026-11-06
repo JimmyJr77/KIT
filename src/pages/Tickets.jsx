@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Package, CheckSquare, CheckCircle2, MessageSquare, Paperclip, ListOrdered, UserRound, Plus, ArrowDownAZ, Columns3, Archive, RotateCcw, Ticket as TicketIcon, DollarSign, Zap, MapPin } from 'lucide-react';
+import { Search, Package, CheckSquare, CheckCircle2, MessageSquare, Paperclip, ListOrdered, UserRound, Plus, ArrowDownAZ, Columns3, Ticket as TicketIcon, DollarSign, Zap, MapPin } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ago, fullStamp, ticketKind } from '../lib/format.js';
@@ -57,13 +57,12 @@ export default function Tickets() {
   // The next-step circle opens the ticket on that activity (or on the Activity pane, when there's no next step).
   const openStep = (t) => setParams({ open: String(t.id), activity: String(t.next_step?.id ?? 0) });
   const activityParam = params.get('activity');
-  // Archived tickets leave both views; they live in the archive.
+  // Archived tickets leave both views: work tickets are in the Done archive, pipeline tickets in Closed deals.
   const ofType = (tickets || []).filter((t) => types.includes(t.ticket_type === 'work' ? 'work' : 'bid'))
     .filter((t) => !territory || (territory === 'none' ? !t.territory_id : t.territory_id === Number(territory)))
     .filter((t) => !person || t.bd_director_id === Number(person) || t.created_by === Number(person));
   const live = ofType.filter((t) => !t.archived)
     .sort((a, b) => a.opportunity_title.localeCompare(b.opportunity_title, undefined, { sensitivity: 'base' }));
-  const archived = ofType.filter((t) => t.archived);
 
   return (
     <div className="space-y-5 p-8">
@@ -81,15 +80,8 @@ export default function Tickets() {
           ))}
         </div>
         <button type="button" className="btn h-9 text-sm" onClick={() => navigate('/tickets/done')}
-          title="Every ticket that reached Done, including those archived from this page after 14 days">
+          title="Every finished work ticket, including those that left this page after 14 days in Done. Pipeline tickets are in Closed deals.">
           <CheckCircle2 size={15} /> Done archive
-        </button>
-        <button type="button" className="btn relative h-9 w-9 p-0" onClick={() => navigate(`/archive?tab=${types.length === 1 ? types[0] : 'bid'}`)}
-          title={`Archive: done tickets, archived after 14 days or by hand${archived.length ? ` (${archived.length})` : ''}`} aria-label="Archive">
-          <Archive size={16} />
-          {archived.length > 0 && (
-            <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-slate-500 px-1 text-[10px] font-semibold text-white">{archived.length}</span>
-          )}
         </button>
       </PageHeader>
 

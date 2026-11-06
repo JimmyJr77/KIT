@@ -1,31 +1,31 @@
-// The archive: tickets (pipeline and work) and priority cards taken off the boards, one by one, or all at once as a
-// dataset by a full reset. Anyone can archive and restore single items; a full reset, loading a dataset back and deleting
-// for good are for admins, and only what's already archived can be deleted.
+// The archive: tickets (pipeline and work) and priority cards taken off the boards, plus the datasets earlier full
+// resets left. Anyone can archive and restore single items; loading a dataset back and deleting for good are for admins,
+// and only what's already archived can be deleted.
 import fs from 'node:fs';
 import path from 'node:path';
 import { Router } from 'express';
 import { db, json } from '../db.js';
 import { laneFor, isArchived } from '../../src/lib/lanes.js';
-import { archiveRows, restoreRows, deleteRows, archivedRowCounts } from '../sample/registry.js';
-import { resetSample } from '../sample/index.js';
+import { restoreRows, deleteRows, archivedRowCounts } from '../sample/registry.js';
 import { queueDelete } from '../services/pipedrive.js';
 
 const r = Router();
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
 const ids = (xs) => [...new Set((Array.isArray(xs) ? xs : []).map(Number).filter(Boolean))];
 
-/** Archived tickets: archived by hand, or Done long enough to archive themselves. */
+/** Archived tickets: archived by hand (or in Pipedrive), or work tickets Done long enough to archive themselves. */
 function archivedTickets() {
   return db.prepare(`SELECT t.*, u.first_name AS owner_first, u.last_name AS owner_last,
       (SELECT COUNT(*) FROM priority_cards c WHERE c.ticket_id = t.id) AS card_count,
       (SELECT COUNT(*) FROM ticket_files f WHERE f.ticket_id = t.id) AS file_count,
       (SELECT COUNT(*) FROM delivery_programs p WHERE p.ticket_id = t.id) AS contract_count
     FROM tickets t LEFT JOIN users u ON u.id = COALESCE(t.bd_director_id, t.created_by) WHERE t.archive_set_id IS NULL AND t.ticket_type != 'account'`).all()
-    // Only Done tickets age into the archive, and whether one is Done doesn't depend on recent activity.
+    // Only Done work tickets age into the archive, and whether one is Done doesn't depend on recent activity.
     .filter((t) => isArchived(t, laneFor({ ...t, last_activity: t.updated_at })))
     .map((t) => ({
       id: t.id, ticket_type: t.ticket_type, opportunity_title: t.opportunity_title, organization: t.organization,
       pipeline_status: t.pipeline_status, value: t.value, archived_at: t.archived_at, done_at: t.done_at,
+      pipedrive_archived_at: t.pipedrive_archived_at, pipedrive_deleted_at: t.pipedrive_deleted_at,
       owner: t.owner_first ? `${t.owner_first} ${t.owner_last}` : null, card_count: t.card_count, file_count: t.file_count, contract_count: t.contract_count,
     }));
 }
@@ -42,30 +42,7 @@ function archivedCards() {
   }));
 }
 
-// ---- Datasets (from a full reset)
-
-// Real records only: the sample data is never archived with everything else.
-const notSample = (alias, tbl) => `${alias}.id NOT IN (SELECT row_id FROM sample_rows WHERE tbl = '${tbl}')`;
-
-/** What a full reset takes: every real ticket and priority card still on the boards. */
-function liveItems() {
-  const archived = new Set(archivedTickets().map((t) => t.id));
-  const tickets = db.prepare(`SELECT t.* FROM tickets t WHERE t.archived_at IS NULL AND t.archive_set_id IS NULL AND t.ticket_type != 'account' AND ${notSample('t', 'tickets')}`).all()
-    .filter((t) => !archived.has(t.id) && !isArchived(t, laneFor({ ...t, last_activity: t.updated_at })));
-  const ids = JSON.stringify(tickets.map((t) => t.id));
-  // Cards still on the boards, plus every card on a ticket being archived.
-  const cards = db.prepare(`SELECT c.id FROM priority_cards c WHERE c.archive_set_id IS NULL AND ${notSample('c', 'priority_cards')}
-    AND (c.archived_at IS NULL OR c.ticket_id IN (SELECT value FROM json_each(?)))`).all(ids).map((c) => c.id);
-  return { tickets, cards };
-}
-
-// Everything else a full reset archives along with the tickets and priority cards: the CRM, events, travel, contracts
-// and their funding and billing, actual travel spend, booking and qualified pipeline targets, account objectives, forecasts, marketing and its spend, alerts, work logs and priority account lists.
-// People, teams, territories and settings stay.
-const RESET_TABLES = ['contacts', 'contact_interactions', 'ticket_contacts', 'task_participants', 'events', 'event_attendees', 'event_reps', 'event_support_requests', 'support_needs', 'support_need_tickets',
-  'trips', 'travel_actuals', 'delivery_programs', 'delivery_team', 'delivery_files', 'program_entries', 'booking_targets', 'qualified_targets', 'account_objectives', 'forecast_snapshots',
-  'marketing_assets', 'marketing_copy', 'marketing_spend', 'alerts', 'work_log',
-  'priority_tiers', 'priority_accounts', 'priority_account_tickets', 'priority_list_tickets'];
+// ---- Datasets (left by full resets, which KIT no longer has)
 
 function datasets() {
   const other = archivedRowCounts();
@@ -81,41 +58,8 @@ function datasets() {
     });
 }
 
-/** Archives the live tickets and cards into a new dataset. */
-function archiveLive(name, userId) {
-  const live = liveItems();
-  return db.transaction(() => {
-    const setId = db.prepare('INSERT INTO archive_sets (name, created_by) VALUES (?, ?)').run(name, userId).lastInsertRowid;
-    db.prepare("UPDATE tickets SET archived_at = datetime('now'), archive_set_id = ? WHERE id IN (SELECT value FROM json_each(?))")
-      .run(setId, JSON.stringify(live.tickets.map((t) => t.id)));
-    db.prepare("UPDATE priority_cards SET archived_at = COALESCE(archived_at, datetime('now')), archive_set_id = ? WHERE id IN (SELECT value FROM json_each(?))")
-      .run(setId, JSON.stringify(live.cards));
-    return setId;
-  })();
-}
-const today = () => new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-
 r.get('/', (req, res) => {
   res.json({ tickets: archivedTickets(), cards: archivedCards(), datasets: datasets(), canDelete: req.user.role === 'admin' });
-});
-
-/**
- * Body: { confirm: 'RESET' }. Full reset, admins only: archives all real work data as one dataset (tickets and priority
- * cards, plus everything in RESET_TABLES). On a development server it then reloads a fresh copy of the sample data, still
- * shown or hidden as it was; production has no sample data.
- * Nothing is deleted; load the dataset back from the archive to undo it.
- */
-r.post('/reset', (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can reset KIT' });
-  if (req.body?.confirm !== 'RESET') return res.status(400).json({ error: 'Type RESET to confirm' });
-  const id = archiveLive(`Full reset of ${today()}`, req.user.id);
-  archiveRows(id, RESET_TABLES);
-  try {
-    resetSample();
-  } catch (e) {
-    console.error(`Full reset: couldn't reload the sample data: ${e.message}`);
-  }
-  res.json({ dataset: datasets().find((d) => d.id === id) });
 });
 
 /** Puts a whole dataset back on the boards. Admins only. */
@@ -124,8 +68,8 @@ r.post('/datasets/:id/load', (req, res) => {
   const set = db.prepare('SELECT id FROM archive_sets WHERE id = ?').get(req.params.id);
   if (!set) return res.status(404).json({ error: 'Dataset not found' });
   db.transaction(() => {
-    // Done tickets get a fresh 14 days on the board before they age back into the archive.
-    db.prepare("UPDATE tickets SET archived_at = NULL, archive_set_id = NULL, done_at = CASE WHEN done_at IS NOT NULL THEN datetime('now') END WHERE archive_set_id = ?").run(set.id);
+    // Done work tickets get a fresh 14 days on the board before they age back into the archive; pipeline tickets keep the date their deal closed.
+    db.prepare("UPDATE tickets SET archived_at = NULL, archive_set_id = NULL, done_at = CASE WHEN done_at IS NOT NULL AND ticket_type = 'work' THEN datetime('now') ELSE done_at END WHERE archive_set_id = ?").run(set.id);
     db.prepare("UPDATE priority_cards SET archived_at = NULL, archive_set_id = NULL, updated_at = datetime('now') WHERE archive_set_id = ?").run(set.id);
     restoreRows(set.id);
     db.prepare('DELETE FROM archive_sets WHERE id = ?').run(set.id);
@@ -153,7 +97,8 @@ r.post('/restore', (req, res) => {
   const t = ids(req.body?.tickets);
   const c = ids(req.body?.cards);
   db.transaction(() => {
-    const tk = db.prepare("UPDATE tickets SET archived_at = NULL, done_at = CASE WHEN done_at IS NOT NULL THEN datetime('now') END WHERE id = ?");
+    // A Done work ticket gets a fresh 14 days on the board; a pipeline ticket keeps the date its deal closed.
+    const tk = db.prepare("UPDATE tickets SET archived_at = NULL, done_at = CASE WHEN done_at IS NOT NULL AND ticket_type = 'work' THEN datetime('now') ELSE done_at END WHERE id = ?");
     t.forEach((id) => tk.run(id));
     const cd = db.prepare("UPDATE priority_cards SET archived_at = NULL, updated_at = datetime('now') WHERE id = ?");
     c.forEach((id) => cd.run(id));

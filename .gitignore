@@ -4,5 +4,6 @@ dist
 server/data/*.db
 server/data/*.db-*
 server/data/uploads/
+server/data/backups/
 .DS_Store
 .vercel/

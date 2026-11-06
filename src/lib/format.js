@@ -8,6 +8,8 @@ export function formatPhoneInput(v) {
   return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`;
 }
 
+/** 1.2 GB, 3.4 MB or 12 KB. */
+export const fileSize = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
 export const fullName = (u) => (u ? `${u.first_name} ${u.last_name}` : '');
 export const initials = (u) => (u ? `${u.first_name?.[0] || ''}${u.last_name?.[0] || ''}`.toUpperCase() : '?');
 

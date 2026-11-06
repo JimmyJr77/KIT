@@ -16,6 +16,7 @@ function summary(r) {
   const gone = (n, word, many) => n && `${plural(n, word, many)} deleted in Pipedrive`;
   return [
     r.pipelines && plural(r.pipelines, 'new pipeline'), part(r.dealsAdded, r.dealsUpdated, 'deal'), r.dealsArchived && `${plural(r.dealsArchived, 'deal')} deleted in Pipedrive (archived here)`,
+    r.dealsArchivedInPipedrive && `${plural(r.dealsArchivedInPipedrive, 'deal')} archived in Pipedrive (archived here)`, r.dealsUnarchived && `${plural(r.dealsUnarchived, 'deal')} unarchived in Pipedrive (back on the boards)`,
     part(r.organizationsAdded, r.organizationsUpdated, 'organization'), part(r.contactsAdded, r.contactsUpdated, 'contact'),
     part(r.activitiesAdded, r.activitiesUpdated, 'activity', 'activities'), gone(r.activitiesDeleted, 'activity', 'activities'),
     part(r.notesAdded, r.notesUpdated, 'note'), gone(r.notesDeleted, 'note'),

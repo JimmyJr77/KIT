@@ -62,6 +62,7 @@ function programsOut(rows) {
     installments: installments.filter((i) => i.ticket_id === p.ticket_id).map((i) => ({ id: i.id, description: i.description, amount: i.amount, billing_date: i.billing_date, synced: !!i.pipedrive_id })),
     products: products.filter((x) => x.ticket_id === p.ticket_id).map((x) => ({ id: x.id, name: x.name, quantity: x.quantity, item_price: x.item_price, discount: x.discount, sum: x.sum, billing_frequency: x.billing_frequency })),
     program_manager: p.pm_first ? { id: p.program_manager_id, first_name: p.pm_first, last_name: p.pm_last } : null,
+    contracting_officer: p.contracting_officer, cor: p.cor, gov_tech_lead: p.gov_tech_lead,
     technical_lead: p.tl_first ? { id: p.technical_lead_id, first_name: p.tl_first, last_name: p.tl_last } : null,
     team: team.filter((m) => m.program_id === p.id).map((m) => ({
       id: m.id, role: m.role,
@@ -123,19 +124,31 @@ r.get('/', (req, res) => {
     project_labels: (fieldsOf('project').find((f) => f.key === 'labels' || f.name === 'Labels')?.options || []).map((o) => o.label), activity_types: Object.values(ACTIVITY_TYPES) });
 });
 
-/** Which Closed deals group a pipeline ticket is in, or null if it's still open (a held contract's ticket stays open until it's decided). */
+/** A contract whose funding received covers its value. */
+const fullyFunded = (t) => !!t.program_id && t.contract_value > 0 && t.funded >= t.contract_value;
+/**
+ * Which Closed deals group a pipeline ticket is in, or null if it's still open (a held contract's ticket stays open until
+ * it's decided). Other is for deals that left the pipeline with no outcome: archived here while open, or archived or deleted
+ * in Pipedrive (which takes a won deal out of Delivery too). A won deal can't be archived here: it's reopened first.
+ */
 function closedGroup(t) {
   if (t.deal_status === 'lost') return 'lost';
-  if (t.archived_at) return 'other'; // taken off the board by hand, which also takes any contract out of Delivery
-  if (t.deal_status === 'won') return t.program_id && !t.held_at && t.program_status !== 'Active' ? 'executed' : 'execution';
+  if (t.archived_at) return 'other';
+  if (t.deal_status === 'won') return t.program_id && !t.held_at && (t.program_status !== 'Active' || fullyFunded(t)) ? 'executed' : 'execution';
   return null;
 }
+const removedHow = (t) => (t.pipedrive_deleted_at ? 'Deleted in Pipedrive' : t.pipedrive_archived_at ? 'Archived in Pipedrive' : 'Archived here');
 
-/** Every closed pipeline deal: lost, in execution (won and in delivery), executed (delivery finished or canceled), or other (archived from the board). */
+/**
+ * Every closed pipeline deal: lost, in execution (won and in delivery), executed (the contract is Complete or canceled, or
+ * fully funded), or other (left the pipeline with no outcome). A won deal that Pipedrive archived or deleted after funding
+ * was recorded on its contract is flagged as a discrepancy: it may be gone, or it may just have been tidied away once funded.
+ */
 r.get('/closed', (req, res) => {
   const rows = db.prepare(`SELECT t.id, t.opportunity_title, t.organization, t.value, t.pipeline_status, t.deal_status, t.lost_reason, t.done_at, t.archived_at, t.won_at, t.lost_at,
-      t.bd_director_id, d.first_name AS director_first_name, d.last_name AS director_last_name, tr.name AS territory_name,
-      p.id AS program_id, p.status AS program_status, p.project_status, p.held_at, p.value AS contract_value, p.awarded_at, COALESCE(p.completed_at, p.updated_at) AS completed_at
+      t.pipedrive_archived_at, t.pipedrive_deleted_at, t.bd_director_id, d.first_name AS director_first_name, d.last_name AS director_last_name, tr.name AS territory_name,
+      p.id AS program_id, p.status AS program_status, p.project_status, p.held_at, p.value AS contract_value, p.awarded_at, COALESCE(p.completed_at, p.updated_at) AS completed_at,
+      (SELECT COALESCE(SUM(e.amount), 0) FROM program_entries e WHERE e.program_id = p.id AND e.kind = 'funding') AS funded
     FROM tickets t LEFT JOIN delivery_programs p ON p.ticket_id = t.id
     LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id
     WHERE t.ticket_type = 'bid' AND t.archive_set_id IS NULL`).all();
@@ -143,7 +156,13 @@ r.get('/closed', (req, res) => {
   res.json({
     deals: rows.flatMap((t) => {
       const group = closedGroup(t);
-      return group ? [{ ...t, group, closed_on: closedOn[group](t), amount: t.contract_value ?? t.value }] : [];
+      if (!group) return [];
+      const other = group === 'other';
+      return [{
+        ...t, group, closed_on: closedOn[group](t), amount: t.contract_value ?? t.value, fully_funded: fullyFunded(t),
+        removed_how: other ? removedHow(t) : null,
+        discrepancy: other && t.deal_status === 'won' && t.funded > 0 && !!(t.pipedrive_archived_at || t.pipedrive_deleted_at),
+      }];
     }),
   });
 });
@@ -170,7 +189,8 @@ r.delete('/:id', requireAdmin, (req, res) => {
 
 /**
  * Body may hold: program_manager_id and technical_lead_id (null to clear), status (Active | Complete | Canceled), notes (the
- * project overview), value (the contract value; null to clear), start_date, end_date, phase_id, labels [names], owner_id.
+ * project overview), value (the contract value; null to clear), start_date, end_date, phase_id, labels [names], owner_id,
+ * and the government's people by name: contracting_officer, cor, gov_tech_lead.
  * Status, overview, dates, phase, labels and owner are the Pipedrive project's and are synced.
  */
 r.put('/:id', (req, res) => {
@@ -190,6 +210,7 @@ r.put('/:id', (req, res) => {
     next.project_status = PROJECT_STATUS_OF[b.status];
   }
   if ('notes' in b) next.notes = String(b.notes || '').trim() || null;
+  for (const field of ['contracting_officer', 'cor', 'gov_tech_lead']) if (field in b) next[field] = String(b[field] || '').trim().slice(0, 200) || null;
   if ('value' in b) {
     next.value = b.value === '' || b.value == null ? null : Number(b.value);
     if (next.value != null && !(next.value >= 0)) return res.status(400).json({ error: 'Contract value must be a positive number' });
@@ -205,10 +226,10 @@ r.put('/:id', (req, res) => {
   }
   if ('labels' in b) next.labels = json.str([...new Set((Array.isArray(b.labels) ? b.labels : []).map((x) => String(x).trim()).filter(Boolean))]);
   db.prepare(`UPDATE delivery_programs SET program_manager_id = ?, technical_lead_id = ?, owner_id = ?, status = ?, project_status = COALESCE(?, project_status), notes = ?, value = ?,
-    start_date = ?, end_date = ?, phase_id = ?, labels = ?, updated_at = datetime('now'),
+    start_date = ?, end_date = ?, phase_id = ?, labels = ?, contracting_officer = ?, cor = ?, gov_tech_lead = ?, updated_at = datetime('now'),
     completed_at = CASE WHEN ? = 'Active' THEN NULL WHEN status = 'Active' THEN datetime('now') ELSE completed_at END WHERE id = ?`)
     .run(next.program_manager_id, next.technical_lead_id, next.owner_id, next.status, next.project_status ?? null, next.notes, next.value,
-      next.start_date, next.end_date, next.phase_id, next.labels, next.status, p.id);
+      next.start_date, next.end_date, next.phase_id, next.labels, next.contracting_officer, next.cor, next.gov_tech_lead, next.status, p.id);
   if (['status', 'notes', 'start_date', 'end_date', 'phase_id', 'labels', 'owner_id'].some((k) => k in b)) markPending(p.id);
   if (next.program_manager_id && next.program_manager_id !== p.program_manager_id) alertAssigned(next.program_manager_id, req.user, p.id, 'delivery_pm');
   if (next.technical_lead_id && next.technical_lead_id !== p.technical_lead_id) alertAssigned(next.technical_lead_id, req.user, p.id, 'delivery_tl');
@@ -386,24 +407,44 @@ r.delete('/files/:id', (req, res) => {
   res.json({ program: one(f.program_id) });
 });
 
-/** Record funding received or revenue billed. Body: { kind: 'funding' | 'billing', amount, entry_date, note? }. */
+/**
+ * Record funding received or revenue billed. Body: { kind: 'funding' | 'billing', amount, entry_date, note? }.
+ * Funding is the deal's payment schedule: it goes on the pipeline ticket as an installment (sent to Pipedrive on the next
+ * send), and the funding entry follows from that (see the funding_from_installment triggers in db.js).
+ */
 r.post('/:id/entries', (req, res) => {
-  if (!programRow(req.params.id)) return res.status(404).json({ error: 'Program not found' });
+  const p = programRow(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Program not found' });
   const b = req.body || {};
   if (!['funding', 'billing'].includes(b.kind)) return res.status(400).json({ error: 'Choose funding or billing' });
   const amount = Number(b.amount);
   if (!(amount > 0)) return res.status(400).json({ error: 'Enter an amount above zero' });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(b.entry_date || '')) return res.status(400).json({ error: 'Enter a date' });
-  db.prepare('INSERT INTO program_entries (program_id, kind, amount, entry_date, note, created_by) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(req.params.id, b.kind, amount, b.entry_date, String(b.note || '').trim() || null, req.user.id);
-  touch(req.params.id);
-  res.json({ program: one(req.params.id) });
+  const note = String(b.note || '').trim() || null;
+  db.transaction(() => {
+    if (b.kind === 'funding' && p.ticket_id) {
+      const id = db.prepare('INSERT INTO ticket_installments (ticket_id, description, amount, billing_date) VALUES (?, ?, ?, ?)').run(p.ticket_id, note, amount, b.entry_date).lastInsertRowid;
+      db.prepare('UPDATE program_entries SET created_by = ? WHERE installment_id = ?').run(req.user.id, id);
+    } else {
+      db.prepare('INSERT INTO program_entries (program_id, kind, amount, entry_date, note, created_by) VALUES (?, ?, ?, ?, ?, ?)').run(p.id, b.kind, amount, b.entry_date, note, req.user.id);
+    }
+    touch(p.id);
+  })();
+  res.json({ program: one(p.id) });
 });
 
+/** Removes an entry. A funding entry's installment goes with it, here and (on the next send) in Pipedrive. */
 r.delete('/entries/:entryId', (req, res) => {
   const e = db.prepare('SELECT * FROM program_entries WHERE id = ?').get(req.params.entryId);
   if (!e) return res.status(404).json({ error: 'Not found' });
-  db.prepare('DELETE FROM program_entries WHERE id = ?').run(e.id);
+  db.transaction(() => {
+    const i = e.installment_id && db.prepare('SELECT * FROM ticket_installments WHERE id = ?').get(e.installment_id);
+    if (i) {
+      db.prepare('DELETE FROM ticket_installments WHERE id = ?').run(i.id); // its entry goes with it
+      queueDelete('installment', i.pipedrive_id, db.prepare('SELECT pipedrive_id FROM tickets WHERE id = ?').get(i.ticket_id)?.pipedrive_id);
+    }
+    db.prepare('DELETE FROM program_entries WHERE id = ?').run(e.id);
+  })();
   res.json({ program: one(e.program_id) });
 });
 

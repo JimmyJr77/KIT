@@ -14,7 +14,7 @@ const ACTIONS = ['continue', 'change'];
 const SOURCES = ['manual', 'retro'];
 const TAG_GROUPS = ['Pipeline stages', 'Major milestones', 'Areas', 'Added by users'];
 
-const MILESTONES = [...PROCESS_TYPES.map((t) => (t === 'Final Gate Review' ? 'Final/Follow-on Gate Review' : t)), 'SOW', 'PO'];
+const MILESTONES = [...new Set([...PROCESS_TYPES.map((t) => (t === 'Final Gate Review' ? 'Final/Follow-on Gate Review' : t)), 'SOW', 'PO'])];
 const AREAS = ['KIT', 'Software', 'Admin'];
 
 const text = (v, max = 4000) => String(v ?? '').trim().slice(0, max);

@@ -353,7 +353,7 @@ addColumn('trips', 'locked_estimate', 'TEXT');
 // pipeline tickets move on their own from their activity unless lane_locked holds them where they are.
 addColumn('tickets', 'lane', 'TEXT');
 addColumn('tickets', 'lane_locked', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('tickets', 'done_at', 'TEXT');      // when it reached Done; it archives 14 days later
+addColumn('tickets', 'done_at', 'TEXT');      // when it reached Done; a work ticket archives 14 days later
 addColumn('tickets', 'archived_at', 'TEXT');  // archived early by hand
 db.exec(`
 -- A pipeline ticket that's won or lost is done: it moves to Done, unlocked. Reopening it brings it back.
@@ -427,6 +427,9 @@ CREATE TABLE IF NOT EXISTS ticket_process_steps (
 );
 CREATE INDEX IF NOT EXISTS ticket_process_steps_ticket ON ticket_process_steps(ticket_id);
 `);
+// A gate review's decision (Proceed, Revise, No-Bid) and the price considerations taken into it.
+addColumn('ticket_process_steps', 'decision', 'TEXT');
+addColumn('ticket_process_steps', 'pricing', 'TEXT');
 db.exec(`
 -- People asking for KIT access from the sign-in page. An admin approves (adding the email to approved_accounts) or declines.
 CREATE TABLE IF NOT EXISTS access_requests (
@@ -772,6 +775,10 @@ CREATE TABLE IF NOT EXISTS delivery_team (
 // Alerts telling someone they've been put on a won contract.
 addColumn('alerts', 'program_id', 'INTEGER REFERENCES delivery_programs(id) ON DELETE CASCADE');
 addColumn('delivery_programs', 'technical_lead_id', 'INTEGER REFERENCES users(id)');
+// The government's people on the contract: names, since they have no KIT account.
+addColumn('delivery_programs', 'contracting_officer', 'TEXT');
+addColumn('delivery_programs', 'cor', 'TEXT'); // Contracting Officer's Representative
+addColumn('delivery_programs', 'gov_tech_lead', 'TEXT');
 db.exec(`
 -- A contract's documents: RFI, proposal, PO and so on, or Additional. Kept apart from ticket_files, which can go to Pipedrive.
 CREATE TABLE IF NOT EXISTS delivery_files (
@@ -794,6 +801,7 @@ addColumn('delivery_programs', 'held_at', 'TEXT');
 addColumn('delivery_programs', 'kept_at', 'TEXT');
 addColumn('delivery_programs', 'completed_at', 'TEXT'); // when delivery finished: set by marking the contract Complete
 const NOTHING_ADDED = `program_manager_id IS NULL AND technical_lead_id IS NULL AND status = 'Active' AND TRIM(COALESCE(notes, '')) = ''
+    AND TRIM(COALESCE(contracting_officer, '')) = '' AND TRIM(COALESCE(cor, '')) = '' AND TRIM(COALESCE(gov_tech_lead, '')) = ''
     AND id NOT IN (SELECT program_id FROM delivery_team) AND id NOT IN (SELECT program_id FROM program_entries) AND id NOT IN (SELECT program_id FROM delivery_files)`;
 
 // Travel request alerts: a lead has one to approve (travel_request), or the traveler's was decided (travel_decision).
@@ -1422,6 +1430,7 @@ DROP TRIGGER IF EXISTS delivery_on_award_insert;
 DROP TRIGGER IF EXISTS delivery_on_award_update;
 DROP TRIGGER IF EXISTS delivery_hold_on_unaward;
 DROP TRIGGER IF EXISTS delivery_release_on_award;
+DROP TRIGGER IF EXISTS delivery_hold_on_unwon; -- remade each start, so what counts as "nothing added" stays current
 CREATE TRIGGER IF NOT EXISTS delivery_on_won_insert AFTER INSERT ON tickets
 WHEN NEW.deal_status = 'won' AND NEW.ticket_type = 'bid'
 BEGIN
@@ -1455,6 +1464,61 @@ TEAMS.forEach((t) => insertTeam.run(t));
 
 const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
 Object.entries(DEFAULT_SETTINGS).forEach(([k, v]) => insertSetting.run(k, v));
+
+// ---- Funding and Pipedrive's installments are one list.
+// Funding received on a contract and the installments on its deal (Pipedrive's payment schedule) are the same records,
+// kept both ways: a funding entry recorded here goes on the deal as an installment (and to Pipedrive on the next send),
+// and an installment pulled from Pipedrive becomes a funding entry on the contract. Billing entries are KIT's own.
+// Deleting an installment takes its funding entry with it. When a deal was archived in Pipedrive (as opposed to deleted
+// there, or archived here by hand) the ticket says so, and comes back when it's unarchived there.
+addColumn('program_entries', 'installment_id', 'INTEGER REFERENCES ticket_installments(id) ON DELETE CASCADE');
+addColumn('tickets', 'pipedrive_archived_at', 'TEXT');
+// One-time: link what both sides already had. An installment and a funding entry on the same contract with the same
+// amount and date are one record; what only one side had is copied to the other.
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'funding_installments_linked'").get()) {
+  db.transaction(() => {
+    const used = new Set(db.prepare('SELECT installment_id FROM program_entries WHERE installment_id IS NOT NULL').all().map((x) => x.installment_id));
+    const entries = db.prepare(`SELECT e.*, p.ticket_id FROM program_entries e JOIN delivery_programs p ON p.id = e.program_id
+      WHERE e.kind = 'funding' AND e.installment_id IS NULL AND p.ticket_id IS NOT NULL ORDER BY e.id`).all();
+    for (const e of entries) {
+      const match = db.prepare('SELECT id FROM ticket_installments WHERE ticket_id = ? AND amount = ? AND billing_date = ? ORDER BY id').all(e.ticket_id, e.amount, e.entry_date)
+        .find((i) => !used.has(i.id));
+      const id = match ? match.id
+        : db.prepare('INSERT INTO ticket_installments (ticket_id, description, amount, billing_date) VALUES (?, ?, ?, ?)').run(e.ticket_id, e.note, e.amount, e.entry_date).lastInsertRowid;
+      used.add(id);
+      db.prepare('UPDATE program_entries SET installment_id = ? WHERE id = ?').run(id, e.id);
+    }
+    db.prepare(`INSERT INTO program_entries (program_id, kind, amount, entry_date, note, installment_id)
+      SELECT p.id, 'funding', i.amount, COALESCE(i.billing_date, date('now')), i.description, i.id FROM ticket_installments i JOIN delivery_programs p ON p.ticket_id = i.ticket_id
+      WHERE i.amount > 0 AND i.id NOT IN (SELECT installment_id FROM program_entries WHERE installment_id IS NOT NULL)`).run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('funding_installments_linked', '1')").run();
+  })();
+}
+db.exec(`
+CREATE INDEX IF NOT EXISTS program_entries_installment ON program_entries(installment_id);
+-- An installment on a won deal is a funding entry on its contract: made with it, kept in step with it, gone with it.
+CREATE TRIGGER IF NOT EXISTS funding_from_installment_insert AFTER INSERT ON ticket_installments
+WHEN NEW.amount > 0 AND EXISTS (SELECT 1 FROM delivery_programs WHERE ticket_id = NEW.ticket_id)
+BEGIN
+  INSERT INTO program_entries (program_id, kind, amount, entry_date, note, installment_id)
+  SELECT id, 'funding', NEW.amount, COALESCE(NEW.billing_date, date('now')), NEW.description, NEW.id FROM delivery_programs WHERE ticket_id = NEW.ticket_id;
+END;
+CREATE TRIGGER IF NOT EXISTS funding_from_installment_update AFTER UPDATE OF amount, billing_date, description, ticket_id ON ticket_installments
+BEGIN
+  DELETE FROM program_entries WHERE installment_id = NEW.id AND NEW.amount <= 0;
+  UPDATE program_entries SET amount = NEW.amount, entry_date = COALESCE(NEW.billing_date, entry_date), note = NEW.description WHERE installment_id = NEW.id;
+  INSERT INTO program_entries (program_id, kind, amount, entry_date, note, installment_id)
+  SELECT id, 'funding', NEW.amount, COALESCE(NEW.billing_date, date('now')), NEW.description, NEW.id FROM delivery_programs
+  WHERE ticket_id = NEW.ticket_id AND NEW.amount > 0 AND NOT EXISTS (SELECT 1 FROM program_entries WHERE installment_id = NEW.id);
+END;
+-- A deal won with installments already on it: they're the new contract's funding.
+CREATE TRIGGER IF NOT EXISTS funding_from_installments_on_contract AFTER INSERT ON delivery_programs
+BEGIN
+  INSERT INTO program_entries (program_id, kind, amount, entry_date, note, installment_id)
+  SELECT NEW.id, 'funding', i.amount, COALESCE(i.billing_date, date('now')), i.description, i.id FROM ticket_installments i
+  WHERE i.ticket_id = NEW.ticket_id AND i.amount > 0 AND i.id NOT IN (SELECT installment_id FROM program_entries WHERE installment_id IS NOT NULL);
+END;
+`);
 
 export function getSetting(key) {
   return db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? DEFAULT_SETTINGS[key];

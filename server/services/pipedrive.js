@@ -771,14 +771,22 @@ function write({ users, pipelines, stages, deals, persons, organizations, partic
       dateHistory.run(stageChanged ? (closedAt || sqlTime(d.stage_change_time) || sqlTime(d.update_time)) : sqlTime(d.update_time), t.id, before);
       tally('dealsUpdated');
     }
-    // A closed deal is Done as of when it closed (so it's archived once that's 14 days past), and a won one's contract
-    // is dated when it was won.
+    // A closed deal is Done as of when it closed (it stays in Done: pipeline tickets never age off), and a won one's
+    // contract is dated when it was won.
     if (closedAt && (t.fresh || t.deal_status !== dealStatus)) {
       db.prepare('UPDATE tickets SET done_at = ? WHERE id = ?').run(closedAt, t.id);
       if (dealStatus === 'won') db.prepare('UPDATE delivery_programs SET awarded_at = ? WHERE ticket_id = ?').run(closedAt, t.id);
     }
-    // Deals archived in Pipedrive leave KIT's boards too (and come back when unarchived there).
-    if (d.is_archived) db.prepare('UPDATE tickets SET archived_at = COALESCE(archived_at, ?) WHERE id = ?').run(sqlTime(d.archive_time) || sqlTime(new Date().toISOString()), t.id);
+    // Deals archived in Pipedrive leave KIT's boards too (a won one's contract leaves Delivery; Closed deals lists it under
+    // Other), and come back when unarchived there.
+    if (d.is_archived) {
+      const r = db.prepare('UPDATE tickets SET archived_at = COALESCE(archived_at, @at), pipedrive_archived_at = @at WHERE id = @id AND pipedrive_archived_at IS NULL')
+        .run({ at: sqlTime(d.archive_time) || sqlTime(new Date().toISOString()), id: t.id });
+      if (r.changes) tally('dealsArchivedInPipedrive');
+    } else if (t.pipedrive_archived_at) {
+      db.prepare('UPDATE tickets SET archived_at = NULL, pipedrive_archived_at = NULL WHERE id = ?').run(t.id);
+      tally('dealsUnarchived');
+    }
     const person = contactOf(idOf(d.person_id));
     if (person) {
       linkContact.run(t.id, person);

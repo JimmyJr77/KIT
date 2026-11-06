@@ -20,8 +20,9 @@ import MyTeam from './pages/MyTeam.jsx';
 import MemberAccess from './pages/MemberAccess.jsx';
 import Reports from './pages/Reports.jsx';
 import Archive from './pages/Archive.jsx';
+import Backups from './pages/Backups.jsx';
 import DoneTickets from './pages/DoneTickets.jsx';
-import LostTickets from './pages/LostTickets.jsx';
+import ProcessView from './pages/ProcessView.jsx';
 import ClosedDeals from './pages/ClosedDeals.jsx';
 import LessonsLearned from './pages/LessonsLearned.jsx';
 import Retros from './pages/Retros.jsx';
@@ -51,7 +52,7 @@ export default function App() {
         <Route path="/tickets" element={<Tickets />} />
         <Route path="/tickets/done" element={<DoneTickets />} />
         <Route path="/pipeline" element={<Pipeline />} />
-        <Route path="/pipeline/lost" element={<LostTickets />} />
+        <Route path="/pipeline/process" element={<ProcessView />} />
         <Route path="/delivery" element={<Delivery />} />
         <Route path="/closed-deals" element={<ClosedDeals />} />
         <Route path="/crm" element={<Crm />} />
@@ -62,6 +63,7 @@ export default function App() {
         <Route path="/retros/:id" element={<RetroBoard />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/admin" element={<AdminAccess />} />
+        <Route path="/backups" element={<Backups />} />
         <Route path="/my-team" element={<MyTeam />} />
         <Route path="/member" element={<MemberAccess />} />
         <Route path="/alerts" element={<Alerts />} />

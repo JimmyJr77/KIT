@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom';
 import { Search, ChevronUp, ChevronDown, ChevronsUpDown, CheckCircle2, ArrowLeft } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
-import { shortDate, ticketKind } from '../lib/format.js';
+import { shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
-import { daysToArchive, ARCHIVE_AFTER_DAYS, outcomeOf as dealOutcome } from '../lib/lanes.js';
+import { daysToArchive, ARCHIVE_AFTER_DAYS } from '../lib/lanes.js';
 import { byDirector } from '../lib/directors.js';
 import PageHeader from '../components/PageHeader.jsx';
 import DirectorSelect from '../components/DirectorSelect.jsx';
@@ -13,23 +13,17 @@ import { LabelList, TagFilter, byTags } from '../components/Labels.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 
 const money = (n) => (n == null ? '—' : usd(Math.round(n)).replace('.00', ''));
-const ownerOf = (t) => (t.ticket_type === 'work'
-  ? (t.owner_first_name ? `${t.owner_first_name} ${t.owner_last_name}` : null)
-  : (t.director_first_name ? `${t.director_first_name} ${t.director_last_name}` : null));
-const outcomeOf = (t) => (t.ticket_type === 'work' ? 'Done' : dealOutcome(t) || t.pipeline_status || 'Done');
-const OUTCOME_STYLE = { Won: 'bg-emerald-50 text-emerald-700', Awarded: 'bg-emerald-50 text-emerald-700', Lost: 'bg-red-50 text-red-700', Done: 'bg-slate-100 text-slate-600' };
+const ownerOf = (t) => (t.owner_first_name ? `${t.owner_first_name} ${t.owner_last_name}` : null);
 
 /**
- * Every ticket in the Tickets page's Done lane: awarded and lost pipeline tickets, and finished work tickets. Done tickets leave
- * the Tickets page 14 days after reaching Done (that's only this view; pipeline tickets stay where they are in BD Pipeline), and
- * this is where they can all still be found, sorted and filtered. Newest first.
+ * Every work ticket in the Tickets page's Done lane. Work tickets leave the Tickets page 14 days after reaching Done, or
+ * sooner when moved here by hand, and this is where they can all still be found, sorted and filtered. Newest first.
+ * Pipeline tickets aren't here: won and lost deals are in Closed deals.
  */
 export default function DoneTickets() {
   const territories = useApi('/territories');
   const [tickets, setTickets] = useState(null);
   const [q, setQ] = useState('');
-  const [type, setType] = useState('');
-  const [outcome, setOutcome] = useState('');
   const [where, setWhere] = useState(''); // '' | board | archived
   const [territory, setTerritory] = useState('');
   const [director, setDirector] = useState('');
@@ -37,12 +31,12 @@ export default function DoneTickets() {
   const [sort, setSort] = useState({ key: 'done', dir: 'desc' });
   const [openId, setOpenId] = useState(null);
 
-  const load = () => api.get('/tickets?scope=all').then((d) => setTickets(d.tickets.filter((t) => t.lane === 'done')));
+  // Work tickets only: won and lost pipeline tickets are in Closed deals.
+  const load = () => api.get('/tickets?scope=all&kind=work').then((d) => setTickets(d.tickets.filter((t) => t.lane === 'done')));
   useEffect(() => { load(); }, []);
 
-  const outcomes = useMemo(() => [...new Set((tickets || []).map(outcomeOf))].sort(), [tickets]);
   const SORTS = {
-    title: (t) => t.opportunity_title.toLowerCase(), type: (t) => t.ticket_type, outcome: outcomeOf, value: (t) => t.value ?? -1,
+    title: (t) => t.opportunity_title.toLowerCase(), value: (t) => t.value ?? -1,
     owner: (t) => (ownerOf(t) || '~').toLowerCase(), territory: (t) => (t.territory_name || '~').toLowerCase(), done: (t) => t.done_at || t.updated_at,
   };
   const rows = useMemo(() => {
@@ -50,15 +44,13 @@ export default function DoneTickets() {
     const get = SORTS[sort.key];
     const sign = sort.dir === 'asc' ? 1 : -1;
     return (tickets || [])
-      .filter((t) => !type || (type === 'work') === (t.ticket_type === 'work'))
-      .filter((t) => !outcome || outcomeOf(t) === outcome)
       .filter((t) => !where || (where === 'archived') === !!t.archived)
       .filter((t) => !territory || (territory === 'none' ? !t.territory_id : t.territory_id === Number(territory)))
       .filter(byDirector(director))
       .filter(byTags(tags))
       .filter((t) => !s || `${t.opportunity_title} ${t.organization || ''}`.toLowerCase().includes(s))
       .sort((a, b) => { const x = get(a), y = get(b); return x < y ? -sign : x > y ? sign : 0; });
-  }, [tickets, q, type, outcome, where, territory, director, tags, sort]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tickets, q, where, territory, director, tags, sort]); // eslint-disable-line react-hooks/exhaustive-deps
   const total = rows.reduce((s, t) => s + (t.value || 0), 0);
   const onBoard = (tickets || []).filter((t) => !t.archived).length;
 
@@ -74,11 +66,11 @@ export default function DoneTickets() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Done archive" subtitle="Every ticket that reached Done: awarded and lost pipeline tickets, and finished work. Select one for its timeline.">
+      <PageHeader title="Done archive" subtitle="Every work ticket that reached Done. Select one for its timeline.">
         <Link to="/tickets" className="btn h-9"><ArrowLeft size={15} /> Tickets</Link>
       </PageHeader>
       <p className="-mt-2 text-xs text-slate-500">
-        Done tickets leave the Tickets page {ARCHIVE_AFTER_DAYS} days after reaching Done. That only tidies the Tickets page: pipeline tickets stay where they are in BD Pipeline.
+        Work tickets leave the Tickets page {ARCHIVE_AFTER_DAYS} days after reaching Done, or sooner when moved here by hand. Pipeline tickets are not here: won and lost deals are in <Link to="/closed-deals" className="text-brand-700 hover:underline">Closed deals</Link>, and won ones are contracts in Delivery.
         {tickets && ` ${onBoard} of ${tickets.length} are still on the Tickets page.`}
       </p>
 
@@ -87,15 +79,6 @@ export default function DoneTickets() {
           <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
           <input className="input pl-9" placeholder="Search by ticket or organization…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <select className="input w-36" value={type} onChange={(e) => setType(e.target.value)} aria-label="Ticket type">
-          <option value="">PL and work</option>
-          <option value="bid">PL tickets</option>
-          <option value="work">Work tickets</option>
-        </select>
-        <select className="input w-36" value={outcome} onChange={(e) => setOutcome(e.target.value)} aria-label="Outcome">
-          <option value="">Any outcome</option>
-          {outcomes.map((o) => <option key={o}>{o}</option>)}
-        </select>
         <select className="input w-56" value={where} onChange={(e) => setWhere(e.target.value)} aria-label="Where it is">
           <option value="">On the page and archived</option>
           <option value="board">Still on the Tickets page</option>
@@ -125,7 +108,7 @@ export default function DoneTickets() {
           <table className="w-full min-w-[64rem] text-sm">
             <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
               <tr>
-                {header('title', 'Ticket')}{header('type', 'Type')}{header('outcome', 'Outcome')}{header('owner', 'BD director / owner')}
+                {header('title', 'Ticket')}{header('owner', 'Owner')}
                 {header('territory', 'Territory')}{header('value', 'Value', 'text-right')}{header('done', 'Done')}<th className="px-4 py-3">Tickets page</th>
               </tr>
             </thead>
@@ -137,14 +120,12 @@ export default function DoneTickets() {
                     <div className="text-xs text-slate-500">{t.organization || `Ticket #${t.id}`}</div>
                     <LabelList labels={t.labels} className="mt-1" />
                   </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-slate-600">{ticketKind(t)}</td>
-                  <td className="px-4 py-3"><span className={`rounded px-1.5 py-0.5 text-xs font-medium ${OUTCOME_STYLE[outcomeOf(t)] || OUTCOME_STYLE.Done}`}>{outcomeOf(t)}</span></td>
                   <td className="px-4 py-3 text-slate-600">{ownerOf(t) || '—'}</td>
                   <td className="px-4 py-3 text-slate-600">{t.territory_name || '—'}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{money(t.value)}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-slate-500">{t.done_at ? shortDate(t.done_at.slice(0, 10), { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
                   <td className="px-4 py-3 text-xs whitespace-nowrap text-slate-500">
-                    {t.archived ? 'Archived' : <span className="text-brand-700">On the page · {daysToArchive(t) ? `${daysToArchive(t)}d left` : 'archives today'}</span>}
+                    {t.archived ? 'Archived' : <span className="text-brand-700">On the page{daysToArchive(t) == null ? '' : ` · ${daysToArchive(t) ? `${daysToArchive(t)}d left` : 'archives today'}`}</span>}
                   </td>
                 </tr>
               ))}

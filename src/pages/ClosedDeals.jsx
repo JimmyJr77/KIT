@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, ChevronUp, ChevronDown, ChevronsUpDown, FolderArchive } from 'lucide-react';
+import { Search, ChevronUp, ChevronDown, ChevronsUpDown, FolderArchive, TriangleAlert } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
@@ -10,10 +10,10 @@ import DirectorSelect from '../components/DirectorSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 
 const GROUPS = [
-  { key: 'execution', label: 'In execution', about: 'Won and in delivery. Mark the contract Complete on Delivery (or complete its Pipedrive project) when the work is finished and it moves to Executed.', date: 'Won' },
-  { key: 'executed', label: 'Executed', about: 'Delivery is finished: the contract is Complete (or canceled).', date: 'Completed' },
+  { key: 'execution', label: 'In execution', about: 'Won and in delivery. It moves to Executed once its funding covers the contract value, or once the contract is marked Complete on Delivery (or its Pipedrive project is completed).', date: 'Won' },
+  { key: 'executed', label: 'Executed', about: 'Fully funded, or the contract is Complete or canceled. Its contract is still in Delivery.', date: 'Completed' },
   { key: 'lost', label: 'Lost', about: 'Deals marked lost, here or in Pipedrive.', date: 'Lost' },
-  { key: 'other', label: 'Other', about: 'Taken off the board for other reasons: archived by hand. Open one to restore it.', date: 'Removed' },
+  { key: 'other', label: 'Other', about: 'Left the pipeline with no outcome: archived here while still open, or archived or deleted in Pipedrive. A won deal archived or deleted in Pipedrive leaves Delivery and lands here; one that already had funding recorded is flagged, in case it was only tidied away in Pipedrive once funded.', date: 'Removed' },
 ];
 const money = (n) => (n == null ? '—' : usd(Math.round(n)).replace('.00', ''));
 const directorOf = (d) => (d.director_first_name ? `${d.director_first_name} ${d.director_last_name}` : null);
@@ -23,11 +23,29 @@ const SORTS = {
   amount: (d) => d.amount ?? -1, closed: (d) => d.closed_on || '',
 };
 
-/** What's worth saying about a deal in its group: why it was lost, the stage it left the board from, or its contract. */
+/** What's worth saying about a deal in its group: why it was lost, how and from where it left the pipeline, or its contract and funding. */
 function detail(d) {
   if (d.group === 'lost') return d.lost_reason || '—';
-  if (d.group === 'other') return d.pipeline_status ? `Was ${d.pipeline_status}` : '—';
-  return d.program_id ? <Link to={`/delivery?open=${d.program_id}`} className="text-brand-700 hover:underline" onClick={(e) => e.stopPropagation()}>Open contract</Link> : 'No contract';
+  if (d.group === 'other') {
+    return (
+      <span className="flex flex-wrap items-center gap-1.5">
+        {d.pipeline_status ? `Was ${d.pipeline_status}` : '—'}<span className="text-slate-400">· {d.removed_how}</span>
+        {d.discrepancy && (
+          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800" title={`${money(d.funded)} of funding was recorded on this contract before Pipedrive ${d.removed_how === 'Deleted in Pipedrive' ? 'deleted' : 'archived'} the deal. Check it against Pipedrive before treating it as gone.`}>
+            <TriangleAlert size={12} className="mr-1 inline -mt-0.5" />Funded {money(d.funded)}, then removed in Pipedrive
+          </span>
+        )}
+      </span>
+    );
+  }
+  const funding = d.program_id ? (d.fully_funded ? 'Fully funded' : d.contract_value > 0 ? `${Math.min(100, Math.round((d.funded / d.contract_value) * 100))}% funded` : null) : null;
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      {d.program_id ? <Link to={`/delivery?open=${d.program_id}`} className="text-brand-700 hover:underline" onClick={(e) => e.stopPropagation()}>Open contract</Link> : 'No contract'}
+      {funding && <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${d.fully_funded ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{funding}</span>}
+      {d.group === 'executed' && d.program_status !== 'Active' && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">{d.program_status}</span>}
+    </span>
+  );
 }
 
 /** Where deals go once they're closed, sorted into In execution, Executed, Lost and Other. Select one for its timeline. */
@@ -49,11 +67,12 @@ export default function ClosedDeals() {
     const sign = sort.dir === 'asc' ? 1 : -1;
     return inGroup(group)
       .filter(byDirector(director))
-      .filter((d) => !s || `${d.opportunity_title} ${d.organization || ''} ${d.lost_reason || ''}`.toLowerCase().includes(s))
+      .filter((d) => !s || `${d.opportunity_title} ${d.organization || ''} ${d.lost_reason || ''} ${d.pipeline_status || ''} ${directorOf(d) || ''} ${d.territory_name || ''}`.toLowerCase().includes(s))
       .sort((a, b) => { const x = get(a), y = get(b); return x < y ? -sign : x > y ? sign : 0; });
   }, [deals, group, q, director, sort]); // eslint-disable-line react-hooks/exhaustive-deps
   const total = rows.reduce((s, d) => s + (d.amount || 0), 0);
   const current = GROUPS.find((g) => g.key === group);
+  const discrepancies = inGroup('other').filter((d) => d.discrepancy).length;
 
   const sortBy = (key) => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 'asc' ? 'desc' : 'asc') : key === 'closed' || key === 'amount' ? 'desc' : 'asc' }));
   const header = (key, label, className = '') => (
@@ -84,11 +103,17 @@ export default function ClosedDeals() {
       </div>
 
       <p className="text-xs text-slate-500">{current.about}</p>
+      {discrepancies > 0 && (
+        <p className="flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <TriangleAlert size={15} className="shrink-0" />
+          {discrepancies === 1 ? 'One won deal had' : `${discrepancies} won deals had`} funding recorded when Pipedrive archived or deleted {discrepancies === 1 ? 'it' : 'them'}. {group === 'other' ? 'They are flagged below.' : 'See Other.'} Check each against Pipedrive before treating it as gone.
+        </p>
+      )}
 
       <div className="panel flex flex-wrap items-end gap-3">
         <div className="relative w-full sm:w-72">
           <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
-          <input className="input pl-9" placeholder="Search by deal or organization…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="input pl-9" placeholder="Search by deal, organization, stage, director or territory…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <DirectorSelect tickets={inGroup(group)} value={director} onChange={setDirector} className="h-[38px] w-44" />
         <div className="ml-auto text-right">
@@ -109,7 +134,7 @@ export default function ClosedDeals() {
             <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
               <tr>
                 {header('title', 'Deal')}{header('director', 'BD director')}{header('territory', 'Territory')}{header('amount', 'Value', 'text-right')}
-                {header('closed', current.date)}<th className="px-4 py-3">{group === 'lost' ? 'Reason' : group === 'other' ? 'Stage' : 'Contract'}</th>
+                {header('closed', current.date)}<th className="px-4 py-3">{group === 'lost' ? 'Reason' : group === 'other' ? 'Stage · how it left' : 'Contract'}</th>
               </tr>
             </thead>
             <tbody>

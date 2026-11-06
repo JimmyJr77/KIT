@@ -14,7 +14,7 @@ import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel, { PIPELINE_CLOSED_HINT } from './NewTicketPanel.jsx';
 import PwinSettings from './PwinSettings.jsx';
 import { LabelList, TagFilter, byTags } from '../components/Labels.jsx';
-import { PipelineViewToggle } from './LostTickets.jsx';
+import { PipelineViewToggle } from './ProcessView.jsx';
 import NextStepBadge from '../components/NextStepBadge.jsx';
 
 const NO_STAGE = '__none__';
@@ -83,7 +83,7 @@ export default function Pipeline() {
     const terrs = filters.filter((f) => f.startsWith('t:')).map((f) => f.slice(2));
     if (owners.length) p.set('owners', owners.join(','));
     if (terrs.length) p.set('territories', terrs.join(','));
-    // Archived pipeline tickets (closed more than 14 days ago, or archived by hand) live in the Archive, not on the board.
+    // Archived pipeline tickets (archived by hand, or archived or deleted in Pipedrive) live in the Archive, not on the board.
     return api.get(`/tickets?${p}`).then((d) => setTickets(d.tickets.filter((t) => !t.archived)));
   };
   useEffect(() => {

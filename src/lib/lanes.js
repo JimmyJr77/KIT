@@ -4,7 +4,8 @@
 //     no activity since it was created → To-do; activity within 7 days → In work;
 //     7–14 days quiet → Stale / waiting; 14+ days quiet → back to To-do.
 //   A pipeline ticket that's won or lost (its deal status, as in Pipedrive) is Done, locked or not.
-//   Done tickets archive 14 days after reaching Done. Any ticket can be archived by hand, from any lane.
+//   Done work tickets archive 14 days after reaching Done. Pipeline tickets never age off: they stay in Done until the
+//   deal is reopened, or until archived by hand or in Pipedrive. Any ticket can be archived by hand, from any lane.
 
 export const LANES = [
   { key: 'todo', label: 'To-do' },
@@ -33,13 +34,16 @@ export function laneFor(t, now = Date.now()) {
   return quiet < 7 ? 'in_work' : quiet < 14 ? 'stale' : 'todo';
 }
 
-/** Done tickets leave the board for the archive 14 days after reaching Done, or when archived by hand. */
+/** Whether a ticket ages off the board on its own: only work tickets do, 14 days after reaching Done. */
+export const agesOff = (t) => t.ticket_type === 'work';
+
+/** Tickets leave the board for the archive when archived by hand (or in Pipedrive), or, for work tickets, 14 days after reaching Done. */
 export function isArchived(t, lane, now = Date.now()) {
   if (t.archived_at) return true; // archived by hand, from any lane
-  if (lane !== 'done') return false;
+  if (lane !== 'done' || !agesOff(t)) return false;
   return !!t.done_at && now - utc(t.done_at) >= ARCHIVE_AFTER_DAYS * DAY;
 }
 
-/** Whole days until a Done ticket archives itself. */
-export const daysToArchive = (t, now = Date.now()) =>
-  (t.done_at ? Math.max(0, Math.ceil(ARCHIVE_AFTER_DAYS - (now - utc(t.done_at)) / DAY)) : ARCHIVE_AFTER_DAYS);
+/** Whole days until a Done work ticket archives itself; null for a ticket that never does. */
+export const daysToArchive = (t, now = Date.now()) => (!agesOff(t) ? null
+  : t.done_at ? Math.max(0, Math.ceil(ARCHIVE_AFTER_DAYS - (now - utc(t.done_at)) / DAY)) : ARCHIVE_AFTER_DAYS);
