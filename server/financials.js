@@ -181,33 +181,46 @@ export function bookToBillByDirector(list, start, end) {
   }).filter((r) => r.booked || r.billed).sort((a, b) => b.booked - a.booked);
 }
 
-// Booking targets apply to the BD team only: a target counts while its person is on BD (someone who leaves BD keeps
-// theirs, unused, in case they come back).
-const BD_TARGETS = `SELECT * FROM booking_targets WHERE user_id IN
+// Targets apply to the BD team only: a target counts while its person is on BD (someone who leaves BD keeps theirs,
+// unused, in case they come back). Two kinds: booking targets (what to win, which adds up over the year) and qualified
+// pipeline targets (how much Qualified+ pipeline to hold: a level, so the year's figure is where it should stand at year end).
+export const TARGET_TABLES = { booking: 'booking_targets', qualified: 'qualified_targets' };
+const bdTargets = (kind) => `SELECT * FROM ${TARGET_TABLES[kind] || TARGET_TABLES.booking} WHERE user_id IN
   (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD')`;
 
-/** Booking targets for a year: per director (quarter 1–4, and the year, which is the sum of quarters when not set). */
-export function targets(year, director = null) {
-  const rows = db.prepare(`${BD_TARGETS} AND year = ?`).all(year).filter((t) => !director || t.user_id === director);
+/**
+ * Targets for a year: per director, quarters 1–4 and the year. A booking year left unset is the sum of its quarters; a
+ * qualified pipeline year left unset is the last quarter set (the pipeline to hold at year end).
+ */
+export function targets(year, director = null, kind = 'booking') {
+  const rows = db.prepare(`${bdTargets(kind)} AND year = ?`).all(year).filter((t) => !director || t.user_id === director);
   const ids = [...new Set(rows.map((t) => t.user_id))];
   const quarter = (q) => sum(rows.filter((t) => t.quarter === q), (t) => t.amount);
   const yearTotal = sum(ids, (id) => {
     const own = rows.find((t) => t.user_id === id && t.quarter === 0);
-    return own ? own.amount : sum(rows.filter((t) => t.user_id === id && t.quarter > 0), (t) => t.amount);
+    if (own) return own.amount;
+    const qs = rows.filter((t) => t.user_id === id && t.quarter > 0);
+    return kind === 'qualified' ? (qs.sort((a, b) => b.quarter - a.quarter)[0]?.amount || 0) : sum(qs, (t) => t.amount);
   });
   return { year, quarters: [1, 2, 3, 4].map(quarter), total: yearTotal };
 }
+/** Qualified pipeline targets for a year: per quarter, and `total` is the year-end figure. */
+export const qualifiedTargets = (year, director = null) => targets(year, director, 'qualified');
 
-/** The booking target for some quarters ("2025 Q4", …), across years. Someone with only a yearly target counts a quarter of it each quarter. */
-export function quartersTarget(qs, director = null) {
-  const rows = db.prepare(`${BD_TARGETS} AND year IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(qs.map((q) => Number(q.slice(0, 4))))]))
+/**
+ * The target for some quarters ("2025 Q4", …), across years. With only a yearly target, a quarter counts a quarter of a
+ * booking target, and the whole of a qualified pipeline target (a level to hold, not an amount to add up).
+ */
+export function quartersTarget(qs, director = null, kind = 'booking') {
+  const rows = db.prepare(`${bdTargets(kind)} AND year IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(qs.map((q) => Number(q.slice(0, 4))))]))
     .filter((t) => !director || t.user_id === director);
   return sum(qs, (q) => {
     const [y, n] = [Number(q.slice(0, 4)), Number(q.slice(-1))];
     const mine = rows.filter((t) => t.year === y);
     return sum([...new Set(mine.map((t) => t.user_id))], (id) => {
       const own = mine.filter((t) => t.user_id === id);
-      return own.some((t) => t.quarter > 0) ? sum(own.filter((t) => t.quarter === n), (t) => t.amount) : sum(own.filter((t) => t.quarter === 0), (t) => t.amount) / 4;
+      if (own.some((t) => t.quarter > 0)) return sum(own.filter((t) => t.quarter === n), (t) => t.amount);
+      return sum(own.filter((t) => t.quarter === 0), (t) => t.amount) / (kind === 'qualified' ? 1 : 4);
     });
   });
 }

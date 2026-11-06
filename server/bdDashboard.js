@@ -11,7 +11,7 @@ import { db, json } from './db.js';
 import { weekStartFor } from './routes/priorities.js';
 import {
   bids, contracts, expected, byStage, qualifiedBy, bookingsByQuarter, backlog, bookToBill, bookToBillSeries, fundedTtm, pipelineByPerson,
-  targets, quartersTarget, trailingQuarters, trends, quarters, quarterRange, localToday, QUALIFIED_STAGES, isOpen,
+  targets, qualifiedTargets, quartersTarget, trailingQuarters, trends, quarters, quarterRange, localToday, QUALIFIED_STAGES, isOpen,
 } from './financials.js';
 import { spendEntries, spendFor } from './marketingSpend.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
@@ -121,6 +121,7 @@ export function bdDashboard(s, basis = 'calendar') {
   const { list, deals } = money(s);
   const qualified = list.filter((t) => isOpen(t) && QUALIFIED_STAGES.includes(t.pipeline_status));
   const t = targets(year, s.director);
+  const qt = qualifiedTargets(year, s.director);
   const booked = (start, end = today) => sum(deals.filter((p) => p.awarded_on >= start && p.awarded_on <= end), (p) => p.value);
   const billed = (start, end = today) => bookToBill(deals, start, end).billed;
   // The yearly figures' span: this calendar year (to date, for money in), or the trailing four quarters.
@@ -147,7 +148,11 @@ export function bdDashboard(s, basis = 'calendar') {
     scope: { kind: s.kind, label: s.label, director: s.director, team: s.team || null, territory: s.territory },
     todo: todo(s),
     top: {
-      qualified: { count: qualified.length, value: sum(qualified, (x) => x.value), weighted: sum(qualified, weighted) },
+      qualified: {
+        count: qualified.length, value: sum(qualified, (x) => x.value), weighted: sum(qualified, weighted),
+        // The qualified pipeline to hold: this quarter's target, and the year-end one.
+        target: qt.quarters[Number(thisQ.slice(-1)) - 1] || null, yearTarget: qt.total || null,
+      },
       booked: {
         quarter: { label: thisQ, value: booked(qr.start), target: t.quarters[Number(thisQ.slice(-1)) - 1] || null },
         year: { label: yr.label, value: booked(yr.start, yr.end), target: yr.target || null },

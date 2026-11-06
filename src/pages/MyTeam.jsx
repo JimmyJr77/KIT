@@ -7,7 +7,7 @@ import { useApi } from '../lib/data.js';
 import { fullName } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
-import BookingTargetsPanel from '../components/BookingTargets.jsx';
+import BookingTargetsPanel, { QualifiedTargetsPanel } from '../components/BookingTargets.jsx';
 import { PipedrivePullPanel } from '../components/PipedrivePanel.jsx';
 import { TeamTags } from '../components/TeamPicker.jsx';
 import { TerritoryTags, AddTerritorySelect, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
@@ -97,6 +97,7 @@ function MyTeamPage() {
       })}
       {managesTerritories && <TerritoriesPanel territories={territories} onChanged={users.reload} />}
       {managesTerritories && <BookingTargetsPanel />}
+      {managesTerritories && <QualifiedTargetsPanel />}
       <PipedrivePullPanel scope="team" />
     </div>
   );

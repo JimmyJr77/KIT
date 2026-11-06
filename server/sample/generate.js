@@ -309,7 +309,12 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
 
   // ---- BD goals and account plans: booking targets for sample directors, and account objectives.
   const year = Number(today.slice(0, 4));
-  directors.forEach((d) => [year, year + 1].forEach((y) => [1, 2, 3, 4].forEach((q) => insert('booking_targets', { user_id: d.id, year: y, quarter: q, amount: int(3, 9) * 1_000_000 }))));
+  directors.forEach((d) => [year, year + 1].forEach((y) => [1, 2, 3, 4].forEach((q) => {
+    const booking = int(3, 9) * 1_000_000;
+    insert('booking_targets', { user_id: d.id, year: y, quarter: q, amount: booking });
+    // A qualified pipeline worth about three times the quarter's bookings.
+    insert('qualified_targets', { user_id: d.id, year: y, quarter: q, amount: booking * 3 });
+  })));
   const OBJ = ['Brief the program office on our data platform', 'Meet the new contracting officer', 'Get our approach into the draft requirement', 'Host a capability demo for the requirements team'];
   directors.forEach((d) => {
     for (let i = int(1, 3); i > 0; i--) {

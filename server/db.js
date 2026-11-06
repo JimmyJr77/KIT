@@ -608,6 +608,17 @@ CREATE TABLE IF NOT EXISTS booking_targets (
   PRIMARY KEY (user_id, year, quarter)
 );
 
+-- Qualified pipeline goals per BD director: how much Qualified+ pipeline each should hold in a quarter (1-4), or at year end (0).
+CREATE TABLE IF NOT EXISTS qualified_targets (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  year INTEGER NOT NULL,
+  quarter INTEGER NOT NULL CHECK (quarter BETWEEN 0 AND 4),
+  amount REAL NOT NULL,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, year, quarter)
+);
+
 -- Account development: what a BD director is working toward with a customer (access, relationships, shaping demand).
 CREATE TABLE IF NOT EXISTS account_objectives (
   id INTEGER PRIMARY KEY,

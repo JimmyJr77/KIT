@@ -136,7 +136,8 @@ function Report({ r }) {
       <Section title="At a glance">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 print:grid-cols-4">
           <Figure label={`Booked, ${r.period}`} value={compact(m.bookings.amount)} note={m.bookings.target ? `${pct(m.bookings.value)} of ${compact(m.bookings.target)} target` : 'No target set'} />
-          <Figure label="Qualified pipeline" value={compact(bd.qualified.value)} note={`${bd.qualified.count} PL tickets`} />
+          <Figure label="Qualified pipeline" value={compact(bd.qualified.value)}
+            note={bd.qualified.target?.amount ? `${bd.qualified.count} PL tickets · ${pct(bd.qualified.value / bd.qualified.target.amount)} of ${compact(bd.qualified.target.amount)} ${bd.qualified.target.quarter} target` : `${bd.qualified.count} PL tickets`} />
           <Figure label="Expected, next 4 quarters" value={compact(q.reduce((s, x) => s + x.weighted, 0))} note={`PWIN-weighted · ${compact(bd.expected.undetermined.value)} undetermined`} />
           <Figure label="Backlog" value={compact(bd.backlog.total)} note={`${compact(bd.backlog.fundedBacklog)} funded · ${compact(bd.backlog.unfundedBacklog)} unfunded`} />
         </div>

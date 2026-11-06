@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Target } from 'lucide-react';
+import { Target, Funnel } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullName } from '../lib/format.js';
@@ -8,35 +8,52 @@ import { usd } from '../lib/travelCalc.js';
 const money = (n) => usd(n).replace('.00', '');
 const QUARTERS = [1, 2, 3, 4];
 
+// The two kinds of target. Bookings add up over the year; a qualified pipeline is a level to hold, so its year is the year-end figure.
+const KINDS = {
+  booking: {
+    title: 'Booking targets', icon: Target, noun: 'target',
+    blurb: 'What each person on the BD team is expected to book (win) per quarter. Targets apply to the BD team only. Leave the year blank to use the sum of the quarters.',
+    yearFor: (amount, userId) => amount(userId, 0) ?? QUARTERS.reduce((s, q) => s + (amount(userId, q) || 0), 0),
+    yearHead: (year) => year,
+  },
+  qualified: {
+    title: 'Qualified pipeline targets', icon: Funnel, noun: 'qualified pipeline target',
+    blurb: 'How much Qualified+ pipeline (open pipeline tickets from Qualified onward) each person on the BD team is expected to hold in each quarter, and at year end. Targets apply to the BD team only. Leave the year end blank to use the last quarter set.',
+    yearFor: (amount, userId) => amount(userId, 0) ?? [...QUARTERS].reverse().map((q) => amount(userId, q)).find((v) => v != null) ?? 0,
+    yearHead: (year) => `End of ${year}`,
+  },
+};
+
 /**
- * Booking targets for each BD director, per quarter and for the year, with the team's total. For admins and BD team
- * leads. A year left blank counts as the sum of its quarters.
+ * Targets of one kind for each BD director, per quarter and for the year, with the team's total. For admins and BD team
+ * leads. Booking targets by default; `kind` 'qualified' is the qualified pipeline each should hold.
  */
-export default function BookingTargetsPanel() {
+export default function BookingTargetsPanel({ kind = 'booking' }) {
+  const K = KINDS[kind] || KINDS.booking;
   const [year, setYear] = useState(new Date().getFullYear());
-  const data = useApi(`/targets?year=${year}`);
+  const data = useApi(`/targets?kind=${kind}&year=${year}`);
   const [targets, setTargets] = useState([]);
   const [error, setError] = useState('');
   useEffect(() => { if (data.data) setTargets(data.data.targets); }, [data.data]);
   const directors = data.data?.directors || [];
   const amount = (userId, q) => targets.find((t) => t.user_id === userId && t.quarter === q)?.amount;
-  const yearFor = (userId) => amount(userId, 0) ?? QUARTERS.reduce((s, q) => s + (amount(userId, q) || 0), 0);
+  const yearFor = (userId) => K.yearFor(amount, userId);
   const total = (q) => directors.reduce((s, u) => s + (q === 0 ? yearFor(u.id) : amount(u.id, q) || 0), 0);
 
   const save = async (userId, q, value) => {
     setError('');
-    try { setTargets((await api.put('/targets', { user_id: userId, year, quarter: q, amount: value })).targets); } catch (e) { setError(e.message); }
+    try { setTargets((await api.put('/targets', { kind, user_id: userId, year, quarter: q, amount: value })).targets); } catch (e) { setError(e.message); }
   };
 
   return (
     <div className="panel space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="section-title mr-auto flex items-center gap-2"><Target size={16} className="text-brand-600" /> Booking targets</h2>
+        <h2 className="section-title mr-auto flex items-center gap-2"><K.icon size={16} className="text-brand-600" /> {K.title}</h2>
         <select className="input h-8 w-28 py-0 text-sm" value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="Year">
           {[-1, 0, 1, 2].map((d) => new Date().getFullYear() + d).map((y) => <option key={y} value={y}>{y}</option>)}
         </select>
       </div>
-      <p className="text-xs text-slate-500">What each person on the BD team is expected to book (win) per quarter. Targets apply to the BD team only. Leave the year blank to use the sum of the quarters.</p>
+      <p className="text-xs text-slate-500">{K.blurb}</p>
       {error && <p className="text-sm text-red-600">{error}</p>}
       <div className="overflow-x-auto rounded-lg border border-slate-200">
         <table className="w-full min-w-[40rem] text-sm">
@@ -44,7 +61,7 @@ export default function BookingTargetsPanel() {
             <tr>
               <th className="w-48 px-3 py-2">BD director</th>
               {QUARTERS.map((q) => <th key={q} className="px-2 py-2 text-right">Q{q}</th>)}
-              <th className="px-3 py-2 text-right">{year}</th>
+              <th className="px-3 py-2 text-right">{K.yearHead(year)}</th>
             </tr>
           </thead>
           <tbody>
@@ -55,11 +72,11 @@ export default function BookingTargetsPanel() {
                   {u.title && <div className="text-xs text-slate-400">{u.title}</div>}
                 </td>
                 {QUARTERS.map((q) => (
-                  <td key={q} className="px-1 py-1.5"><TargetInput value={amount(u.id, q)} label={`${fullName(u)} Q${q} ${year} target`} onSave={(v) => save(u.id, q, v)} /></td>
+                  <td key={q} className="px-1 py-1.5"><TargetInput value={amount(u.id, q)} label={`${fullName(u)} Q${q} ${year} ${K.noun}`} onSave={(v) => save(u.id, q, v)} /></td>
                 ))}
                 <td className="px-1 py-1.5">
                   <TargetInput value={amount(u.id, 0)} placeholder={yearFor(u.id) ? money(yearFor(u.id)) : '—'} strong
-                    label={`${fullName(u)} ${year} target`} onSave={(v) => save(u.id, 0, v)} />
+                    label={`${fullName(u)} ${year} ${K.noun}`} onSave={(v) => save(u.id, 0, v)} />
                 </td>
               </tr>
             ))}
@@ -91,3 +108,6 @@ function TargetInput({ value, placeholder = '—', label, strong, onSave }) {
       onChange={(e) => setDraft(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} />
   );
 }
+
+/** The qualified pipeline each BD director is expected to hold, per quarter and at year end. */
+export const QualifiedTargetsPanel = () => <BookingTargetsPanel kind="qualified" />;

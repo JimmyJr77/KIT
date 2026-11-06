@@ -6,7 +6,7 @@ import { PIPELINE_STATUSES } from './priorities.js';
 import {
   bids, contracts, filtersFrom, byStage, expected, qualifiedBy, bookingsByQuarter, backlog, bookToBill, bookToBillByDirector, bookToBillSeries,
   fundedTtm, pipelineByPerson,
-  targets, trends, quarters, quarterRange, localToday, OPEN_STAGES, QUALIFIED_STAGES, isOpen,
+  targets, qualifiedTargets, trends, quarters, quarterRange, localToday, OPEN_STAGES, QUALIFIED_STAGES, isOpen,
 } from '../financials.js';
 import { addDays, quarterFor } from '../../src/lib/travelCalc.js';
 import { reportCard, period, directors, reportTrends, THRESHOLDS } from '../reportCard.js';
@@ -29,7 +29,10 @@ r.get('/bd', (req, res) => {
   res.json({
     filters: f,
     open: { count: open.length, value: sum(open, (t) => t.value), weighted: sum(open, (t) => (t.value || 0) * (t.pwin ?? 1)) },
-    qualified: { count: qualified.length, value: sum(qualified, (t) => t.value), weighted: sum(qualified, (t) => (t.value || 0) * (t.pwin ?? 1)) },
+    qualified: {
+      count: qualified.length, value: sum(qualified, (t) => t.value), weighted: sum(qualified, (t) => (t.value || 0) * (t.pwin ?? 1)),
+      target: { quarter: quarterFor(today), amount: qualifiedTargets(year, f.director).quarters[Number(quarterFor(today).slice(-1)) - 1] || null },
+    },
     stages: byStage(list, PIPELINE_STATUSES),
     expected: expected(list),
     qualifiedByTerritory: qualifiedBy(list, 'territory'),

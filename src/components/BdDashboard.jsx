@@ -195,7 +195,11 @@ function TopMetrics({ top, people, territory }) {
         <YearBasisToggle />
       </SectionHead>
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(12.5rem,1fr))]">
-        <StatTile label="Qualified+ pipeline" value={compact(ql.value)} sub={`${plural(ql.count, 'open PL ticket')}, Qualified onward · ${compact(ql.weighted)} PWIN-adjusted`} />
+        <StatTile label="Qualified+ pipeline" value={compact(ql.value)} sub={`${plural(ql.count, 'open PL ticket')}, Qualified onward · ${compact(ql.weighted)} PWIN-adjusted`}>
+          <Meter value={ql.value} target={ql.target} noun={`${top.booked.quarter.label} target`} label="Qualified+ pipeline against this quarter's qualified pipeline target" />
+          {ql.yearTarget && ql.yearTarget !== ql.target && <div className="text-[11px] text-slate-500">{compact(ql.yearTarget)} to hold at year end</div>}
+          {territory && <div className="mt-1 text-[11px] text-slate-400">Targets are set per BD director, not per territory</div>}
+        </StatTile>
         <PairTile label="Booked (awarded)" q={top.booked.quarter} y={top.booked.year} note={territory ? 'Targets are set per BD director, not per territory' : null} />
         <PairTile label="Revenue (billed)" q={top.revenue.quarter} y={top.revenue.year} />
         <StatTile label={`Expected bookings through ${ex.through}`} value={compact(ex.byQ4.weighted)}

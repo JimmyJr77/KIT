@@ -82,7 +82,7 @@ function FullReset() {
       <h3 className="flex items-center gap-1.5 text-sm font-semibold text-red-800"><TriangleAlert size={15} /> Full reset</h3>
       <p className="text-xs text-red-900/80">
         Archives all real work data as one dataset: every ticket and priority card, the CRM, events, travel, contracts with their funding
-        and billing, booking targets, account objectives, forecasts, marketing, alerts and work logs. People, teams, territories and
+        and billing, booking and qualified pipeline targets, account objectives, forecasts, marketing, alerts and work logs. People, teams, territories and
         settings stay, so everyone can still sign in. On a development server the sample data is replaced with a fresh copy, still shown or hidden as it is now.
         Nothing is deleted: load the dataset from the archive to bring it all back.
       </p>

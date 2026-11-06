@@ -60,10 +60,10 @@ function liveItems() {
 }
 
 // Everything else a full reset archives along with the tickets and priority cards: the CRM, events, travel, contracts
-// and their funding and billing, actual travel spend, booking targets, account objectives, forecasts, marketing and its spend, alerts, work logs and priority account lists.
+// and their funding and billing, actual travel spend, booking and qualified pipeline targets, account objectives, forecasts, marketing and its spend, alerts, work logs and priority account lists.
 // People, teams, territories and settings stay.
 const RESET_TABLES = ['contacts', 'contact_interactions', 'ticket_contacts', 'task_participants', 'events', 'event_attendees', 'event_reps', 'event_support_requests', 'support_needs', 'support_need_tickets',
-  'trips', 'travel_actuals', 'delivery_programs', 'delivery_team', 'delivery_files', 'program_entries', 'booking_targets', 'account_objectives', 'forecast_snapshots',
+  'trips', 'travel_actuals', 'delivery_programs', 'delivery_team', 'delivery_files', 'program_entries', 'booking_targets', 'qualified_targets', 'account_objectives', 'forecast_snapshots',
   'marketing_assets', 'marketing_copy', 'marketing_spend', 'alerts', 'work_log',
   'priority_tiers', 'priority_accounts', 'priority_account_tickets', 'priority_list_tickets'];
 
@@ -77,7 +77,7 @@ function datasets() {
     FROM archive_sets s LEFT JOIN users u ON u.id = s.created_by ORDER BY s.created_at DESC, s.id DESC`).all()
     .map((d) => {
       const o = other[d.id] || {};
-      return { ...d, full_reset: !!other[d.id], contacts: o.contacts || 0, events: o.events || 0, trips: o.trips || 0, contracts: o.delivery_programs || 0, targets: o.booking_targets || 0, objectives: o.account_objectives || 0 };
+      return { ...d, full_reset: !!other[d.id], contacts: o.contacts || 0, events: o.events || 0, trips: o.trips || 0, contracts: o.delivery_programs || 0, targets: (o.booking_targets || 0) + (o.qualified_targets || 0), objectives: o.account_objectives || 0 };
     });
 }
 

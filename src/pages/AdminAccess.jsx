@@ -10,7 +10,7 @@ import { TeamTags, AddTeamSelect } from '../components/TeamPicker.jsx';
 import ProfileFields from '../components/ProfileFields.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import Avatar from '../components/Avatar.jsx';
-import BookingTargetsPanel from '../components/BookingTargets.jsx';
+import BookingTargetsPanel, { QualifiedTargetsPanel } from '../components/BookingTargets.jsx';
 import SampleDataPanel from '../components/SampleDataPanel.jsx';
 import BackupPanel from '../components/BackupPanel.jsx';
 import PipedrivePanel from '../components/PipedrivePanel.jsx';
@@ -39,6 +39,7 @@ function AdminPage() {
       <DirectoryPanel approved={approved} users={users} teams={teamList} territories={territories.data?.territories || []} onError={setError} />
       <TerritoriesPanel territories={territories} onChanged={users.reload} />
       <BookingTargetsPanel />
+      <QualifiedTargetsPanel />
       <NewPipelineTicketsPanel />
       <PipedrivePanel />
       <BackupPanel />

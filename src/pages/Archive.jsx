@@ -10,7 +10,7 @@ const money = (n) => (n == null ? '' : usd(n).replace('.00', ''));
 const TABS = [['bid', 'Pipeline tickets'], ['work', 'Work tickets'], ['cards', 'Priority cards'], ['datasets', 'Datasets']];
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const KINDS = [['bid', 'pipeline ticket'], ['work', 'work ticket'], ['cards', 'priority card'], ['contacts', 'contact'], ['events', 'event'],
-  ['trips', 'trip'], ['contracts', 'contract'], ['targets', 'booking target'], ['objectives', 'account objective']];
+  ['trips', 'trip'], ['contracts', 'contract'], ['targets', 'target'], ['objectives', 'account objective']];
 /** "3 pipeline tickets, 1 work ticket and 12 priority cards", leaving out what's zero. */
 const contents = (d) => {
   const parts = KINDS.filter(([k]) => d[k]).map(([k, word]) => plural(d[k], word));
