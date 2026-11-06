@@ -88,7 +88,17 @@ export default function Retros() {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
-  useEffect(() => { api.get('/retros').then(setData).catch((e) => setError(e.message)); }, []);
+  const load = () => api.get('/retros').then(setData).catch((e) => setError(e.message));
+  useEffect(() => { load(); }, []);
+  const remove = async (e, b) => {
+    e.stopPropagation();
+    if (!confirm(`Delete the retro “${b.name}” and its tickets? Lessons already made from it stay.`)) return;
+    setError('');
+    try {
+      await api.del(`/retros/${b.id}`);
+      load();
+    } catch (err) { setError(err.message); }
+  };
   const boards = data?.boards;
 
   return (
@@ -108,7 +118,7 @@ export default function Retros() {
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full min-w-[44rem] text-sm">
             <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
-              <tr>{['Retro', 'Date', 'Format', 'Lead', 'Stage', 'Tickets', 'Lessons'].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}</tr>
+              <tr>{['Retro', 'Date', 'Format', 'Lead', 'Stage', 'Tickets', 'Lessons'].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}<th aria-label="Delete" /></tr>
             </thead>
             <tbody>
               {boards.map((b) => (
@@ -120,6 +130,9 @@ export default function Retros() {
                   <td className="px-4 py-3"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STAGE_STYLE[b.stage]}`}>{STAGE_NAMES[b.stage]}</span></td>
                   <td className="px-4 py-3 text-slate-600 tabular-nums">{b.tickets}</td>
                   <td className="px-4 py-3 text-slate-600 tabular-nums">{b.lessons}</td>
+                  <td className="px-2 py-2 text-right">
+                    {b.can_delete && <button type="button" className="btn-ghost p-1.5" aria-label={`Delete ${b.name}`} title="Delete retro" onClick={(e) => remove(e, b)}><Trash2 size={14} /></button>}
+                  </td>
                 </tr>
               ))}
             </tbody>

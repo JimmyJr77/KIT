@@ -23,12 +23,12 @@ const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(
 const leadOf = (u) => (u.first_name ? `${u.first_name} ${u.last_name}`.trim() : null);
 
 r.get('/', (req, res) => {
-  const boards = db.prepare(`SELECT b.id, b.name, b.retro_date, b.template, b.stage, u.first_name, u.last_name,
+  const boards = db.prepare(`SELECT b.id, b.name, b.retro_date, b.template, b.stage, b.created_by, u.first_name, u.last_name,
       (SELECT COUNT(*) FROM retro_notes n WHERE n.board_id = b.id) AS tickets,
       (SELECT COUNT(*) FROM lessons l JOIN retro_notes n ON n.id = l.source_id WHERE l.source = 'retro' AND n.board_id = b.id) AS lessons
     FROM retro_boards b LEFT JOIN users u ON u.id = b.created_by ORDER BY b.retro_date DESC, b.id DESC`).all();
   res.json({
-    boards: boards.map(({ first_name, last_name, ...b }) => ({ ...b, lead: leadOf({ first_name, last_name }) })),
+    boards: boards.map(({ first_name, last_name, created_by, ...b }) => ({ ...b, lead: leadOf({ first_name, last_name }), can_delete: req.user.role === 'admin' || created_by === req.user.id })),
     templates: TEMPLATES.map(({ key, name, hint, lanes }) => ({ key, name, hint, lanes: lanes.map(([l]) => l) })),
   });
 });
