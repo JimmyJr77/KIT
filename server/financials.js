@@ -18,7 +18,7 @@ export const QUALIFIED_STAGES = ['Qualified', 'Capture', 'Proposal', 'Under Eval
 export const CLOSED_STAGES = ['Awarded', 'Lost'];
 export const localToday = () => new Date().toLocaleDateString('en-CA');
 /**
- * Whether a ticket is still in the books. Archiving a ticket (by hand or with Archive all) takes it out of every figure,
+ * Whether a ticket is still in the books. Archiving a ticket (by hand or by a full reset) takes it out of every figure,
  * past and present, until it's restored; deleting it takes its contract and forecast lines with it. A closed ticket that
  * simply aged off the board after 14 days stays in: it has no archived_at, and its win or loss still happened.
  */

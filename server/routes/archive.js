@@ -1,6 +1,6 @@
-// The archive: tickets (pipeline and work) and priority cards taken off the boards, one by one or all at once as a dataset.
-// Anyone can archive and restore single items; archiving everything, loading a dataset back and deleting for good are
-// for admins, and only what's already archived can be deleted.
+// The archive: tickets (pipeline and work) and priority cards taken off the boards, one by one, or all at once as a
+// dataset by a full reset. Anyone can archive and restore single items; a full reset, loading a dataset back and deleting
+// for good are for admins, and only what's already archived can be deleted.
 import fs from 'node:fs';
 import path from 'node:path';
 import { Router } from 'express';
@@ -42,12 +42,12 @@ function archivedCards() {
   }));
 }
 
-// ---- Datasets ("Archive all")
+// ---- Datasets (from a full reset)
 
 // Real records only: the sample data is never archived with everything else.
 const notSample = (alias, tbl) => `${alias}.id NOT IN (SELECT row_id FROM sample_rows WHERE tbl = '${tbl}')`;
 
-/** What "Archive all" would take: every real ticket and priority card still on the boards. */
+/** What a full reset takes: every real ticket and priority card still on the boards. */
 function liveItems() {
   const archived = new Set(archivedTickets().map((t) => t.id));
   const tickets = db.prepare(`SELECT t.* FROM tickets t WHERE t.archived_at IS NULL AND t.archive_set_id IS NULL AND t.ticket_type != 'account' AND ${notSample('t', 'tickets')}`).all()
@@ -96,25 +96,13 @@ function archiveLive(name, userId) {
 const today = () => new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
 r.get('/', (req, res) => {
-  const live = liveItems();
-  res.json({
-    tickets: archivedTickets(), cards: archivedCards(), datasets: datasets(), canDelete: req.user.role === 'admin',
-    live: { bid: live.tickets.filter((t) => t.ticket_type === 'bid').length, work: live.tickets.filter((t) => t.ticket_type === 'work').length, cards: live.cards.length },
-  });
-});
-
-/** Body: { name }. Archives every real ticket and priority card on the boards as one dataset. Admins only. */
-r.post('/all', (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can archive everything' });
-  const live = liveItems();
-  if (!live.tickets.length && !live.cards.length) return res.status(400).json({ error: 'There’s nothing on the boards to archive' });
-  const id = archiveLive(String(req.body?.name || '').trim() || `Archive of ${today()}`, req.user.id);
-  res.json({ dataset: datasets().find((d) => d.id === id) });
+  res.json({ tickets: archivedTickets(), cards: archivedCards(), datasets: datasets(), canDelete: req.user.role === 'admin' });
 });
 
 /**
  * Body: { confirm: 'RESET' }. Full reset, admins only: archives all real work data as one dataset (tickets and priority
- * cards, plus everything in RESET_TABLES), then reloads a fresh copy of the sample data, still shown or hidden as it was.
+ * cards, plus everything in RESET_TABLES). On a development server it then reloads a fresh copy of the sample data, still
+ * shown or hidden as it was; production has no sample data.
  * Nothing is deleted; load the dataset back from the archive to undo it.
  */
 r.post('/reset', (req, res) => {
@@ -189,7 +177,7 @@ r.post('/delete', (req, res) => {
   }
   const linked = t.length ? db.prepare('SELECT pipedrive_id FROM tickets WHERE pipedrive_id IS NOT NULL AND id IN (SELECT value FROM json_each(?))').all(JSON.stringify(t)) : [];
   const deleted = removeForGood(t, c);
-  // Unless a live copy of the deal is still here (Archive all followed by a pull makes one).
+  // Unless a live copy of the deal is still here (a full reset followed by a pull makes one).
   linked.filter((l) => !db.prepare('SELECT 1 FROM tickets WHERE pipedrive_id = ? AND archive_set_id IS NULL').get(l.pipedrive_id))
     .forEach((l) => queueDelete('deal', l.pipedrive_id));
   res.json({ deleted });

@@ -508,7 +508,7 @@ if (!hadTerritories) {
 // Archived priority cards leave the boards (and close-out counts) but keep everything on them until deleted for good.
 addColumn('priority_cards', 'archived_at', 'TEXT');
 db.exec(`
--- A dataset made by "Archive all": every ticket and priority card that was live at the time, archived together so they
+-- A dataset made by a full reset: every ticket and priority card that was live at the time, archived together so they
 -- can be loaded back or deleted as one.
 CREATE TABLE IF NOT EXISTS archive_sets (
   id INTEGER PRIMARY KEY,

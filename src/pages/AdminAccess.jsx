@@ -12,7 +12,7 @@ import SidePanel from '../components/SidePanel.jsx';
 import Avatar from '../components/Avatar.jsx';
 import BookingTargetsPanel from '../components/BookingTargets.jsx';
 import SampleDataPanel from '../components/SampleDataPanel.jsx';
-import ArchiveAllPanel from '../components/ArchiveAllPanel.jsx';
+import BackupPanel from '../components/BackupPanel.jsx';
 import PipedrivePanel from '../components/PipedrivePanel.jsx';
 import NewPipelineTicketsPanel from '../components/NewPipelineTicketsPanel.jsx';
 import { TerritoryTags, TerritoryChecklist, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
@@ -41,7 +41,7 @@ function AdminPage() {
       <BookingTargetsPanel />
       <NewPipelineTicketsPanel />
       <PipedrivePanel />
-      <ArchiveAllPanel />
+      <BackupPanel />
       <SampleDataPanel />
     </div>
   );

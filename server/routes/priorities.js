@@ -26,7 +26,7 @@ export function weekStartFor(iso, dow) {
 
 const team = (id) => db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
 
-// A priority leaves the board when it's archived, or when its ticket is (by hand, or with Archive all); restoring the
+// A priority leaves the board when it's archived, or when its ticket is (by hand, or by a full reset); restoring the
 // ticket brings it back.
 function loadCards(teamId, weekStart) {
   const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.work_team_id, t.value, t.ticket_type,

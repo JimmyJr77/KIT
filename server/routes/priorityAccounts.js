@@ -35,7 +35,7 @@ function dropActivityTickets(ids) {
   db.prepare("DELETE FROM tickets WHERE ticket_type = 'account' AND id IN (SELECT value FROM json_each(?))").run(list);
 }
 
-/** Someone's tiers, accounts, account tickets and priority list. Pipeline tickets archived (by hand or with Archive all) are left out. */
+/** Someone's tiers, accounts, account tickets and priority list. Pipeline tickets archived (by hand or by a full reset) are left out. */
 export function priorityAccounts(userId) {
   const tiers = db.prepare('SELECT id, name, position FROM priority_tiers WHERE user_id = ? ORDER BY position, id').all(userId);
   const accounts = db.prepare(`SELECT a.id, a.tier_id, a.name, a.position, a.strategy, a.ticket_id FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id

@@ -5,15 +5,21 @@ import { api } from '../lib/api.js';
 import { stamp, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
-import { archiveAll as archiveAllPrompt, contents, plural } from '../components/ArchiveAllPanel.jsx';
 
 const money = (n) => (n == null ? '' : usd(n).replace('.00', ''));
 const TABS = [['bid', 'Pipeline tickets'], ['work', 'Work tickets'], ['cards', 'Priority cards'], ['datasets', 'Datasets']];
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const KINDS = [['bid', 'pipeline ticket'], ['work', 'work ticket'], ['cards', 'priority card'], ['contacts', 'contact'], ['events', 'event'],
+  ['trips', 'trip'], ['contracts', 'contract'], ['targets', 'booking target'], ['objectives', 'account objective']];
+/** "3 pipeline tickets, 1 work ticket and 12 priority cards", leaving out what's zero. */
+const contents = (d) => {
+  const parts = KINDS.filter(([k]) => d[k]).map(([k, word]) => plural(d[k], word));
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] || 'nothing';
+};
 
 /**
  * Everything taken off the boards: pipeline tickets, work tickets and priority cards. Select some or all to restore them,
- * or (admins) delete them for good. Admins can also archive everything at once as a dataset, then load a dataset back
- * or delete it.
+ * or (admins) delete them for good. A full reset in Admin Access leaves a dataset here, which admins can load back or delete.
  */
 export default function Archive() {
   const navigate = useNavigate();
@@ -63,11 +69,6 @@ export default function Archive() {
     run(() => api.post('/archive/delete', body()), (r) => `Deleted ${r.deleted.tickets ? `${r.deleted.tickets} ticket${r.deleted.tickets === 1 ? '' : 's'} and ` : ''}${r.deleted.cards} priority card${r.deleted.cards === 1 ? '' : 's'} for good.`);
   };
 
-  const archiveAll = async () => {
-    let made = null;
-    await run(async () => (made = await archiveAllPrompt(data.live)), (d) => (d ? `Archived ${contents(d)} as “${d.name}”.` : null));
-    if (made) setParams({ tab: 'datasets' });
-  };
   const loadSet = (d) => {
     if (!confirm(`Load “${d.name}”? Its ${contents(d)} go back on the boards, alongside whatever is there now.`)) return;
     run(() => api.post(`/archive/datasets/${d.id}/load`), () => `Loaded “${d.name}” back onto the boards.`);
@@ -88,12 +89,6 @@ export default function Archive() {
             </button>
           ))}
         </div>
-        {data?.canDelete && (
-          <button type="button" className="btn" onClick={archiveAll} disabled={busy}
-            title="Archive every real ticket and priority card on the boards as one dataset">
-            <Layers size={15} /> Archive all
-          </button>
-        )}
       </PageHeader>
 
       {tab !== 'datasets' && <div className="flex flex-wrap items-center gap-2">
@@ -165,13 +160,13 @@ export default function Archive() {
   );
 }
 
-/** Datasets made by "Archive all": load one back onto the boards, or delete it for good. */
+/** Datasets left by a full reset: load one back onto the boards, or delete it for good. */
 function Datasets({ list, canManage, busy, onLoad, onDelete }) {
   if (!list.length) {
     return (
       <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
         <Layers size={28} className="mx-auto mb-2 text-slate-300" />
-        No datasets yet.{canManage ? ' Archive all puts everything on the boards here as one.' : ''}
+        No datasets yet.{canManage ? ' A full reset in Admin Access puts everything here as one.' : ''}
       </div>
     );
   }
