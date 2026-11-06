@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db, json, setUserTeams, setTeamRole, isTeamLead, withTeams } from '../db.js';
 import { requireAdmin, publicUser, formatPhone, digitsOnly, checkPassword, hashPassword } from '../auth.js';
 import { uniqueMessage } from './auth.js';
+import { flightPrefs, flightLimitsChanged } from '../../src/lib/travelCalc.js';
 
 const r = Router();
 
@@ -68,8 +69,9 @@ r.put('/me', (req, res) => {
 });
 
 /**
- * Where you usually travel from, filled into your new trips. Body: { location, airport }, or { declined: true } when
- * you'd rather not keep one; either way you aren't asked again after your first trip.
+ * Where you usually travel from and your flight limits, filled into your new trips. Body: { location, airport, flight },
+ * or { declined: true } when you'd rather not keep one; either way you aren't asked again after your first trip.
+ * Leaving out `flight` keeps the limits already saved.
  */
 r.put('/me/travel-from', (req, res) => {
   const b = req.body || {};
@@ -77,9 +79,10 @@ r.put('/me/travel-from', (req, res) => {
   const value = b.declined ? null : {
     location: { intl: !!l.intl, city: String(l.city || '').trim(), state: String(l.state || '').trim(), country: String(l.country || '').trim() || 'United States' },
     airport: String(b.airport || '').trim(),
+    flight: flightPrefs(b.flight ?? json.parse(req.user.travel_from, {}).flight),
   };
   db.prepare('UPDATE users SET travel_from = ?, travel_from_asked = 1 WHERE id = ?')
-    .run(value && (value.location.city || value.airport) ? JSON.stringify(value) : null, req.user.id);
+    .run(value && (value.location.city || value.airport || flightLimitsChanged(value.flight)) ? JSON.stringify(value) : null, req.user.id);
   res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(req.user.id))) });
 });
 

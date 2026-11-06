@@ -22,8 +22,16 @@ export function flightPrefs(airfare = {}) {
   return { ...window, maxLayovers: pick(airfare.maxLayovers, 0, MAX_LAYOVERS, FLIGHT_DEFAULTS.maxLayovers) };
 }
 
+/** Whether these limits (from flightPrefs) differ from the defaults. */
+export const flightLimitsChanged = (p) => Object.keys(FLIGHT_DEFAULTS).some((k) => p[k] !== FLIGHT_DEFAULTS[k]);
+
 export function addDays(iso, n) {
   return toIso(new Date(toDate(iso).getTime() + n * MS_DAY));
+}
+
+/** Trip dates for an event: arrive the day before it starts and leave the day after it ends. */
+export function eventTripDates(event) {
+  return { date_from: addDays(event.date_from, -1), date_to: addDays(event.date_to || event.date_from, 1) };
 }
 
 /** Calendar-year quarter, e.g. "2026 Q1". */

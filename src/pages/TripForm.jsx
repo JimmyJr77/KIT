@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Plane, TrainFront, Car, CarFront, Hotel, Utensils, Plus, Trash2, RefreshCw, Info, CalendarDays, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { PURPOSES, quarterFor, tripCosts, lodgingSegmentCost, mieCost, usd, nightsBetween, DEFAULT_HOTEL_TAX_PCT, FEE_PER, FLIGHT_DEFAULTS, MAX_LAYOVERS, flightPrefs, hourLabel } from '../lib/travelCalc.js';
+import { PURPOSES, quarterFor, tripCosts, lodgingSegmentCost, mieCost, usd, nightsBetween, DEFAULT_HOTEL_TAX_PCT, FEE_PER, MAX_LAYOVERS, flightPrefs, hourLabel, eventTripDates, flightLimitsChanged } from '../lib/travelCalc.js';
 import UserCombobox from '../components/UserCombobox.jsx';
 import Money from '../components/Money.jsx';
 import { LockButton, EstimateLockPanel } from '../components/EstimateLock.jsx';
@@ -11,8 +11,8 @@ import LocationInput, { EMPTY_LOCATION, locationKey, locationLabel } from '../co
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 /**
- * A new trip filled in from an event: its dates, its city as the destination, a Conference purpose, and the event's fee
- * under Events. Flights, car, and lodging pick up those dates and that city on their own.
+ * A new trip filled in from an event: the day before it through the day after it, its city as the destination, a
+ * Conference purpose, and the event's fee under Events. Flights, car, and lodging pick up those dates and that city on their own.
  */
 export function tripFromEvent(event, userId, mileageRate, from) {
   return {
@@ -20,8 +20,7 @@ export function tripFromEvent(event, userId, mileageRate, from) {
     event_id: event.id,
     purposes: ['Conference'],
     location_to: { ...EMPTY_LOCATION, ...event.location },
-    date_from: event.date_from,
-    date_to: event.date_to,
+    ...eventTripDates(event),
     details: [event.name, event.address, event.website].filter(Boolean).join('\n'),
     events: [eventFee(event)],
   };
@@ -30,12 +29,12 @@ export function tripFromEvent(event, userId, mileageRate, from) {
 /** One row under Events: the event and its fee (blank when the event has none yet). */
 const eventFee = (event) => ({ id: uid(), event_id: event?.id ?? null, name: event?.name || '', fee: event?.fee ?? '' });
 
-/** Someone's default travel-from ({ location, airport }), kept on their profile, or null. */
+/** Someone's travel defaults ({ location, airport, flight }), kept on their profile, or null. */
 export const travelFromOf = (u) => {
   try { return u?.travel_from ? JSON.parse(u.travel_from) : null; } catch { return null; }
 };
 
-/** A blank trip. `from` (someone's default travel-from) fills in where they leave from and their home airport. */
+/** A blank trip. `from` (someone's travel defaults) fills in where they leave from, their home airport and their flight limits. */
 export function newTrip(userId, mileageRate, from) {
   return {
     traveler_id: userId,
@@ -45,7 +44,7 @@ export function newTrip(userId, mileageRate, from) {
     details: '',
     date_from: '',
     date_to: '',
-    airfare: { mode: 'estimated', tripType: 'round-trip', origin: from?.airport || '', destination: '', departDate: '', returnDate: '', datesCustom: false, estimate: null, bookedAmount: '', airline: '', confirmation: '' },
+    airfare: { mode: 'estimated', tripType: 'round-trip', ...flightPrefs(from?.flight), origin: from?.airport || '', destination: '', departDate: '', returnDate: '', datesCustom: false, estimate: null, bookedAmount: '', airline: '', confirmation: '' },
     train: '',
     pov: { enabled: false, miles: '', roundTrip: true, rate: mileageRate },
     car: { enabled: false, mode: 'estimated', vehicleClass: 'Economy / Compact', location: '', pickupDate: '', pickupTime: '10:00', dropoffDate: '', dropoffTime: '10:00', datesCustom: false, estimate: null, bookedAmount: '' },
@@ -122,7 +121,7 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
   const flightKey = trip.airfare.mode === 'estimated'
     ? [trip.airfare.tripType, trip.airfare.origin || locationLabel(trip.location_from), trip.airfare.destination || locationLabel(trip.location_to), trip.airfare.departDate, trip.airfare.tripType === 'one-way' ? '' : trip.airfare.returnDate,
       // Only when changed, so estimates saved before these limits existed still match and aren't re-priced on open.
-      ...(Object.keys(FLIGHT_DEFAULTS).some((k) => flightLimits[k] !== FLIGHT_DEFAULTS[k]) ? Object.values(flightLimits) : [])].join('|')
+      ...(flightLimitsChanged(flightLimits) ? Object.values(flightLimits) : [])].join('|')
     : null;
   const carKey = trip.car.enabled && trip.car.mode === 'estimated'
     ? [trip.car.vehicleClass, trip.car.location || locationLabel(trip.location_to), trip.car.pickupDate, trip.car.pickupTime, trip.car.dropoffDate, trip.car.dropoffTime].join('|')
@@ -343,7 +342,8 @@ export default function TripForm({ initial, users, teams, meta, onClose, onSaved
           <MieSection trip={trip} onChange={(p) => patchIn('mie', p)} total={costs.mie} />
 
           {/* ---------------- Events ---------------- */}
-          <EventsSection rows={trip.events || []} total={costs.events} onChange={(events) => patch({ events })} />
+          <EventsSection rows={trip.events || []} total={costs.events} onChange={(events) => patch({ events })}
+            onPick={(e) => setTrip((t) => (t.date_from || t.date_to ? t : { ...t, ...eventTripDates(e) }))} />
         </div>
 
         {/* ---------------- Summary ---------------- */}
@@ -592,8 +592,8 @@ function MieSection({ trip, onChange, total }) {
   );
 }
 
-/** Events the trip is for, and their fees (registration, sponsorship, …). Picking an event fills in its fee. */
-function EventsSection({ rows, total, onChange }) {
+/** Events the trip is for, and their fees (registration, sponsorship, …). Picking an event fills in its fee, and the trip's dates if it has none yet. */
+function EventsSection({ rows, total, onChange, onPick }) {
   const [events, setEvents] = useState(null);
   useEffect(() => { api.get('/events?scope=all').then((d) => setEvents(d.events)).catch(() => setEvents([])); }, []);
   const byId = new Map((events || []).map((e) => [e.id, e]));
@@ -601,7 +601,7 @@ function EventsSection({ rows, total, onChange }) {
   const pick = (row, value) => {
     if (value === 'other') return update(row.id, { event_id: null, name: '' });
     const e = byId.get(Number(value));
-    if (e) update(row.id, { event_id: e.id, name: e.name, fee: e.fee ?? row.fee });
+    if (e) { update(row.id, { event_id: e.id, name: e.name, fee: e.fee ?? row.fee }); onPick(e); }
   };
   // Upcoming events first, then past ones (most recent first).
   const today = new Date().toLocaleDateString('en-CA');
@@ -681,7 +681,7 @@ function ResetDates({ show, onClick }) {
 }
 
 /** When the traveler is willing to leave and how many layovers they'll take. Moving Earliest past Latest pushes Latest out. */
-function FlightLimits({ limits, onChange }) {
+export function FlightLimits({ limits, onChange }) {
   const hours = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i).map((h) => <option key={h} value={h}>{hourLabel(h)}</option>);
   const earliest = (h) => onChange({ earliestDepart: h, latestDepart: Math.max(limits.latestDepart, h + 1) });
   return (
