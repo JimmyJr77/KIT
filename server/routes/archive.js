@@ -20,7 +20,7 @@ function archivedTickets() {
       (SELECT COUNT(*) FROM priority_cards c WHERE c.ticket_id = t.id) AS card_count,
       (SELECT COUNT(*) FROM ticket_files f WHERE f.ticket_id = t.id) AS file_count,
       (SELECT COUNT(*) FROM delivery_programs p WHERE p.ticket_id = t.id) AS contract_count
-    FROM tickets t LEFT JOIN users u ON u.id = COALESCE(t.bd_director_id, t.created_by) WHERE t.archive_set_id IS NULL`).all()
+    FROM tickets t LEFT JOIN users u ON u.id = COALESCE(t.bd_director_id, t.created_by) WHERE t.archive_set_id IS NULL AND t.ticket_type != 'account'`).all()
     // Only Done tickets age into the archive, and whether one is Done doesn't depend on recent activity.
     .filter((t) => isArchived(t, laneFor({ ...t, last_activity: t.updated_at })))
     .map((t) => ({
@@ -50,7 +50,7 @@ const notSample = (alias, tbl) => `${alias}.id NOT IN (SELECT row_id FROM sample
 /** What "Archive all" would take: every real ticket and priority card still on the boards. */
 function liveItems() {
   const archived = new Set(archivedTickets().map((t) => t.id));
-  const tickets = db.prepare(`SELECT t.* FROM tickets t WHERE t.archived_at IS NULL AND t.archive_set_id IS NULL AND ${notSample('t', 'tickets')}`).all()
+  const tickets = db.prepare(`SELECT t.* FROM tickets t WHERE t.archived_at IS NULL AND t.archive_set_id IS NULL AND t.ticket_type != 'account' AND ${notSample('t', 'tickets')}`).all()
     .filter((t) => !archived.has(t.id) && !isArchived(t, laneFor({ ...t, last_activity: t.updated_at })));
   const ids = JSON.stringify(tickets.map((t) => t.id));
   // Cards still on the boards, plus every card on a ticket being archived.

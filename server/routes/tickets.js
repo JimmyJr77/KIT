@@ -73,7 +73,7 @@ export function pwinModel() {
     gates: Array.isArray(gates) ? gates.filter((k) => CRITERIA.some((c) => c.key === k)) : DEFAULT_PWIN_GATES,
   };
 }
-const ticketPwin = (t, model = pwinModel()) => (t.ticket_type === 'work' ? null : pwin(json.parse(t.assessment, {}), model.weights, model.gates));
+const ticketPwin = (t, model = pwinModel()) => (t.ticket_type !== 'bid' ? null : pwin(json.parse(t.assessment, {}), model.weights, model.gates));
 
 function weightsOut() {
   const { weights, gates } = pwinModel();
@@ -147,7 +147,7 @@ r.get('/', (req, res) => {
         COALESCE((SELECT MAX(f.created_at) FROM ticket_files f WHERE f.ticket_id = t.id), '')) AS last_activity
     FROM tickets t LEFT JOIN users o ON o.id = t.created_by LEFT JOIN users d ON d.id = t.bd_director_id
       LEFT JOIN territories tr ON tr.id = t.territory_id
-    WHERE t.archive_set_id IS NULL AND (t.opportunity_title LIKE @q OR t.organization LIKE @q)
+    WHERE t.archive_set_id IS NULL AND t.ticket_type != 'account' AND (t.opportunity_title LIKE @q OR t.organization LIKE @q)
       AND (@mine = 0 OR t.created_by = @me OR t.bd_director_id = @me OR EXISTS (SELECT 1 FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id
         WHERE c.ticket_id = t.id AND a.user_id = @me))
       AND (@team IS NULL OR EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = o.id AND ut.team_id = @team))

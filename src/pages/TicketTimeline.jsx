@@ -63,7 +63,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, onClose, o
   return (
     <SidePanel wide onClose={close} title={t ? t.opportunity_title : 'Loading…'}
       onEscape={tool ? () => switchTool(null) : close}
-      rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} />}
+      rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} skip={t.ticket_type === 'account' ? ['strategy'] : []} />}
       drawer={t && tool && <PlanDrawer key={`${tool}-${openActivity}`} tool={tool} ticket={t} activityId={openActivity} onClose={() => switchTool(null)} onChanged={refresh} onDirty={setToolDirty} />}
       subtitle={t && (
         <span className="flex flex-wrap items-center gap-1.5">
@@ -86,8 +86,8 @@ export default function TicketTimeline({ ticketId, focus, activityId, onClose, o
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {data && (
         <div className="space-y-5">
-          <ArchiveBar ticket={t} onChanged={refresh} />
-          {t.ticket_type !== 'work' && <AssignmentBar ticket={t} onChanged={refresh} />}
+          {t.ticket_type !== 'account' && <ArchiveBar ticket={t} onChanged={refresh} />}
+          {t.ticket_type === 'bid' && <AssignmentBar ticket={t} onChanged={refresh} />}
           <Composer ticketId={t.id} onPosted={refresh} />
 
           <div className="flex flex-wrap gap-1.5">

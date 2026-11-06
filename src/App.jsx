@@ -23,6 +23,9 @@ import Archive from './pages/Archive.jsx';
 import DoneTickets from './pages/DoneTickets.jsx';
 import LostTickets from './pages/LostTickets.jsx';
 import ClosedDeals from './pages/ClosedDeals.jsx';
+import LessonsLearned from './pages/LessonsLearned.jsx';
+import Retros from './pages/Retros.jsx';
+import RetroBoard from './pages/RetroBoard.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -54,6 +57,9 @@ export default function App() {
         <Route path="/crm" element={<Crm />} />
         <Route path="/solutions" element={<TechnicalSolutions />} />
         <Route path="/marketing" element={<Marketing />} />
+        <Route path="/lessons" element={<LessonsLearned />} />
+        <Route path="/retros" element={<Retros />} />
+        <Route path="/retros/:id" element={<RetroBoard />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/admin" element={<AdminAccess />} />
         <Route path="/my-team" element={<MyTeam />} />

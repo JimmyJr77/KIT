@@ -13,16 +13,32 @@ const ownTier = (id, me) => db.prepare('SELECT * FROM priority_tiers WHERE id = 
 const ownAccount = (id, me) => db.prepare(`SELECT a.* FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
   WHERE a.id = ? AND t.user_id = ?`).get(id, me);
 
-/** A ticket picked from under an account leaves the list when no account has it. One chosen for itself stays. */
-function prune(userId) {
-  db.prepare(`DELETE FROM priority_list_tickets WHERE user_id = ? AND direct = 0 AND ticket_id NOT IN (SELECT pt.ticket_id FROM priority_account_tickets pt
-    JOIN priority_accounts a ON a.id = pt.account_id JOIN priority_tiers t ON t.id = a.tier_id WHERE t.user_id = ?)`).run(userId, userId);
+/**
+ * An account's activities live on a hidden ticket of type 'account', so they work just as they do on pipeline tickets (next step,
+ * subtasks, comments, weekly priorities, My tasks). Ticket lists, boards and reports leave these tickets out; Pipedrive never sees them.
+ */
+function activityTicket(account) {
+  const found = account.ticket_id && db.prepare('SELECT id, ticket_type, opportunity_title, organization FROM tickets WHERE id = ?').get(account.ticket_id);
+  if (found) return found;
+  return db.transaction(() => {
+    const owner = db.prepare('SELECT user_id FROM priority_tiers WHERE id = ?').get(account.tier_id).user_id;
+    const id = db.prepare("INSERT INTO tickets (opportunity_title, organization, ticket_type, created_by) VALUES (?, ?, 'account', ?)").run(account.name, account.name, owner).lastInsertRowid;
+    db.prepare('UPDATE priority_accounts SET ticket_id = ? WHERE id = ?').run(id, account.id);
+    return { id, ticket_type: 'account', opportunity_title: account.name, organization: account.name };
+  })();
+}
+
+/** Remove accounts' hidden tickets, and with them their activities. Weekly priority cards don't go with a ticket on their own. */
+function dropActivityTickets(ids) {
+  const list = JSON.stringify(ids.filter(Boolean));
+  db.prepare('DELETE FROM priority_cards WHERE ticket_id IN (SELECT value FROM json_each(?))').run(list);
+  db.prepare("DELETE FROM tickets WHERE ticket_type = 'account' AND id IN (SELECT value FROM json_each(?))").run(list);
 }
 
 /** Someone's tiers, accounts, account tickets and priority list. Pipeline tickets archived (by hand or with Archive all) are left out. */
 export function priorityAccounts(userId) {
   const tiers = db.prepare('SELECT id, name, position FROM priority_tiers WHERE user_id = ? ORDER BY position, id').all(userId);
-  const accounts = db.prepare(`SELECT a.id, a.tier_id, a.name, a.position, a.strategy FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
+  const accounts = db.prepare(`SELECT a.id, a.tier_id, a.name, a.position, a.strategy, a.ticket_id FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
     WHERE t.user_id = ? ORDER BY a.position, a.id`).all(userId);
   const tickets = db.prepare(`SELECT pt.account_id, pt.position, t.id, t.opportunity_title, t.organization, t.pipeline_status, t.value
     FROM priority_account_tickets pt JOIN priority_accounts a ON a.id = pt.account_id JOIN priority_tiers tr ON tr.id = a.tier_id
@@ -78,12 +94,13 @@ r.put('/tiers/:id', (req, res) => {
   res.json(priorityAccounts(req.user.id));
 });
 
-/** Removing a tier removes its accounts (and takes their tickets off the list). */
+/** Removing a tier removes its accounts and their activities. Their tickets stay on the priority list. */
 r.delete('/tiers/:id', (req, res) => {
   if (!ownTier(req.params.id, req.user.id)) return res.status(404).json({ error: 'Tier not found' });
+  const held = db.prepare('SELECT ticket_id FROM priority_accounts WHERE tier_id = ?').all(req.params.id).map((a) => a.ticket_id);
   db.transaction(() => {
     db.prepare('DELETE FROM priority_tiers WHERE id = ?').run(req.params.id);
-    prune(req.user.id);
+    dropActivityTickets(held);
   })();
   res.json(priorityAccounts(req.user.id));
 });
@@ -118,18 +135,28 @@ r.post('/accounts', (req, res) => {
 r.put('/accounts/:id', (req, res) => {
   const n = name(req.body?.name);
   if (!n) return res.status(400).json({ error: 'Name the agency or organization' });
-  if (!ownAccount(req.params.id, req.user.id)) return res.status(404).json({ error: 'Account not found' });
+  const account = ownAccount(req.params.id, req.user.id);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
   db.prepare('UPDATE priority_accounts SET name = ? WHERE id = ?').run(n, req.params.id);
+  if (account.ticket_id) db.prepare('UPDATE tickets SET opportunity_title = ?, organization = ? WHERE id = ?').run(n, n, account.ticket_id);
   res.json(priorityAccounts(req.user.id));
 });
 
 r.delete('/accounts/:id', (req, res) => {
-  if (!ownAccount(req.params.id, req.user.id)) return res.status(404).json({ error: 'Account not found' });
+  const account = ownAccount(req.params.id, req.user.id);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
   db.transaction(() => {
     db.prepare('DELETE FROM priority_accounts WHERE id = ?').run(req.params.id);
-    prune(req.user.id);
+    dropActivityTickets([account.ticket_id]);
   })();
   res.json(priorityAccounts(req.user.id));
+});
+
+/** The ticket that holds an account's activities, made the first time anyone opens them. As on pipeline tickets, anyone can work on them. */
+r.post('/accounts/:id/activity-ticket', (req, res) => {
+  const account = db.prepare('SELECT * FROM priority_accounts WHERE id = ?').get(req.params.id);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  res.json({ ticket: activityTicket(account) });
 });
 
 /** Body: { strategy }: how the owner plans to gain a foothold at this account. */
@@ -140,7 +167,7 @@ r.put('/accounts/:id/strategy', (req, res) => {
   res.json(priorityAccounts(req.user.id));
 });
 
-/** Body: { ticket_ids: [] }, in order: the account's priority pipeline tickets. Tickets dropped from every account leave the list. */
+/** Body: { ticket_ids: [] }, in order: the account's priority pipeline tickets. The priority list stands on its own, so it doesn't change. */
 r.put('/accounts/:id/tickets', (req, res) => {
   if (!ownAccount(req.params.id, req.user.id)) return res.status(404).json({ error: 'Account not found' });
   const ids = [...new Set((Array.isArray(req.body?.ticket_ids) ? req.body.ticket_ids : []).map(Number).filter(Boolean))]
@@ -149,22 +176,18 @@ r.put('/accounts/:id/tickets', (req, res) => {
     db.prepare('DELETE FROM priority_account_tickets WHERE account_id = ?').run(req.params.id);
     const add = db.prepare('INSERT INTO priority_account_tickets (account_id, ticket_id, position) VALUES (?, ?, ?)');
     ids.forEach((id, i) => add.run(req.params.id, id, i));
-    prune(req.user.id);
   })();
   res.json(priorityAccounts(req.user.id));
 });
 
 /** Body: { ticket_ids: [] }, in order: your priority tickets, from under your accounts or any other pipeline ticket. */
 r.put('/list', (req, res) => {
-  const underAccounts = new Set(db.prepare(`SELECT pt.ticket_id FROM priority_account_tickets pt JOIN priority_accounts a ON a.id = pt.account_id
-    JOIN priority_tiers t ON t.id = a.tier_id WHERE t.user_id = ?`).all(req.user.id).map((x) => x.ticket_id));
-  const direct = new Set(db.prepare('SELECT ticket_id FROM priority_list_tickets WHERE user_id = ? AND direct = 1').all(req.user.id).map((x) => x.ticket_id));
   const ids = [...new Set((Array.isArray(req.body?.ticket_ids) ? req.body.ticket_ids : []).map(Number).filter(Boolean))]
     .filter((id) => db.prepare("SELECT 1 FROM tickets WHERE id = ? AND ticket_type = 'bid'").get(id));
   db.transaction(() => {
     db.prepare('DELETE FROM priority_list_tickets WHERE user_id = ?').run(req.user.id);
-    const add = db.prepare('INSERT INTO priority_list_tickets (user_id, ticket_id, position, direct) VALUES (?, ?, ?, ?)');
-    ids.forEach((id, i) => add.run(req.user.id, id, i, direct.has(id) || !underAccounts.has(id) ? 1 : 0));
+    const add = db.prepare('INSERT INTO priority_list_tickets (user_id, ticket_id, position) VALUES (?, ?, ?)');
+    ids.forEach((id, i) => add.run(req.user.id, id, i));
   })();
   res.json(priorityAccounts(req.user.id));
 });

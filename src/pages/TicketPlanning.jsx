@@ -10,18 +10,19 @@ import { PROCESS_TYPES, REVIEW_AREAS } from '../lib/process.js';
 import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
-/** The menu items along the ticket pane's left edge. Strategy and the win assessment are for pipeline tickets only. */
+/** The menu items along the ticket pane's left edge. Strategy and the win assessment are for pipeline tickets only. Priority accounts share the `account` ones. */
 export const PLAN_TOOLS = [
-  { key: 'strategy', label: 'Strategy', icon: ChessPawn, bidOnly: true },
-  { key: 'activities', label: 'Activity', icon: CalendarCheck },
+  { key: 'strategy', label: 'Strategy', icon: ChessPawn, bidOnly: true, account: true },
+  { key: 'activities', label: 'Activity', icon: CalendarCheck, account: true },
   { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
   { key: 'people', label: 'People', icon: ContactRound },
   { key: 'process', label: 'Process flow', icon: Workflow, bidOnly: true },
   { key: 'details', label: 'Deal details', icon: ClipboardList, bidOnly: true },
 ];
 
-export function PlanRail({ ticket, active, onSelect }) {
-  return PLAN_TOOLS.filter((t) => !t.bidOnly || ticket.ticket_type !== 'work').map(({ key, label, icon: Icon }) => (
+export function PlanRail({ ticket, active, onSelect, skip = [] }) {
+  const shown = (t) => !skip.includes(t.key) && (ticket.ticket_type === 'account' ? t.account : !t.bidOnly || ticket.ticket_type !== 'work');
+  return PLAN_TOOLS.filter(shown).map(({ key, label, icon: Icon }) => (
     <button key={key} type="button" onClick={() => onSelect(active === key ? null : key)} title={label} aria-label={label} aria-pressed={active === key}
       className={`grid h-9 w-9 place-items-center rounded-md transition ${active === key ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-brand-700 hover:shadow-sm'}`}>
       <Icon size={18} />

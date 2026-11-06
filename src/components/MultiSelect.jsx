@@ -1,12 +1,13 @@
 import { useMemo, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { useClickAway } from './UserCombobox.jsx';
 
 /**
  * Multi-select with a type-to-filter text box and removable chips.
  * options: [{ value, label, sub?, group? }]. Options sharing a `group` are listed under that heading.
+ * With `onCreate`, typing a name no option has offers to add it: onCreate(name) makes it and selects it.
  */
-export default function MultiSelect({ options = [], value = [], onChange, placeholder = 'Type to filter…', compact }) {
+export default function MultiSelect({ options = [], value = [], onChange, placeholder = 'Type to filter…', compact, onCreate }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -18,7 +19,11 @@ export default function MultiSelect({ options = [], value = [], onChange, placeh
     return options.filter((o) => !value.includes(o.value) && (!s || `${o.label} ${o.sub || ''}`.toLowerCase().includes(s)));
   }, [options, value, q]);
 
+  const newName = q.trim();
+  const canCreate = !!onCreate && !!newName && !options.some((o) => o.label.toLowerCase() === newName.toLowerCase());
+
   const add = (v) => { onChange([...value, v]); setQ(''); };
+  const create = () => { onCreate(newName); setQ(''); };
   const remove = (v) => onChange(value.filter((x) => x !== v));
 
   return (
@@ -38,11 +43,12 @@ export default function MultiSelect({ options = [], value = [], onChange, placeh
           onFocus={() => setOpen(true)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && matches[0]) { e.preventDefault(); add(matches[0].value); }
+            else if (e.key === 'Enter' && onCreate) { e.preventDefault(); if (canCreate) create(); }
             if (e.key === 'Backspace' && !q && value.length) remove(value[value.length - 1]);
           }}
         />
       </div>
-      {open && matches.length > 0 && (
+      {open && (matches.length > 0 || canCreate) && (
         <ul className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
           {matches.map((o, i) => (
             <li key={o.value}>
@@ -54,6 +60,13 @@ export default function MultiSelect({ options = [], value = [], onChange, placeh
               </button>
             </li>
           ))}
+          {canCreate && (
+            <li className={matches.length ? 'mt-1 border-t border-slate-100 pt-1' : ''}>
+              <button type="button" className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-sm text-brand-700 hover:bg-brand-50" onClick={create}>
+                <Plus size={13} /> Add “{newName}”
+              </button>
+            </li>
+          )}
         </ul>
       )}
     </div>

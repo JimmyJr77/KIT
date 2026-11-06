@@ -86,7 +86,7 @@ export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialI
         {open.length > 0 && (
           <section>
             <h4 className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">To do, in priority order</h4>
-            <p className="mb-1.5 text-[11px] text-slate-400">Drag to reorder. The top one is this ticket’s next step.</p>
+            <p className="mb-1.5 text-[11px] text-slate-400">Drag to reorder. The top one is this {ticket.ticket_type === 'account' ? 'account' : 'ticket'}’s next step.</p>
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={open.map((a) => a.id)} strategy={verticalListSortingStrategy}>
                 <ol className="space-y-1.5">
@@ -241,7 +241,7 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
         </div>
       )}>
       <button type="button" className="btn-ghost -mt-1 mb-3 px-1.5 py-1 text-xs" onClick={leave}><ArrowLeft size={13} /> All activities</button>
-      {activity?.rank === 1 && <p className="mb-3 rounded-md bg-brand-50 px-3 py-2 text-[11px] text-brand-800">This is the ticket’s next step: the top open activity.</p>}
+      {activity?.rank === 1 && <p className="mb-3 rounded-md bg-brand-50 px-3 py-2 text-[11px] text-brand-800">This is the {ticket.ticket_type === 'account' ? 'account' : 'ticket'}’s next step: the top open activity.</p>}
       <div className="space-y-4">
         <input className="input text-base font-medium" placeholder="Title, e.g. Lunch with the program office" value={form.subject} onChange={set('subject')} autoFocus={!activity} aria-label="Title" />
 
@@ -342,7 +342,7 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
             <WeeklyPriority activity={activity} ticket={ticket} onChanged={onChanged} />
             <section className="border-t border-slate-200 pt-4">
               <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><MessageSquare size={13} /> Comments</h4>
-              <p className="mb-2 text-[11px] text-slate-400">Comments here also show in the ticket’s history, marked as activity comments.</p>
+              {ticket.ticket_type !== 'account' && <p className="mb-2 text-[11px] text-slate-400">Comments here also show in the ticket’s history, marked as activity comments.</p>}
               <ActivityComments comments={comments} activity={activity} />
               <CommentComposer ticketId={ticket.id} target={{ type: 'activity', id: activity.id }} onPosted={onChanged} />
             </section>

@@ -11,7 +11,7 @@ import { priorityAccounts } from './priorityAccounts.js';
 import { weekStartFor } from './priorities.js';
 
 const r = Router();
-const LIVE = "t.ticket_type = 'bid' AND t.done_at IS NULL AND t.archived_at IS NULL";
+const LIVE = "t.ticket_type IN ('bid', 'account') AND t.done_at IS NULL AND t.archived_at IS NULL";
 const usersFrom = (q) => [...new Set(String(q.users || '').split(',').map(Number).filter(Boolean))];
 
 /** Tasks matching `where`: open ones in their ticket's priority order, then done ones, latest first. */
@@ -43,8 +43,8 @@ function weekCards(userId) {
     .all(userId, team.id, weekStartFor(today, team.checkin_dow)));
 }
 
-/** The ticket ids under a tier, in order: its accounts as sorted, and each account's tickets as sorted. */
-const tierTickets = (tier) => [...new Set(tier.accounts.flatMap((a) => a.tickets.map((t) => t.id)))];
+/** The ticket ids under a tier, in order: its accounts as sorted, and each account's own activities then its tickets as sorted. */
+const tierTickets = (tier) => [...new Set(tier.accounts.flatMap((a) => [a.ticket_id, ...a.tickets.map((t) => t.id)]).filter(Boolean))];
 /** `ids` in order, each ticket's tasks in turn. */
 const onTickets = (all, ids) => ids.flatMap((id) => all.filter((a) => a.ticket_id === id));
 

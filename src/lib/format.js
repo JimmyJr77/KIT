@@ -12,7 +12,7 @@ export const fullName = (u) => (u ? `${u.first_name} ${u.last_name}` : '');
 export const initials = (u) => (u ? `${u.first_name?.[0] || ''}${u.last_name?.[0] || ''}`.toUpperCase() : '?');
 
 /** "Pipeline Ticket" for tickets meant to win a contract, "Work Ticket" for everything else. */
-export const ticketKind = (t) => (t?.ticket_type === 'work' ? 'Work Ticket' : 'Pipeline Ticket');
+export const ticketKind = (t) => ({ work: 'Work Ticket', account: 'Priority account' }[t?.ticket_type] || 'Pipeline Ticket');
 
 export const todayIso = () => new Date().toLocaleDateString('en-CA');
 

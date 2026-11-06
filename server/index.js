@@ -37,6 +37,8 @@ import contactRoutes from './routes/contacts.js';
 import deliveryRoutes from './routes/delivery.js';
 import marketingRoutes from './routes/marketing.js';
 import priorityAccountRoutes from './routes/priorityAccounts.js';
+import lessonRoutes from './routes/lessons.js';
+import retroRoutes from './routes/retros.js';
 import aiRoutes from './routes/ai.js';
 
 ensureGsaRates();
@@ -83,6 +85,8 @@ app.use('/api/contacts', requireAuth, contactRoutes);
 app.use('/api/delivery', requireAuth, deliveryRoutes);
 app.use('/api/marketing', requireAuth, marketingRoutes);
 app.use('/api/priority-accounts', requireAuth, priorityAccountRoutes);
+app.use('/api/lessons', requireAuth, lessonRoutes);
+app.use('/api/retros', requireAuth, retroRoutes);
 app.use('/api/ai', requireAuth, aiRoutes);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

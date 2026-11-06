@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { db } from './db.js';
@@ -8,6 +9,9 @@ if (process.env.NODE_ENV === 'production' &&
   throw new Error('Production requires a random JWT_SECRET of at least 32 characters.');
 }
 const COOKIE = 'kit_session';
+
+/** Stands for a person within `scope` without saying who: the same person gets the same key, and it can't be read back. */
+export const anonKey = (scope, userId) => crypto.createHmac('sha256', SECRET).update(`${scope}:${userId}`).digest('hex');
 
 export const digitsOnly = (s) => String(s || '').replace(/\D/g, '');
 

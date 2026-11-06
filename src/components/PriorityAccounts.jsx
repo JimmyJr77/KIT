@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDroppable, closestCorners } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -8,6 +8,8 @@ import { usd } from '../lib/travelCalc.js';
 import SidePanel from './SidePanel.jsx';
 import { TicketCard } from '../pages/Pipeline.jsx';
 import TicketTimeline from '../pages/TicketTimeline.jsx';
+import { PlanRail, DrawerShell } from '../pages/TicketPlanning.jsx';
+import { ActivitiesDrawer } from '../pages/TicketActivities.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 const CLOSED = ['Awarded', 'Lost'];
@@ -170,7 +172,7 @@ function Tier({ tier, ids, accounts, edit, organizations, save, onOpen }) {
   const [adding, setAdding] = useState('');
   const remove = () => {
     const n = tier.accounts.length;
-    if (n && !window.confirm(`Remove ${tier.name} and its ${n} account${n === 1 ? '' : 's'}? Tickets picked from under them come off your priority tickets.`)) return;
+    if (n && !window.confirm(`Remove ${tier.name} and its ${n} account${n === 1 ? '' : 's'}, with their activities? Your priority tickets stay on your list.`)) return;
     save(api.del(`/priority-accounts/tiers/${tier.id}`));
   };
   const add = (e) => {
@@ -263,19 +265,36 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
     .filter((t) => !q || `${t.opportunity_title} ${t.organization || ''}`.toLowerCase().includes(q.toLowerCase()))
     .slice(0, 60), [all, chosen, everyOrg, q, forAccount]);
   const remove = () => {
-    if (!window.confirm(`Remove ${account.name}? Tickets picked from under it come off your priority tickets unless another account has them.`)) return;
+    if (!window.confirm(`Remove ${account.name} and its activities? Your priority tickets stay on your list.`)) return;
     save(api.del(`/priority-accounts/accounts/${account.id}`)).then(onClose);
   };
+  // The panes off the left edge, as on a ticket. Strategy saves as you leave its box; an activity asks before losing unsaved changes.
+  const [tool, setTool] = useState(null);
+  const [ticket, setTicket] = useState(null);
+  const toolDirty = useRef(false);
+  const setToolDirty = (v) => { toolDirty.current = v; };
+  const leaveTool = () => !toolDirty.current || window.confirm('You have unsaved changes. Discard them?');
+  const switchTool = (next) => { if (leaveTool()) { toolDirty.current = false; setTool(next); } };
+  const close = () => { if (leaveTool()) onClose(); };
+  useEffect(() => {
+    if (tool === 'activities' && !ticket) api.post(`/priority-accounts/accounts/${account.id}/activity-ticket`).then((d) => setTicket(d.ticket));
+  }, [tool, ticket, account.id]);
   const moveTo = (tierId) => save(api.put('/priority-accounts/layout', {
     tiers: tiers.map((t) => ({ id: t.id, accounts: t.id === Number(tierId) ? [...t.accounts.map((a) => a.id).filter((x) => x !== account.id), account.id] : t.accounts.map((a) => a.id).filter((x) => x !== account.id) })),
   }));
 
   return (
-    <SidePanel title={account.name} subtitle={tiers.find((t) => t.id === account.tier_id)?.name} onClose={onClose} wide
+    <SidePanel title={account.name} subtitle={tiers.find((t) => t.id === account.tier_id)?.name} onClose={close} wide
+      onEscape={tool ? () => switchTool(null) : close}
+      rail={<PlanRail ticket={{ ticket_type: 'account' }} active={tool} onSelect={switchTool} />}
+      drawer={tool === 'strategy' ? <StrategyDrawer account={account} edit={edit} save={save} onClose={() => switchTool(null)} />
+        : tool === 'activities' && (ticket
+          ? <ActivitiesDrawer ticket={ticket} onClose={() => switchTool(null)} onChanged={() => {}} onDirty={setToolDirty} />
+          : <DrawerShell title="Activity" onClose={() => switchTool(null)}><p className="text-sm text-slate-400">Loading…</p></DrawerShell>)}
       footer={edit && (
         <div className="flex justify-between">
           <button type="button" className="btn-ghost text-red-600" onClick={remove}><Trash2 size={15} /> Remove account</button>
-          <button type="button" className="btn-primary" onClick={onClose}>Done</button>
+          <button type="button" className="btn-primary" onClick={close}>Done</button>
         </div>
       )}>
       <div className="space-y-5">
@@ -347,6 +366,16 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
             )}
           </div>
         )}
+      </div>
+    </SidePanel>
+  );
+}
+
+/** The pawn's pane: the foothold strategy and the AI strategy session. */
+function StrategyDrawer({ account, edit, save, onClose }) {
+  return (
+    <DrawerShell title="Strategy" subtitle={account.name} onClose={onClose}>
+      <div className="space-y-5">
         <AccountStrategy account={account} edit={edit} save={save} />
         {edit && (
           <div className="rounded-lg border-2 border-dashed border-slate-200 px-4 py-4">
@@ -356,7 +385,7 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
           </div>
         )}
       </div>
-    </SidePanel>
+    </DrawerShell>
   );
 }
 

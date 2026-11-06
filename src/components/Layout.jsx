@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, Lightbulb, MessagesSquare, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
@@ -21,6 +21,8 @@ const NAV = [
   { to: '/crm', label: 'CRM', icon: ContactRound },
   { to: '/solutions', label: 'Technical Solutions', icon: Blocks },
   { to: '/marketing', label: 'Marketing', icon: Megaphone },
+  { to: '/retros', label: 'Retrospectives', icon: MessagesSquare },
+  { to: '/lessons', label: 'Lessons Learned', icon: Lightbulb },
 ];
 
 const COLLAPSED_KEY = 'kit.sidebar.collapsed';

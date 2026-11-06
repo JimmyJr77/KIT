@@ -1075,8 +1075,9 @@ CREATE TABLE IF NOT EXISTS priority_list_tickets (
   PRIMARY KEY (user_id, ticket_id)
 );
 `);
+addColumn('priority_accounts', 'ticket_id', 'INTEGER REFERENCES tickets(id) ON DELETE SET NULL'); // a hidden ticket (type account) that holds the account's activities
 addColumn('priority_accounts', 'strategy', 'TEXT'); // the owner's strategy for gaining a foothold at this account
-addColumn('priority_list_tickets', 'direct', 'INTEGER NOT NULL DEFAULT 0'); // chosen for itself, so it stays when accounts change
+addColumn('priority_list_tickets', 'direct', 'INTEGER NOT NULL DEFAULT 0'); // no longer used: the priority list doesn't depend on accounts
 
 function migrateToActivities() {
   const hasTable = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
@@ -1161,6 +1162,78 @@ function migrateToActivities() {
     });
   })();
 }
+
+// ---- Lessons Learned. A lesson's id is its Lesson Learned number; AUTOINCREMENT keeps a deleted number from coming back.
+// A retrospective sends its items here: retro_date is the retro's date, and source and source_id say which item it was.
+db.exec(`
+CREATE TABLE IF NOT EXISTS lessons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL,   -- good (Good/Keep) | bad (Bad/Change)
+  action TEXT NOT NULL, -- continue | change; bad is always change
+  scope TEXT NOT NULL,  -- pipeline | non_pipeline
+  stage TEXT,           -- pipeline stage; pipeline lessons only
+  context TEXT,
+  problem TEXT,
+  solution TEXT,
+  retro_date TEXT,      -- YYYY-MM-DD
+  source TEXT NOT NULL DEFAULT 'manual', -- manual | retro
+  source_id INTEGER,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS lessons_source ON lessons(source, source_id) WHERE source_id IS NOT NULL;
+-- Tags for lessons, separate from labels: those are Pipedrive's, and a tag named like a Pipedrive label becomes that label.
+CREATE TABLE IF NOT EXISTS lesson_tags (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  tag_group TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS lesson_tag_links (
+  lesson_id INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+  tag_id INTEGER NOT NULL REFERENCES lesson_tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (lesson_id, tag_id)
+);
+`);
+
+// ---- Retrospectives. A retro's tickets and thumbs are anonymous: author_key and voter_key are keyed hashes (anonKey in
+// auth.js) that only say "the same person" within one retro, and tickets keep no timestamps. Never store a user id on them.
+db.exec(`
+CREATE TABLE IF NOT EXISTS retro_boards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  retro_date TEXT NOT NULL,  -- YYYY-MM-DD; becomes the retro date on its lessons
+  template TEXT NOT NULL,
+  stage TEXT NOT NULL DEFAULT 'brainstorm', -- brainstorm | actions | closed
+  hide_notes INTEGER NOT NULL DEFAULT 0,    -- 1 until the lead reveals tickets
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, -- the retro lead
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS retro_lanes (
+  id INTEGER PRIMARY KEY,
+  board_id INTEGER NOT NULL REFERENCES retro_boards(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  lean TEXT,                 -- good | bad; starts its lessons as Good/Keep or Bad/Change
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS retro_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, -- a lesson's source_id, so never reused
+  board_id INTEGER NOT NULL REFERENCES retro_boards(id) ON DELETE CASCADE,
+  lane_id INTEGER NOT NULL REFERENCES retro_lanes(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  author_key TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS retro_votes (
+  note_id INTEGER NOT NULL REFERENCES retro_notes(id) ON DELETE CASCADE,
+  voter_key TEXT NOT NULL,
+  PRIMARY KEY (note_id, voter_key)
+);
+CREATE INDEX IF NOT EXISTS retro_lanes_board ON retro_lanes(board_id);
+CREATE INDEX IF NOT EXISTS retro_notes_board ON retro_notes(board_id);
+`);
 
 const insertTeam = db.prepare('INSERT OR IGNORE INTO teams (name) VALUES (?)');
 TEAMS.forEach((t) => insertTeam.run(t));

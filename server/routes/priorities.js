@@ -183,7 +183,7 @@ r.get('/tickets', (req, res) => {
   const dir = req.query.dir === 'asc' ? 'ASC' : 'DESC';
   const rows = db.prepare(`SELECT t.*, COUNT(c.id) AS card_count, MIN(c.due_date) AS next_due
     FROM tickets t LEFT JOIN priority_cards c ON c.ticket_id = t.id
-    WHERE t.archive_set_id IS NULL AND t.archived_at IS NULL AND (t.opportunity_title LIKE ? OR t.organization LIKE ?)
+    WHERE t.archive_set_id IS NULL AND t.archived_at IS NULL AND t.ticket_type != 'account' AND (t.opportunity_title LIKE ? OR t.organization LIKE ?)
     GROUP BY t.id ORDER BY ${sort} ${dir} LIMIT 200`).all(q, q);
   res.json({ tickets: rows });
 });
@@ -241,7 +241,7 @@ r.post('/cards', (req, res) => {
         const tf = ticketFields(b.ticket);
         if (tf.opportunity_title) db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
           pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type, work_team_id=CASE WHEN ticket_type = 'work' THEN @work_team_id END,
-          value=CASE WHEN ticket_type = 'work' THEN NULL ELSE @value END, updated_at=datetime('now') WHERE id=@id`).run({ ...tf, id: ticketId });
+          value=CASE WHEN ticket_type = 'work' THEN NULL ELSE @value END, updated_at=datetime('now') WHERE id=@id AND ticket_type != 'account'`).run({ ...tf, id: ticketId });
       }
     } else {
       const tf = ticketFields(b.ticket);
@@ -314,7 +314,7 @@ r.put('/cards/:id', (req, res) => {
     if (b.ticket) {
       db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
         pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type, work_team_id=CASE WHEN ticket_type = 'work' THEN @work_team_id END,
-        value=CASE WHEN ticket_type = 'work' THEN NULL ELSE @value END, updated_at=datetime('now') WHERE id=@id`).run({ ...tf, id: card.ticket_id });
+        value=CASE WHEN ticket_type = 'work' THEN NULL ELSE @value END, updated_at=datetime('now') WHERE id=@id AND ticket_type != 'account'`).run({ ...tf, id: card.ticket_id });
     }
     if (Array.isArray(b.assignees) && b.assignees.length) setAssignees(card.id, b.assignees, card.team_id, card.week_start);
   })();

@@ -211,7 +211,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
                     </select>
                   </Field>
                 )}
-                {!isWork && (
+                {!isWork && ticket.ticket_type !== 'account' && (
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Pipeline status">
                     <select className="input" value={ticket.pipeline_status} onChange={(e) => setT('pipeline_status', e.target.value)} disabled={ro}>
