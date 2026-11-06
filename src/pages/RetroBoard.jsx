@@ -185,7 +185,7 @@ export default function RetroBoard() {
   const [topFirst, setTopFirst] = useState(null); // null until chosen; then it follows the stage
   const [dragId, setDragId] = useState(null);
   const [details, setDetails] = useState(null); // the templates, once open
-  const [lesson, setLesson] = useState(null); // { note, tags, stages }
+  const [lesson, setLesson] = useState(null); // { note, tags }
   const dragging = useRef(false);
   const changes = useRef(0); // a poll that started before a change has old news, so it's dropped
 
@@ -229,7 +229,7 @@ export default function RetroBoard() {
   };
 
   const openDetails = () => api.get('/retros').then((d) => setDetails(d.templates)).catch((e) => setError(e.message));
-  const openLesson = (note) => api.get('/lessons').then((d) => setLesson({ note, tags: d.tags, stages: d.stages })).catch((e) => setError(e.message));
+  const openLesson = (note) => api.get('/lessons').then((d) => setLesson({ note, tags: d.tags })).catch((e) => setError(e.message));
 
   if (gone) {
     return (
@@ -296,7 +296,7 @@ export default function RetroBoard() {
           onSaved={(d) => { setData(d); setDetails(null); }} onDeleted={() => setGone(true)} />
       )}
       {lesson && (
-        <LessonPanel key={lesson.note.id} tags={lesson.tags} stages={lesson.stages}
+        <LessonPanel key={lesson.note.id} tags={lesson.tags}
           defaults={lessonDefaults(lesson.note, lanes.find((l) => l.id === lesson.note.lane_id), board)}
           source={{ source: 'retro', source_id: lesson.note.id }}
           subtitle={`From the retro “${board.name}”. Reword it into a clear next step.`}

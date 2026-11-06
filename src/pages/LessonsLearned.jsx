@@ -8,7 +8,6 @@ import MultiSelect from '../components/MultiSelect.jsx';
 
 const KINDS = [['good', 'Good / Keep'], ['bad', 'Bad / Change']];
 const ACTIONS = [['continue', 'Continue'], ['change', 'Change']];
-const SCOPES = [['pipeline', 'Pipeline'], ['non_pipeline', 'Non-pipeline']];
 const nameOf = (list, key) => list.find(([k]) => k === key)?.[1] || '—';
 
 export const lessonNo = (l) => `LL-${String(l.id).padStart(3, '0')}`;
@@ -18,8 +17,7 @@ const author = (l) => (l.author_first_name ? fullName({ first_name: l.author_fir
 const tagNames = (l) => l.tags.map((t) => t.name).join(' ');
 
 const SORTS = {
-  id: (l) => l.id, kind: (l) => l.kind, action: (l) => l.action, title: (l) => l.title.toLowerCase(),
-  scope: (l) => `${l.scope} ${(l.stage || '').toLowerCase()}`, retro: (l) => l.retro_date || '', logged: (l) => l.created_at,
+  id: (l) => l.id, kind: (l) => l.kind, action: (l) => l.action, title: (l) => l.title.toLowerCase(), retro: (l) => l.retro_date || '', logged: (l) => l.created_at,
 };
 // Columns that start newest-first.
 const FIRST_DESC = ['id', 'retro', 'logged'];
@@ -39,9 +37,9 @@ function Choice({ label, options, value, onChange }) {
   );
 }
 
-const blank = { kind: null, action: null, scope: null, stage: '', title: '', tag_ids: [], context: '', problem: '', solution: '', retro_date: '' };
+const blank = { kind: null, action: null, title: '', tag_ids: [], context: '', problem: '', solution: '', retro_date: '' };
 const fromLesson = (l) => ({
-  kind: l.kind, action: l.action, scope: l.scope, stage: l.stage || '', title: l.title, tag_ids: l.tags.map((t) => t.id),
+  kind: l.kind, action: l.action, title: l.title, tag_ids: l.tags.map((t) => t.id),
   context: l.context || '', problem: l.problem || '', solution: l.solution || '', retro_date: l.retro_date || '',
 });
 
@@ -49,7 +47,7 @@ const fromLesson = (l) => ({
  * Write a lesson down, or read and change one. People who can't change it see it read-only.
  * A retrospective opens this same form: `defaults` fills it in, `source` says which ticket it came from.
  */
-export function LessonPanel({ lesson, defaults, source, subtitle, tags, stages, onTagsChanged, onClose, onSaved }) {
+export function LessonPanel({ lesson, defaults, source, subtitle, tags, onTagsChanged, onClose, onSaved }) {
   const [form, setForm] = useState(() => (lesson ? fromLesson(lesson) : { ...blank, ...defaults }));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -57,12 +55,9 @@ export function LessonPanel({ lesson, defaults, source, subtitle, tags, stages, 
   const readOnly = !!lesson && !lesson.can_edit;
 
   const isGood = form.kind === 'good';
-  const ready = form.kind && (form.kind === 'bad' || form.action) && form.scope && form.title.trim();
-  // A stage that has since left the pipeline stays on the lessons that named it.
-  const stageOptions = form.stage && !stages.includes(form.stage) ? [form.stage, ...stages] : stages;
+  const ready = form.kind && (form.kind === 'bad' || form.action) && form.title.trim();
 
   const chooseKind = (kind) => set({ kind, action: kind === 'bad' ? 'change' : form.kind === 'good' ? form.action : null });
-  const chooseScope = (scope) => set({ scope, stage: scope === 'pipeline' ? form.stage : '' });
   const addTag = async (name) => {
     setError('');
     try {
@@ -109,16 +104,6 @@ export function LessonPanel({ lesson, defaults, source, subtitle, tags, stages, 
           {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
           <Choice label="Good or bad" options={KINDS} value={form.kind} onChange={chooseKind} />
           {isGood && <Choice label="Continue or change" options={ACTIONS} value={form.action} onChange={(action) => set({ action })} />}
-          <Choice label="Where it applies" options={SCOPES} value={form.scope} onChange={chooseScope} />
-          {form.scope === 'pipeline' && (
-            <div>
-              <label className="label" htmlFor="lesson-stage">Pipeline stage</label>
-              <select id="lesson-stage" className="input" value={form.stage} onChange={(e) => set({ stage: e.target.value })}>
-                <option value="">—</option>
-                {stageOptions.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          )}
           <div>
             <label className="label" htmlFor="lesson-title">Title</label>
             <input id="lesson-title" className="input" maxLength={160} value={form.title} onChange={(e) => set({ title: e.target.value })} />
@@ -155,8 +140,6 @@ export default function LessonsLearned() {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState('');
   const [action, setAction] = useState('');
-  const [scope, setScope] = useState('');
-  const [stage, setStage] = useState('');
   const [tagFilter, setTagFilter] = useState([]);
   const [sort, setSort] = useState({ key: 'id', dir: 'desc' });
   const [panel, setPanel] = useState(null); // 'new', or the lesson open
@@ -165,7 +148,7 @@ export default function LessonsLearned() {
   useEffect(() => { load(); }, []);
 
   const lessons = data?.lessons;
-  const filtersOn = q || kind || action || scope || stage || tagFilter.length;
+  const filtersOn = q || kind || action || tagFilter.length;
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     const get = SORTS[sort.key];
@@ -173,7 +156,7 @@ export default function LessonsLearned() {
     // Lessons with no retro date stay last, whichever way the column runs.
     const blankLast = (l) => (sort.key === 'retro' && !l.retro_date ? 1 : 0);
     return (lessons || [])
-      .filter((l) => (!kind || l.kind === kind) && (!action || l.action === action) && (!scope || l.scope === scope) && (!stage || l.stage === stage))
+      .filter((l) => (!kind || l.kind === kind) && (!action || l.action === action))
       .filter((l) => !tagFilter.length || l.tags.some((t) => tagFilter.includes(t.id)))
       .filter((l) => !s || `${lessonNo(l)} ${l.title} ${l.context || ''} ${l.problem || ''} ${l.solution || ''} ${tagNames(l)}`.toLowerCase().includes(s))
       .sort((a, b) => {
@@ -182,10 +165,9 @@ export default function LessonsLearned() {
         const x = get(a), y = get(b);
         return x < y ? -sign : x > y ? sign : b.id - a.id;
       });
-  }, [lessons, q, kind, action, scope, stage, tagFilter, sort]);
+  }, [lessons, q, kind, action, tagFilter, sort]);
 
-  const usedStages = useMemo(() => [...new Set((lessons || []).map((l) => l.stage).filter(Boolean))].sort(), [lessons]);
-  const clearFilters = () => { setQ(''); setKind(''); setAction(''); setScope(''); setStage(''); setTagFilter([]); };
+  const clearFilters = () => { setQ(''); setKind(''); setAction(''); setTagFilter([]); };
 
   const sortBy = (key) => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 'asc' ? 'desc' : 'asc') : FIRST_DESC.includes(key) ? 'desc' : 'asc' }));
   const header = (key, label, className = '') => (
@@ -217,14 +199,6 @@ export default function LessonsLearned() {
           <option value="">Continue and change</option>
           {ACTIONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-        <select className="input w-40" aria-label="Where it applies" value={scope} onChange={(e) => setScope(e.target.value)}>
-          <option value="">All areas</option>
-          {SCOPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-        </select>
-        <select className="input w-44" aria-label="Pipeline stage" value={stage} onChange={(e) => setStage(e.target.value)}>
-          <option value="">All stages</option>
-          {usedStages.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
         <div className="w-full sm:w-64">
           <MultiSelect compact options={(data?.tags || []).map((t) => ({ value: t.id, label: t.name, group: t.tag_group }))} value={tagFilter} onChange={setTagFilter} placeholder="Filter by tag…" />
         </div>
@@ -241,11 +215,11 @@ export default function LessonsLearned() {
         </div>
       ) : data && (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-          <table className="w-full min-w-[60rem] text-sm">
+          <table className="w-full min-w-[50rem] text-sm">
             <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
               <tr>
                 {header('id', 'LL #')}{header('kind', 'Good / Bad')}{header('action', 'Action')}{header('title', 'Lesson')}
-                {header('scope', 'Pipeline')}{header('retro', 'Retro date')}{header('logged', 'Logged')}
+                {header('retro', 'Retro date')}{header('logged', 'Logged')}
               </tr>
             </thead>
             <tbody>
@@ -258,10 +232,6 @@ export default function LessonsLearned() {
                     <div className="font-medium text-slate-800">{l.title}</div>
                     {l.context && <div className="line-clamp-1 text-xs text-slate-500">{l.context}</div>}
                     {l.tags.length > 0 && <div className="mt-1 flex flex-wrap gap-1">{l.tags.map((t) => <span key={t.id} className="chip">{t.name}</span>)}</div>}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-slate-600">
-                    {nameOf(SCOPES, l.scope)}
-                    {l.stage && <div className="text-xs text-slate-500">{l.stage}</div>}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-slate-500">{day(l.retro_date)}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-slate-500">
@@ -276,7 +246,7 @@ export default function LessonsLearned() {
       )}
 
       {panel && (
-        <LessonPanel key={panel === 'new' ? 'new' : panel.id} lesson={panel === 'new' ? null : panel} tags={data.tags} stages={data.stages}
+        <LessonPanel key={panel === 'new' ? 'new' : panel.id} lesson={panel === 'new' ? null : panel} tags={data.tags}
           onTagsChanged={(tags) => setData((d) => ({ ...d, tags }))} onClose={closePanel} onSaved={() => { closePanel(); load(); }} />
       )}
     </div>

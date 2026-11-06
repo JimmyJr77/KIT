@@ -11,7 +11,6 @@ const r = Router();
 
 const KINDS = ['good', 'bad'];
 const ACTIONS = ['continue', 'change'];
-const SCOPES = ['pipeline', 'non_pipeline'];
 const SOURCES = ['manual', 'retro'];
 const TAG_GROUPS = ['Pipeline stages', 'Major milestones', 'Areas', 'Added by users'];
 
@@ -57,22 +56,19 @@ function listLessons(user, id = null) {
   }));
 }
 
-/** A lesson's fields from the request, or { error }. `current` is the lesson being edited. */
-function cleanLesson(b, current) {
+/** A lesson's fields from the request, or { error }. */
+function cleanLesson(b) {
   const title = text(b.title, 160);
   if (!title) return { error: 'Give the lesson a title' };
   if (!KINDS.includes(b.kind)) return { error: 'Choose Good/Keep or Bad/Change' };
   // Bad is always a change; good has to say which.
   const action = b.kind === 'bad' ? 'change' : b.action;
   if (!ACTIONS.includes(action)) return { error: 'Choose Continue or Change' };
-  if (!SCOPES.includes(b.scope)) return { error: 'Choose Pipeline or Non-pipeline' };
-  const stage = b.scope === 'pipeline' ? text(b.stage, 80) || null : null;
-  if (stage && stage !== current?.stage && !allStatuses().includes(stage)) return { error: 'That isn’t a pipeline stage' };
   const retroDate = text(b.retro_date, 10) || null;
   if (retroDate && !isDate(retroDate)) return { error: 'Retro date isn’t a valid date' };
   return {
     fields: {
-      title, kind: b.kind, action, scope: b.scope, stage, retro_date: retroDate,
+      title, kind: b.kind, action, retro_date: retroDate,
       context: text(b.context) || null, problem: text(b.problem) || null, solution: text(b.solution) || null,
     },
   };
@@ -84,7 +80,7 @@ function setTags(lessonId, tagIds) {
   db.prepare('INSERT INTO lesson_tag_links (lesson_id, tag_id) SELECT ?, id FROM lesson_tags WHERE id IN (SELECT value FROM json_each(?))').run(lessonId, ids);
 }
 
-r.get('/', (req, res) => res.json({ lessons: listLessons(req.user), tags: listTags(), stages: allStatuses() }));
+r.get('/', (req, res) => res.json({ lessons: listLessons(req.user), tags: listTags() }));
 
 /** Body: { name }. Naming a tag that already exists returns that tag. */
 r.post('/tags', (req, res) => {
@@ -107,8 +103,8 @@ r.post('/', (req, res) => {
     return res.status(409).json({ error: 'This ticket is already a lesson' });
   }
   const id = db.transaction(() => {
-    const lessonId = db.prepare(`INSERT INTO lessons (title, kind, action, scope, stage, context, problem, solution, retro_date, source, source_id, created_by)
-      VALUES (@title, @kind, @action, @scope, @stage, @context, @problem, @solution, @retro_date, @source, @source_id, @created_by)`)
+    const lessonId = db.prepare(`INSERT INTO lessons (title, kind, action, context, problem, solution, retro_date, source, source_id, created_by)
+      VALUES (@title, @kind, @action, @context, @problem, @solution, @retro_date, @source, @source_id, @created_by)`)
       .run({ ...fields, source, source_id: sourceId, created_by: req.user.id }).lastInsertRowid;
     setTags(lessonId, b.tag_ids);
     return lessonId;
@@ -121,10 +117,10 @@ r.put('/:id', (req, res) => {
   const lesson = db.prepare('SELECT * FROM lessons WHERE id = ?').get(req.params.id);
   if (!lesson) return res.status(404).json({ error: 'Lesson not found' });
   if (!canEdit(lesson, req.user)) return res.status(403).json({ error: 'Only its author or an admin can change a lesson' });
-  const { fields, error } = cleanLesson(req.body || {}, lesson);
+  const { fields, error } = cleanLesson(req.body || {});
   if (error) return res.status(400).json({ error });
   db.transaction(() => {
-    db.prepare(`UPDATE lessons SET title = @title, kind = @kind, action = @action, scope = @scope, stage = @stage, context = @context, problem = @problem,
+    db.prepare(`UPDATE lessons SET title = @title, kind = @kind, action = @action, context = @context, problem = @problem,
       solution = @solution, retro_date = @retro_date, updated_at = datetime('now') WHERE id = @id`).run({ ...fields, id: lesson.id });
     setTags(lesson.id, req.body?.tag_ids);
   })();

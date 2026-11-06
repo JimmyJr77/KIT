@@ -1171,8 +1171,6 @@ CREATE TABLE IF NOT EXISTS lessons (
   title TEXT NOT NULL,
   kind TEXT NOT NULL,   -- good (Good/Keep) | bad (Bad/Change)
   action TEXT NOT NULL, -- continue | change; bad is always change
-  scope TEXT NOT NULL,  -- pipeline | non_pipeline
-  stage TEXT,           -- pipeline stage; pipeline lessons only
   context TEXT,
   problem TEXT,
   solution TEXT,
@@ -1198,6 +1196,17 @@ CREATE TABLE IF NOT EXISTS lesson_tag_links (
   PRIMARY KEY (lesson_id, tag_id)
 );
 `);
+// Lessons used to have their own scope and stage. Tags do that job now; a lesson's stage carries over as a tag.
+if (db.prepare('PRAGMA table_info(lessons)').all().some((c) => c.name === 'scope')) {
+  db.transaction(() => {
+    db.exec(`
+      INSERT OR IGNORE INTO lesson_tags (name, tag_group) SELECT DISTINCT stage, 'Pipeline stages' FROM lessons WHERE stage IS NOT NULL;
+      INSERT OR IGNORE INTO lesson_tag_links (lesson_id, tag_id) SELECT l.id, t.id FROM lessons l JOIN lesson_tags t ON t.name = l.stage COLLATE NOCASE;
+      ALTER TABLE lessons DROP COLUMN stage;
+      ALTER TABLE lessons DROP COLUMN scope;
+    `);
+  })();
+}
 
 // ---- Retrospectives. A retro's tickets and thumbs are anonymous: author_key and voter_key are keyed hashes (anonKey in
 // auth.js) that only say "the same person" within one retro, and tickets keep no timestamps. Never store a user id on them.
