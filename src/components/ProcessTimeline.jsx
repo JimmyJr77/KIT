@@ -53,7 +53,7 @@ export function buildLanes(data) {
 }
 
 /**
- * The Process view of one pipeline ticket: a spine across the middle of the screen from lead to award, a node for each
+ * The Process view of one pipeline ticket: a spine across the upper quarter of the screen from lead to award, a node for each
  * stop, and that stop's content floating above and below the line. `onOpenTool(tool)` opens the ticket on one of its tools
  * (milestones, strategy, assessment…), wherever the view is shown; `reloadKey` makes it fetch again.
  */
@@ -84,15 +84,15 @@ export default function ProcessTimeline({ ticketId, reloadKey = 0, onOpenTool })
         <div ref={scroller} onWheel={onWheel} className="h-full overflow-x-auto overflow-y-hidden outline-none" tabIndex={0} aria-label="Process timeline"
           onKeyDown={(e) => { if (e.key === 'ArrowRight') slide(1); if (e.key === 'ArrowLeft') slide(-1); }}>
           <div className="relative flex h-full min-w-max items-stretch px-20">
-            {/* The spine: a bar with a lit top edge and a soft shadow beneath, so it reads as sitting above the page. */}
-            <div aria-hidden className="pointer-events-none absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-full bg-gradient-to-b from-slate-200 via-slate-400 to-slate-500 shadow-[0_8px_18px_-6px_rgba(15,23,42,.5),inset_0_1px_0_rgba(255,255,255,.9)]" />
+            {/* The spine: a bar with a lit top edge and a soft shadow beneath, so it reads as sitting above the page. It crosses a quarter of the way down, where each stop's node sits (a quarter of the space around the node row, plus half the row). */}
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 top-[calc(25%+0.875rem)] h-2 -translate-y-1/2 rounded-full bg-gradient-to-b from-slate-200 via-slate-400 to-slate-500 shadow-[0_8px_18px_-6px_rgba(15,23,42,.5),inset_0_1px_0_rgba(255,255,255,.9)]" />
             {lanes.map((lane) => <Stop key={lane.key} lane={lane} data={data} onOpenTool={onOpenTool} onChanged={load} />)}
           </div>
         </div>
         <button type="button" onClick={() => slide(-1)} aria-label="Earlier" title="Earlier (←)"
-          className="absolute top-1/2 left-3 z-20 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-slate-500 shadow-md ring-1 ring-slate-200 backdrop-blur hover:text-brand-700"><ChevronLeft size={18} /></button>
+          className="absolute top-[calc(25%+0.875rem)] left-3 z-20 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-slate-500 shadow-md ring-1 ring-slate-200 backdrop-blur hover:text-brand-700"><ChevronLeft size={18} /></button>
         <button type="button" onClick={() => slide(1)} aria-label="Later" title="Later (→)"
-          className="absolute top-1/2 right-3 z-20 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-slate-500 shadow-md ring-1 ring-slate-200 backdrop-blur hover:text-brand-700"><ChevronRight size={18} /></button>
+          className="absolute top-[calc(25%+0.875rem)] right-3 z-20 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-slate-500 shadow-md ring-1 ring-slate-200 backdrop-blur hover:text-brand-700"><ChevronRight size={18} /></button>
       </div>
     </div>
   );
@@ -157,8 +157,8 @@ function Stop({ lane, data, onOpenTool, onChanged }) {
 
   return (
     <section aria-label={title} className={`relative flex h-full ${major ? 'w-[21rem]' : 'w-80'} shrink-0 flex-col px-5`}>
-      {/* Above the line: the heading sits right on the node, with the key facts stacked over it. Scrolls up for more. */}
-      <div data-scrolls className="min-h-0 flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_28px)]">
+      {/* Above the line: the heading sits right on the node, with the key facts stacked over it. Scrolls up for more. One share of the height to the detail's three, so the line sits a quarter of the way down. */}
+      <div data-scrolls className="min-h-0 flex-[1_1_0%] overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_28px)]">
         <div className="flex min-h-full flex-col justify-end pt-7 pb-3">
           <div className="space-y-3 text-xs text-slate-700">{content.above}</div>
           <div className="mt-3">
@@ -181,7 +181,7 @@ function Stop({ lane, data, onOpenTool, onChanged }) {
         )}
       </div>
       {/* Below the line: the detail, scrolling down for more. */}
-      <div data-scrolls className="min-h-0 flex-1 overflow-y-auto [mask-image:linear-gradient(to_top,transparent,black_28px)]">
+      <div data-scrolls className="min-h-0 flex-[3_3_0%] overflow-y-auto [mask-image:linear-gradient(to_top,transparent,black_28px)]">
         <div className="space-y-4 pt-3 pb-7 text-xs text-slate-700">{content.below}</div>
       </div>
     </section>
