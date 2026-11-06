@@ -564,8 +564,10 @@ async function send({ out, tickets }, phase) {
         const { data: now } = await call(`organizations/${row.pipedrive_id}`);
         const view = organizationView(now, { owner: kitUser });
         const snap = json.parse(row.pipedrive_snapshot, {});
+        const agreed = [];
         const ok = o.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
+          if (same(view[f], row[f])) { agreed.push(f); return false; } // both sides already agree: nothing to send, the snapshot just catches up
           conflict({ kind: 'organization', tbl: 'organizations', id: row.id, field: f, title: row.name, kit: row[f], pipedrive: view[f], snapshot: snap[f] });
           return false;
         });
@@ -573,7 +575,7 @@ async function send({ out, tickets }, phase) {
           await call(`organizations/${row.pipedrive_id}`, {}, { method: 'PATCH', body: orgBody(row, ok), v2: true });
           count('organizationsUpdated');
         }
-        const next = { ...snap, ...Object.fromEntries(ok.map((f) => [f, row[f] ?? null])) };
+        const next = { ...snap, ...Object.fromEntries([...ok, ...agreed].map((f) => [f, row[f] ?? null])) };
         db.prepare('UPDATE organizations SET pipedrive_snapshot = ?, pipedrive_pending = 0 WHERE id = ?').run(snapshotOf(next, ORG_TRACKED), row.id);
       }, `o${o.id}`);
     }
@@ -597,7 +599,9 @@ async function send({ out, tickets }, phase) {
         const snap = json.parse(t.pipedrive_snapshot, {});
         const body = {};
         const sentFields = [];
+        const agreed = []; // fields Pipedrive already holds as KIT does
         for (const f of d.fields) {
+          if (same(now[f], t[f])) { agreed.push(f); continue; } // both sides already agree: nothing to send, the snapshot just catches up
           if (!same(now[f], snap[f])) {
             conflict({ kind: 'deal', tbl: 'tickets', id: t.id, field: f, ticket_id: t.id, title: t.opportunity_title, kit: t[f], pipedrive: now[f], snapshot: snap[f] });
             troubled.add(t.id); continue;
@@ -651,11 +655,11 @@ async function send({ out, tickets }, phase) {
           }
           sentFields.push(f);
         }
-        if (!sentFields.length) return;
-        await call(`deals/${t.pipedrive_id}`, {}, { method: 'PATCH', body, v2: true });
-        const next = { ...snap, ...Object.fromEntries(sentFields.map((f) => [f, t[f] ?? null])) };
+        if (!sentFields.length && !agreed.length) return;
+        if (sentFields.length) await call(`deals/${t.pipedrive_id}`, {}, { method: 'PATCH', body, v2: true });
+        const next = { ...snap, ...Object.fromEntries([...sentFields, ...agreed].map((f) => [f, t[f] ?? null])) };
         db.prepare('UPDATE tickets SET pipedrive_snapshot = ? WHERE id = ?').run(snapshotOf(next, tracked), t.id);
-        count('deals');
+        if (sentFields.length) count('deals');
       }, t.id);
     }
   }
@@ -755,17 +759,19 @@ async function send({ out, tickets }, phase) {
         const { data: now } = await call(`activities/${k.pipedrive_id}`);
         const view = activityView(now, kitUser);
         const snap = json.parse(k.pipedrive_snapshot, {});
+        const agreed = [];
         const ok = a.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
+          if (same(view[f], k[f])) { agreed.push(f); return false; } // both sides already agree: nothing to send, the snapshot just catches up
           conflict({ kind: 'activity', tbl: 'ticket_tasks', id: k.id, field: f, ticket_id: a.ticket_id, title: `${a.title} · ${a.text}`, kit: k[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(a.ticket_id);
           return false;
         });
-        if (!ok.length) return;
-        await call(`activities/${k.pipedrive_id}`, {}, { method: 'PUT', body: activityBody(k, ok) });
-        const next = { ...snap, ...Object.fromEntries(ok.map((f) => [f, k[f] ?? null])) };
+        if (!ok.length && !agreed.length) return;
+        if (ok.length) await call(`activities/${k.pipedrive_id}`, {}, { method: 'PUT', body: activityBody(k, ok) });
+        const next = { ...snap, ...Object.fromEntries([...ok, ...agreed].map((f) => [f, k[f] ?? null])) };
         db.prepare('UPDATE ticket_tasks SET pipedrive_snapshot = ? WHERE id = ?').run(snapshotOf(next, TASK_TRACKED), k.id);
-        count('activitiesUpdated');
+        if (ok.length) count('activitiesUpdated');
       }, a.ticket_id);
     }
   }
@@ -845,8 +851,10 @@ async function send({ out, tickets }, phase) {
         if (!now) { skip(p.ticket_id, `${item.title}: "${p.name}" is no longer on the deal in Pipedrive`); return; }
         const view = productView(now);
         const snap = json.parse(p.pipedrive_snapshot, {});
+        const agreed = [];
         const ok = item.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
+          if (same(view[f], p[f])) { agreed.push(f); return false; } // both sides already agree: nothing to send, the snapshot just catches up
           conflict({ kind: 'product', tbl: 'ticket_products', id: p.id, field: f, ticket_id: p.ticket_id, title: `${item.title} · ${p.name}`, kit: p[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(p.ticket_id);
           return false;
@@ -854,7 +862,7 @@ async function send({ out, tickets }, phase) {
         if (ok.includes('name')) skip(p.ticket_id, `${item.title}: a product's name is its catalog entry, so "${p.name}" wasn't renamed in Pipedrive`);
         const keys = ok.filter((f) => f !== 'name');
         if (keys.length) await call(`deals/${t.pipedrive_id}/products/${p.pipedrive_id}`, {}, { method: 'PATCH', body: productBody(p, keys), v2: true });
-        const next = { ...snap, ...Object.fromEntries(ok.map((f) => [f, p[f] ?? null])) };
+        const next = { ...snap, ...Object.fromEntries([...ok, ...agreed].map((f) => [f, p[f] ?? null])) };
         db.prepare('UPDATE ticket_products SET pipedrive_snapshot = ?, pipedrive_pending = 0 WHERE id = ?').run(snapshotOf(next, PRODUCT_TRACKED), p.id);
         if (keys.length) count('productsUpdated');
       }, p.ticket_id);
@@ -885,14 +893,16 @@ async function send({ out, tickets }, phase) {
         if (!now) { skip(i.ticket_id, `${item.title}: the installment is no longer on the deal in Pipedrive`); return; }
         const view = installmentView(now);
         const snap = json.parse(i.pipedrive_snapshot, {});
+        const agreed = [];
         const ok = item.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
+          if (same(view[f], i[f])) { agreed.push(f); return false; } // both sides already agree: nothing to send, the snapshot just catches up
           conflict({ kind: 'installment', tbl: 'ticket_installments', id: i.id, field: f, ticket_id: i.ticket_id, title: `${item.title} · installment`, kit: i[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(i.ticket_id);
           return false;
         });
         if (ok.length) await call(`deals/${t.pipedrive_id}/installments/${i.pipedrive_id}`, {}, { method: 'PATCH', body: body(i), v2: true });
-        const next = { ...snap, ...Object.fromEntries(ok.map((f) => [f, i[f] ?? null])) };
+        const next = { ...snap, ...Object.fromEntries([...ok, ...agreed].map((f) => [f, i[f] ?? null])) };
         db.prepare('UPDATE ticket_installments SET pipedrive_snapshot = ?, pipedrive_pending = 0 WHERE id = ?').run(snapshotOf(next, INSTALLMENT_TRACKED), i.id);
         if (ok.length) count('installmentsUpdated');
       }, i.ticket_id);
@@ -939,14 +949,16 @@ async function send({ out, tickets }, phase) {
         const { data: now } = await call(`persons/${row.pipedrive_id}`);
         const view = personView(now, { organization: kitOrg });
         const snap = json.parse(row.pipedrive_snapshot, {});
+        const agreed = [];
         const ok = c.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
+          if (same(view[f], row[f])) { agreed.push(f); return false; } // both sides already agree: nothing to send, the snapshot just catches up
           conflict({ kind: 'person', tbl: 'contacts', id: row.id, field: f, title: c.text, kit: row[f], pipedrive: view[f], snapshot: snap[f] });
           return false;
         });
         if (ok.includes('organization') && row.organization_id) await ensureOrg(db.prepare('SELECT * FROM organizations WHERE id = ?').get(row.organization_id));
         if (ok.length) { await call(`persons/${row.pipedrive_id}`, {}, { method: 'PATCH', body: personBody(row, ok), v2: true }); count('peopleUpdated'); }
-        const next = { ...snap, ...Object.fromEntries(ok.map((f) => [f, row[f] ?? null])) };
+        const next = { ...snap, ...Object.fromEntries([...ok, ...agreed].map((f) => [f, row[f] ?? null])) };
         db.prepare('UPDATE contacts SET pipedrive_snapshot = ?, pipedrive_pending = 0 WHERE id = ?').run(snapshotOf(next, CONTACT_TRACKED), row.id);
       }, `p${c.id}`);
     }
@@ -989,8 +1001,10 @@ async function send({ out, tickets }, phase) {
         const { data: now } = await call(`projects/${p.pipedrive_project_id}`);
         const view = projectView(now, lk);
         const snap = json.parse(p.pipedrive_snapshot, {});
+        const agreed = [];
         const ok = x.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
+          if (same(view[f], p[f])) { agreed.push(f); return false; } // both sides already agree: nothing to send, the snapshot just catches up
           conflict({ kind: 'project', tbl: 'delivery_programs', id: p.id, field: f, ticket_id: x.ticket_id, title: `${x.title} · project`, kit: p[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(x.ticket_id);
           return false;
@@ -1006,7 +1020,7 @@ async function send({ out, tickets }, phase) {
           else if (f === 'owner_id') { const u = pdUser(p.owner_id); if (u) body.owner_id = u; }
         });
         if (Object.keys(body).length) { await call(`projects/${p.pipedrive_project_id}`, {}, { method: 'PUT', body }); count('projectsUpdated'); }
-        const next = { ...snap, ...Object.fromEntries(ok.map((f) => [f, p[f] ?? null])) };
+        const next = { ...snap, ...Object.fromEntries([...ok, ...agreed].map((f) => [f, p[f] ?? null])) };
         db.prepare('UPDATE delivery_programs SET pipedrive_snapshot = ?, pipedrive_pending = 0 WHERE id = ?').run(snapshotOf(next, PROJECT_TRACKED), p.id);
       }, x.ticket_id);
     }
@@ -1052,14 +1066,16 @@ async function send({ out, tickets }, phase) {
         const view = isAct ? projectActivityView(now, taskLk) : taskView(now, taskLk);
         const trackedKeys = isAct ? DACT_TRACKED : DTASK_TRACKED;
         const snap = json.parse(k.pipedrive_snapshot, {});
+        const agreed = [];
         const ok = a.fields.filter((f) => {
           if (same(view[f], snap[f])) return true;
+          if (same(view[f], k[f])) { agreed.push(f); return false; } // both sides already agree: nothing to send, the snapshot just catches up
           conflict({ kind: 'project_task', tbl: 'delivery_tasks', id: k.id, field: f, ticket_id: a.ticket_id, title: `${a.title} · ${a.text}`, kit: k[f], pipedrive: view[f], snapshot: snap[f] });
           troubled.add(a.ticket_id);
           return false;
         });
         if (ok.length) await call(isAct ? `activities/${k.pipedrive_id}` : `tasks/${k.pipedrive_id}`, {}, { method: 'PUT', body: isAct ? activityBody(k, ok) : taskBody(k, ok) });
-        const next = { ...snap, ...Object.fromEntries(ok.map((f) => [f, k[f] ?? null])) };
+        const next = { ...snap, ...Object.fromEntries([...ok, ...agreed].map((f) => [f, k[f] ?? null])) };
         db.prepare('UPDATE delivery_tasks SET pipedrive_snapshot = ?, pipedrive_pending = 0 WHERE id = ?').run(snapshotOf(next, trackedKeys), k.id);
         if (ok.length) count('tasksUpdated');
       }, a.ticket_id);

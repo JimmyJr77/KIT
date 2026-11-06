@@ -22,6 +22,7 @@ import pipedriveRoutes from './routes/pipedrive.js';
 import labelRoutes from './routes/labels.js';
 import { schedulePipedriveSync, scheduleProjectRefresh } from './services/pipedrive.js';
 import { handleWebhook, scheduleLive } from './services/pipedriveLive.js';
+import { dropAgreed } from './services/pipedriveConflicts.js';
 import { scheduleAutoSend } from './services/pipedriveSend.js';
 import travelRoutes from './routes/travel.js';
 import gsaRoutes from './routes/gsa.js';
@@ -113,6 +114,8 @@ schedulePipedriveSync();
 scheduleProjectRefresh();
 scheduleAutoSend();
 scheduleLive();
+// Conflicts on which both sides hold the same value have nothing to settle (a send once recorded them when a field had no baseline yet).
+try { const n = dropAgreed(); if (n) console.log(`Pipedrive: dropped ${n} conflicts on which KIT and Pipedrive agree`); } catch (e) { console.error('Pipedrive conflicts:', e.message); }
 
 const port = Number(process.env.PORT) || 3001;
 app.listen(port, () => console.log(`KIT API listening on http://localhost:${port}`));

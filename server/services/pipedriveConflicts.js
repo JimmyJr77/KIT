@@ -15,7 +15,15 @@ function row(tbl, id) {
   if (!ident.test(tbl)) throw new Error(`Bad table ${tbl}`);
   return db.prepare(`SELECT * FROM ${tbl} WHERE id = ?`).get(id);
 }
-const allowed = (r, field) => ident.test(field) && r?.pipedrive_snapshot && Object.prototype.hasOwnProperty.call(json.parse(r.pipedrive_snapshot, {}), field);
+const columns = new Map();
+/** Whether `field` is one the record can hold: a column of its table, or a custom deal field on a ticket. */
+function allowed(tbl, r, field) {
+  if (!r?.pipedrive_snapshot || !ident.test(field)) return false;
+  if (field.startsWith('cf_')) return tbl === 'tickets';
+  if (!columns.has(tbl)) columns.set(tbl, new Set(db.prepare(`PRAGMA table_info(${tbl})`).all().map((c) => c.name)));
+  return columns.get(tbl).has(field);
+}
+const same = (a, b) => String(a ?? '') === String(b ?? '');
 
 /** Set one shared field on a record: a column, or a custom deal field inside a ticket's custom_fields. */
 function setField(tbl, r, field, value) {
@@ -63,12 +71,31 @@ export const conflictCount = () => db.prepare('SELECT COUNT(*) AS n FROM pipedri
 export function holdConflicts() {
   for (const c of conflicts()) {
     const r = row(c.tbl, c.row_id);
-    if (!r || !allowed(r, c.field)) { db.prepare('DELETE FROM pipedrive_conflicts WHERE id = ?').run(c.id); continue; }
+    if (!r || !allowed(c.tbl, r, c.field)) { db.prepare('DELETE FROM pipedrive_conflicts WHERE id = ?').run(c.id); continue; }
     const pulled = json.parse(r.pipedrive_snapshot, {})[c.field];
+    // Pipedrive now holds what KIT holds: nothing is in dispute any more. The pull has written both already.
+    if (same(pulled, c.kit_value)) { db.prepare('DELETE FROM pipedrive_conflicts WHERE id = ?').run(c.id); continue; }
     db.prepare('UPDATE pipedrive_conflicts SET pipedrive_value = ? WHERE id = ?').run(json.str(pulled), c.id);
     setField(c.tbl, r, c.field, c.kit_value);
     setSnapshot(c.tbl, r, c.field, c.snapshot_value);
   }
+}
+
+/**
+ * Drop conflicts on which both sides hold the same value: there is nothing to settle, the snapshot just catches up.
+ * (Snapshots from before a field was tracked have no baseline for it, and a send once mistook that for a dispute.)
+ */
+export function dropAgreed() {
+  let n = 0;
+  db.transaction(() => {
+    for (const c of conflicts().filter((x) => same(x.kit_value, x.pipedrive_value))) {
+      const r = row(c.tbl, c.row_id);
+      if (r && allowed(c.tbl, r, c.field)) setSnapshot(c.tbl, r, c.field, c.pipedrive_value);
+      db.prepare('DELETE FROM pipedrive_conflicts WHERE id = ?').run(c.id);
+      n += 1;
+    }
+  })();
+  return n;
 }
 
 /**
@@ -81,7 +108,7 @@ export function resolveConflicts(winner, ids = null) {
   db.transaction(() => {
     for (const c of chosen) {
       const r = row(c.tbl, c.row_id);
-      if (r && allowed(r, c.field)) {
+      if (r && allowed(c.tbl, r, c.field)) {
         // Either way the snapshot becomes Pipedrive's current value: with KIT winning, KIT's value is then a plain change
         // waiting to be sent; with Pipedrive winning, KIT takes that value too and nothing is left to send.
         setSnapshot(c.tbl, r, c.field, c.pipedrive_value);
