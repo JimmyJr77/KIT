@@ -196,7 +196,7 @@ export default function WeeklyPriorities() {
     <div className="flex h-full flex-col">
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
         <PageHeader title={strategic ? 'Strategic Priorities' : tasks ? 'Tasks' : 'Weekly Priorities'}
-          subtitle={strategic ? 'Priority accounts and priority tickets: the agencies and pipeline tickets that matter most, for the team or each member.'
+          subtitle={strategic ? 'Priority accounts and priority tickets: the agencies, pipeline tickets and work tickets that matter most, for the team or each member.'
             : tasks ? 'How the team’s tasks stand. Choose a member for their full list, by this week, due date and strategic priority.' : "Set the week's priorities at check-in. Left-most (or top) card is the top priority."}>
           {weekly && <>
           <button className="btn" onClick={() => { const o = orientation === 'rows' ? 'columns' : 'rows'; setOrientation(o); writePref('kit.priorities.orientation', o); }}>

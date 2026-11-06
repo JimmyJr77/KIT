@@ -6,20 +6,24 @@ import { Building2, Plus, Pencil, Trash2, Star, X, Search, GripVertical, Check, 
 import { api } from '../lib/api.js';
 import { usd } from '../lib/travelCalc.js';
 import SidePanel from './SidePanel.jsx';
-import { TicketCard } from '../pages/Pipeline.jsx';
+import { TicketCard, TicketKindTag } from '../pages/Pipeline.jsx';
 import TicketTimeline from '../pages/TicketTimeline.jsx';
 import { PlanRail, DrawerShell } from '../pages/TicketPlanning.jsx';
 import { ActivitiesDrawer } from '../pages/TicketActivities.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
+/** The line under a ticket's title: organization, then stage and value for a pipeline ticket. */
+const detail = (t) => [t.accounts?.join(', ') || t.organization, ...(t.ticket_type === 'work' ? [] : [t.pipeline_status, money(t.value)])].filter(Boolean).join(' · ');
+/** " · $1,200,000" over the open pipeline tickets among these; nothing when they're all work tickets. */
+const pipelineTotal = (open) => { const bids = open.filter((t) => t.ticket_type !== 'work'); return bids.length ? ` · ${money(bids.reduce((s, t) => s + (t.value || 0), 0))}` : ''; };
 import { isClosed } from '../lib/lanes.js';
 // Words too common in agency names to match on by themselves.
 const GENERIC = new Set(['the', 'and', 'for', 'of', 'command', 'department', 'office', 'agency', 'systems', 'center', 'program', 'executive', 'directorate', 'division', 'service', 'services', 'administration', 'national', 'defense', 'force', 'air', 'u.s.', 'us']);
 
 /**
  * Priority accounts, at the top of My dashboard: agencies, departments and organizations sorted into tiers (tiers, not
- * a ranking), the pipeline tickets that matter at each, and an ordered list of priority tickets picked from those. The
- * tickets show as standard pipeline cards with a "Priority" tag. `userId` shows someone else's, read-only.
+ * a ranking), the pipeline and work tickets that matter at each, and an ordered list of priority tickets picked from those.
+ * The tickets show as standard ticket cards with a "Priority" tag. `userId` shows someone else's, read-only.
  */
 export default function PriorityAccounts({ userId, name }) {
   const [data, setData] = useState(null);
@@ -28,13 +32,13 @@ export default function PriorityAccounts({ userId, name }) {
   const [picking, setPicking] = useState(false);
   const [ticketId, setTicketId] = useState(null);
   const [ticketStep, setTicketStep] = useState(undefined);
-  const [cards, setCards] = useState([]); // full pipeline rows for the priority list
+  const [cards, setCards] = useState([]); // full ticket rows for the priority list
   const url = `/priority-accounts${userId ? `?user=${userId}` : ''}`;
 
   const load = () => api.get(url).then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [url]); // eslint-disable-line react-hooks/exhaustive-deps
   const listKey = data?.list.join(',') || '';
-  const loadCards = () => (listKey ? api.get(`/tickets?scope=all&kind=bid&ids=${listKey}`).then((d) => setCards(d.tickets)) : Promise.resolve(setCards([])));
+  const loadCards = () => (listKey ? api.get(`/tickets?scope=all&ids=${listKey}`).then((d) => setCards(d.tickets)) : Promise.resolve(setCards([])));
   useEffect(() => { loadCards(); }, [listKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Every change returns the whole arrangement; show it. */
@@ -54,7 +58,7 @@ export default function PriorityAccounts({ userId, name }) {
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <div className="mr-auto">
             <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Building2 size={17} className="text-brand-600" /> {edit ? 'Priority accounts' : `${name}'s priority accounts`}</h2>
-            <p className="text-xs text-slate-500">Agencies, departments and organizations in tiers.{edit ? ' Click a tier’s name to rename it, drag accounts between tiers, and click an account to choose its priority pipeline tickets.' : ''}</p>
+            <p className="text-xs text-slate-500">Agencies, departments and organizations in tiers.{edit ? ' Click a tier’s name to rename it, drag accounts between tiers, and click an account to choose its priority tickets.' : ''}</p>
           </div>
           {edit && <AddTier onAdd={(n) => save(api.post('/priority-accounts/tiers', { name: n }))} />}
         </div>
@@ -67,7 +71,7 @@ export default function PriorityAccounts({ userId, name }) {
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <div className="mr-auto">
             <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Star size={17} className="fill-amber-400 text-amber-500" /> Priority tickets</h2>
-            <p className="text-xs text-slate-500">From the accounts above or anywhere in the pipeline{edit ? ', in whatever order you like. Drag to reorder.' : '.'}</p>
+            <p className="text-xs text-slate-500">Pipeline or work tickets, from the accounts above or anywhere else{edit ? ', in whatever order you like. Drag to reorder.' : '.'}</p>
           </div>
           {edit && <button type="button" className="btn" onClick={() => setPicking(true)}><Plus size={15} /> Choose tickets</button>}
         </div>
@@ -78,7 +82,7 @@ export default function PriorityAccounts({ userId, name }) {
             onOpen={(t, step) => { setTicketStep(step); setTicketId(t.id); }} />
         ) : (
           <p className="rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
-            {edit ? 'No priority tickets yet. Choose them from your accounts or anywhere in the pipeline.' : 'No priority tickets yet.'}
+            {edit ? 'No priority tickets yet. Choose them from your accounts, or any open pipeline or work ticket.' : 'No priority tickets yet.'}
           </p>
         )}
       </div>
@@ -231,23 +235,23 @@ function AccountChip({ account, edit, onOpen, handle, overlay }) {
       {edit && <span {...handle} className="cursor-grab p-1.5 text-slate-300 hover:text-slate-500 active:cursor-grabbing" aria-label={`Move ${account.name}`}><GripVertical size={14} /></span>}
       <button type="button" onClick={onOpen} className={`flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-left ${edit ? '' : 'pl-2.5'}`}>
         <span className="truncate font-medium text-slate-800">{account.name}</span>
-        <span className="ml-auto shrink-0 text-[11px] text-slate-500" title={`${account.tickets.length} priority pipeline ticket${account.tickets.length === 1 ? '' : 's'}`}>
-          {account.tickets.length ? `${account.tickets.length} · ${money(open.reduce((s, t) => s + (t.value || 0), 0))}` : 'No tickets'}
+        <span className="ml-auto shrink-0 text-[11px] text-slate-500" title={`${account.tickets.length} priority ticket${account.tickets.length === 1 ? '' : 's'}`}>
+          {account.tickets.length ? `${account.tickets.length}${pipelineTotal(open)}` : 'No tickets'}
         </span>
       </button>
     </div>
   );
 }
 
-// ---- An account: its name, tier and priority pipeline tickets.
+// ---- An account: its name, tier and priority tickets (pipeline or work).
 
 function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
   const [name, setName] = useState(account.name);
-  const [all, setAll] = useState(null); // every open pipeline ticket, for picking
+  const [all, setAll] = useState(null); // every open pipeline and work ticket, for picking
   const [q, setQ] = useState('');
   const [everyOrg, setEveryOrg] = useState(false);
   useEffect(() => {
-    if (edit) api.get('/tickets?scope=all&kind=bid').then((d) => setAll(d.tickets.filter((t) => !t.archived && !isClosed(t))));
+    if (edit) api.get('/tickets?scope=all').then((d) => setAll(d.tickets.filter((t) => !t.archived && !isClosed(t))));
   }, [edit]);
   const chosen = account.tickets.map((t) => t.id);
   const setTickets = (ids) => save(api.put(`/priority-accounts/accounts/${account.id}/tickets`, { ticket_ids: ids }));
@@ -314,14 +318,14 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
           </div>
         )}
         <div>
-          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority pipeline tickets</h3>
+          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority tickets</h3>
           {account.tickets.length ? (
             <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
               {account.tickets.map((t, i) => (
                 <li key={t.id} className="flex items-center gap-2 px-3 py-2 text-sm">
                   <button type="button" className="min-w-0 flex-1 text-left hover:underline" onClick={() => onOpenTicket(t.id)}>
-                    <div className="truncate font-medium text-slate-800">{t.opportunity_title}</div>
-                    <div className="truncate text-xs text-slate-500">{[t.organization, t.pipeline_status, money(t.value)].filter(Boolean).join(' · ')}</div>
+                    <div className="flex items-center gap-1.5"><span className="truncate font-medium text-slate-800">{t.opportunity_title}</span><TicketKindTag ticket={t} /></div>
+                    <div className="truncate text-xs text-slate-500">{detail(t)}</div>
                   </button>
                   {edit && (
                     <>
@@ -336,11 +340,11 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
         </div>
         {edit && (
           <div>
-            <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Add pipeline tickets</h3>
+            <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Add tickets</h3>
             <div className="mb-2 flex flex-wrap items-center gap-3">
               <div className="relative min-w-48 flex-1">
                 <Search size={14} className="absolute top-2.5 left-2.5 text-slate-400" />
-                <input className="input h-9 pl-8 text-sm" placeholder="Search open pipeline tickets" value={q} onChange={(e) => setQ(e.target.value)} />
+                <input className="input h-9 pl-8 text-sm" placeholder="Search open pipeline and work tickets" value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
               <label className="flex items-center gap-1.5 text-xs text-slate-600">
                 <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={everyOrg} onChange={(e) => setEveryOrg(e.target.checked)} />
@@ -354,15 +358,15 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
                     <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-brand-50" onClick={() => setTickets([...chosen, t.id])}>
                       <Plus size={14} className="shrink-0 text-brand-600" />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium text-slate-800">{t.opportunity_title}</span>
-                        <span className="block truncate text-xs text-slate-500">{[t.organization, t.pipeline_status, money(t.value)].filter(Boolean).join(' · ')}</span>
+                        <span className="flex items-center gap-1.5"><span className="truncate font-medium text-slate-800">{t.opportunity_title}</span><TicketKindTag ticket={t} /></span>
+                        <span className="block truncate text-xs text-slate-500">{detail(t)}</span>
                       </span>
                     </button>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-slate-400">{q || everyOrg ? 'No matching open pipeline tickets.' : `No open pipeline tickets for ${account.name}. Search, or tick Every organization.`}</p>
+              <p className="text-sm text-slate-400">{q || everyOrg ? 'No matching open tickets.' : `No open tickets for ${account.name}. Search, or tick Every organization.`}</p>
             )}
           </div>
         )}
@@ -413,7 +417,7 @@ function AccountStrategy({ account, edit, save }) {
   );
 }
 
-// ---- The priority ticket list: pipeline cards in the owner's order.
+// ---- The priority ticket list: ticket cards in the owner's order.
 
 function PriorityList({ list, edit, onReorder, onRemove, onOpen }) {
   const [order, setOrder] = useState(null);
@@ -455,14 +459,14 @@ function SortableTicket({ n, ticket, edit, onRemove, onOpen }) {
   );
 }
 
-/** Choose priority tickets: from under your accounts, or search any open pipeline ticket. New picks go to the end of the list. */
+/** Choose priority tickets: from under your accounts, or search any open pipeline or work ticket. New picks go to the end of the list. */
 function PickList({ tickets, cards, chosen, onClose, onSave }) {
   const [picked, setPicked] = useState(chosen);
-  const [all, setAll] = useState(null); // every open pipeline ticket, for searching
+  const [all, setAll] = useState(null); // every open pipeline and work ticket, for searching
   const [q, setQ] = useState('');
   const [everyOrg, setEveryOrg] = useState(false);
   useEffect(() => {
-    api.get('/tickets?scope=all&kind=bid').then((d) => setAll(d.tickets.filter((t) => !t.archived && !isClosed(t))));
+    api.get('/tickets?scope=all').then((d) => setAll(d.tickets.filter((t) => !t.archived && !isClosed(t))));
   }, []);
   const toggle = (id) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
   const rows = useMemo(() => {
@@ -474,7 +478,7 @@ function PickList({ tickets, cards, chosen, onClose, onSave }) {
     return [...yours, ...others];
   }, [tickets, cards, all, picked, q, everyOrg]);
   return (
-    <SidePanel title="Choose priority tickets" subtitle="From your priority accounts, or search any open pipeline ticket" onClose={onClose}
+    <SidePanel title="Choose priority tickets" subtitle="From your priority accounts, or search any open pipeline or work ticket" onClose={onClose}
       footer={(
         <div className="flex justify-end gap-2">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
@@ -484,7 +488,7 @@ function PickList({ tickets, cards, chosen, onClose, onSave }) {
       <div className="mb-2 flex flex-wrap items-center gap-3">
         <div className="relative min-w-48 flex-1">
           <Search size={14} className="absolute top-2.5 left-2.5 text-slate-400" />
-          <input className="input h-9 pl-8 text-sm" placeholder="Search open pipeline tickets" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="input h-9 pl-8 text-sm" placeholder="Search open pipeline and work tickets" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <label className="flex items-center gap-1.5 text-xs text-slate-600">
           <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={everyOrg} onChange={(e) => setEveryOrg(e.target.checked)} />
@@ -498,15 +502,15 @@ function PickList({ tickets, cards, chosen, onClose, onSave }) {
               <label className="flex cursor-pointer items-start gap-2.5 rounded px-2 py-2 hover:bg-slate-50">
                 <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-600" checked={picked.includes(t.id)} onChange={() => toggle(t.id)} />
                 <span className="min-w-0">
-                  <span className="block text-sm font-medium text-slate-800">{t.opportunity_title}</span>
-                  <span className="block text-xs text-slate-500">{[t.accounts?.join(', ') || t.organization, t.pipeline_status, money(t.value)].filter(Boolean).join(' · ')}</span>
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-slate-800">{t.opportunity_title} <TicketKindTag ticket={t} /></span>
+                  <span className="block text-xs text-slate-500">{detail(t)}</span>
                 </span>
               </label>
             </li>
           ))}
         </ul>
       ) : (
-        <p className="text-sm text-slate-400">{(q || everyOrg) && !all ? 'Loading…' : q || everyOrg ? 'No matching open pipeline tickets.' : 'No tickets under your accounts yet. Search, or tick Every organization.'}</p>
+        <p className="text-sm text-slate-400">{(q || everyOrg) && !all ? 'Loading…' : q || everyOrg ? 'No matching open tickets.' : 'No tickets under your accounts yet. Search, or tick Every organization.'}</p>
       )}
     </SidePanel>
   );

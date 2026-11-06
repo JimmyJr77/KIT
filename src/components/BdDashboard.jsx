@@ -84,6 +84,8 @@ function TodoHighlights({ todo, isTeam, self, who, teamLabel }) {
           sub={[p.work && `${p.work} more added after planning`, p.waiting && `${p.waiting} waiting on client, not counted`].filter(Boolean).join(' · ') || null}>
           <Meter value={p.completed} target={p.planned || null} format={String} noun="planned" label="Share of this week's planned priorities completed" />
         </StatTile>
+        <StatTile label="Priorities closed per week" value={p.perWeek ?? '—'}
+          sub={p.weeks ? `Average over the last ${p.weeks === 1 ? 'week' : `${p.weeks} weeks`} · waiting on client not counted` : 'No finished weeks yet'} />
         <StatTile label="Open tasks" value={todo.activities.open}
           sub={[todo.activities.overdue && `${todo.activities.overdue} overdue`, todo.activities.dueThisWeek && `${todo.activities.dueThisWeek} due this week`].filter(Boolean).join(' · ') || 'Activities assigned'} />
         <StatTile label="Unread alerts" value={todo.alerts} sub={self ? <Link to="/alerts" className="text-brand-700 hover:underline">Open alerts</Link> : null} />
@@ -248,6 +250,40 @@ function TopMetrics({ top, people, territory }) {
           </ChartCard>
         )}
       </div>
+      <SpendWatch watch={top.spendWatch} />
+    </section>
+  );
+}
+
+/** The upcoming months and quarters whose spend, actual or estimated, goes over the limit; or a quiet line when none does. */
+function SpendWatch({ watch: w }) {
+  if (!w) return null;
+  const flagged = [...w.months.map((x) => ({ ...x, kind: 'month' })), ...w.quarters.map((x) => ({ ...x, kind: 'quarter' }))];
+  const limits = `${compact(w.limits.month)} in a month or ${compact(w.limits.quarter)} in a quarter`;
+  const span = `the next ${w.ahead.months} months`;
+  if (!flagged.length) {
+    return (
+      <p className="mt-4 flex items-center gap-2 text-xs text-slate-500">
+        <Info size={14} className="shrink-0 text-slate-400" /> No month or quarter in {span} goes over {limits}, actual or estimated.
+      </p>
+    );
+  }
+  return (
+    <section className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4" aria-label="Spend over the limit">
+      <header className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <AlertTriangle size={15} className="text-amber-600" />
+        <h3 className="text-sm font-semibold text-amber-900">Spend over the limit</h3>
+        <span className="text-xs text-amber-800">Over {limits}, actual or estimated, in {span}. Actual is travel and marketing spend; estimated swaps in the trip estimates.</span>
+      </header>
+      <ul className="divide-y divide-amber-200">
+        {flagged.map((x) => (
+          <li key={`${x.kind}-${x.key}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2">
+            <span className="text-sm font-semibold text-amber-900">{x.label}</span>
+            <span className="text-xs text-amber-800 tabular-nums">{fullMoney(x.actual)} actual · {fullMoney(x.estimated)} estimated</span>
+            <span className="ml-auto text-xs font-semibold text-red-700 tabular-nums">{fullMoney(Math.max(x.actual, x.estimated) - x.limit)} over the {x.kind}'s {compact(x.limit)}</span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

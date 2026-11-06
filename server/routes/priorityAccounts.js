@@ -1,6 +1,6 @@
 // Priority accounts, at the top of My dashboard: each person sorts the agencies, departments and organizations that
-// matter most into tiers (Tier 1, Tier 2, …; tiers, not a ranking), picks the pipeline tickets that matter at each, and keeps
-// one ordered list of priority tickets, from those or any other pipeline ticket. A ticket on anyone's list carries a "Priority" tag.
+// matter most into tiers (Tier 1, Tier 2, …; tiers, not a ranking), picks the pipeline and work tickets that matter at each, and keeps
+// one ordered list of priority tickets, from those or any other pipeline or work ticket. A ticket on anyone's list carries a "Priority" tag.
 import { Router } from 'express';
 import { db } from '../db.js';
 
@@ -35,12 +35,12 @@ function dropActivityTickets(ids) {
   db.prepare("DELETE FROM tickets WHERE ticket_type = 'account' AND id IN (SELECT value FROM json_each(?))").run(list);
 }
 
-/** Someone's tiers, accounts, account tickets and priority list. Pipeline tickets archived (by hand or by a full reset) are left out. */
+/** Someone's tiers, accounts, account tickets and priority list. Tickets archived (by hand or by a full reset) are left out. */
 export function priorityAccounts(userId) {
   const tiers = db.prepare('SELECT id, name, position FROM priority_tiers WHERE user_id = ? ORDER BY position, id').all(userId);
   const accounts = db.prepare(`SELECT a.id, a.tier_id, a.name, a.position, a.strategy, a.ticket_id FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
     WHERE t.user_id = ? ORDER BY a.position, a.id`).all(userId);
-  const tickets = db.prepare(`SELECT pt.account_id, pt.position, t.id, t.opportunity_title, t.organization, t.pipeline_status, t.value
+  const tickets = db.prepare(`SELECT pt.account_id, pt.position, t.id, t.opportunity_title, t.organization, t.pipeline_status, t.value, t.ticket_type
     FROM priority_account_tickets pt JOIN priority_accounts a ON a.id = pt.account_id JOIN priority_tiers tr ON tr.id = a.tier_id
     JOIN tickets t ON t.id = pt.ticket_id WHERE tr.user_id = ? AND t.archived_at IS NULL ORDER BY pt.position`).all(userId);
   const list = db.prepare(`SELECT l.ticket_id FROM priority_list_tickets l JOIN tickets t ON t.id = l.ticket_id
@@ -167,11 +167,11 @@ r.put('/accounts/:id/strategy', (req, res) => {
   res.json(priorityAccounts(req.user.id));
 });
 
-/** Body: { ticket_ids: [] }, in order: the account's priority pipeline tickets. The priority list stands on its own, so it doesn't change. */
+/** Body: { ticket_ids: [] }, in order: the account's priority tickets (pipeline or work; never an account's hidden ticket). The priority list stands on its own, so it doesn't change. */
 r.put('/accounts/:id/tickets', (req, res) => {
   if (!ownAccount(req.params.id, req.user.id)) return res.status(404).json({ error: 'Account not found' });
   const ids = [...new Set((Array.isArray(req.body?.ticket_ids) ? req.body.ticket_ids : []).map(Number).filter(Boolean))]
-    .filter((id) => db.prepare("SELECT 1 FROM tickets WHERE id = ? AND ticket_type = 'bid'").get(id));
+    .filter((id) => db.prepare("SELECT 1 FROM tickets WHERE id = ? AND ticket_type IN ('bid', 'work')").get(id));
   db.transaction(() => {
     db.prepare('DELETE FROM priority_account_tickets WHERE account_id = ?').run(req.params.id);
     const add = db.prepare('INSERT INTO priority_account_tickets (account_id, ticket_id, position) VALUES (?, ?, ?)');
@@ -180,10 +180,10 @@ r.put('/accounts/:id/tickets', (req, res) => {
   res.json(priorityAccounts(req.user.id));
 });
 
-/** Body: { ticket_ids: [] }, in order: your priority tickets, from under your accounts or any other pipeline ticket. */
+/** Body: { ticket_ids: [] }, in order: your priority tickets, from under your accounts or any other pipeline or work ticket. */
 r.put('/list', (req, res) => {
   const ids = [...new Set((Array.isArray(req.body?.ticket_ids) ? req.body.ticket_ids : []).map(Number).filter(Boolean))]
-    .filter((id) => db.prepare("SELECT 1 FROM tickets WHERE id = ? AND ticket_type = 'bid'").get(id));
+    .filter((id) => db.prepare("SELECT 1 FROM tickets WHERE id = ? AND ticket_type IN ('bid', 'work')").get(id));
   db.transaction(() => {
     db.prepare('DELETE FROM priority_list_tickets WHERE user_id = ?').run(req.user.id);
     const add = db.prepare('INSERT INTO priority_list_tickets (user_id, ticket_id, position) VALUES (?, ?, ?)');

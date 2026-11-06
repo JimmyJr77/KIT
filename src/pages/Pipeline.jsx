@@ -4,7 +4,7 @@ import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useS
 import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp, Star, Trophy } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
-import { fullName, fullStamp } from '../lib/format.js';
+import { fullName, fullStamp, ticketKind } from '../lib/format.js';
 import { activityTimer, daysSince } from '../lib/activityTimer.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -285,7 +285,13 @@ export function PriorityTag({ of }) {
   );
 }
 
-/** The standard pipeline ticket card. Used on the board and on My dashboard's priority tickets. */
+/** "Work Ticket" on a work ticket, so it stands out among pipeline tickets; nothing on a pipeline ticket. */
+export function TicketKindTag({ ticket }) {
+  if (ticket?.ticket_type !== 'work') return null;
+  return <span className="rounded bg-slate-200 px-1.5 py-px text-[11px] font-semibold text-slate-700">{ticketKind(ticket)}</span>;
+}
+
+/** The standard ticket card. Used on the pipeline board and on My dashboard's priority tickets (pipeline or work). */
 export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, className = '' }) {
   const owner = t.owner_first_name ? { id: t.created_by, first_name: t.owner_first_name, last_name: t.owner_last_name } : null;
   const days = daysSince(t.last_activity, now);
@@ -296,15 +302,16 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
       <NextStepBadge step={t.next_step} onOpen={() => onOpenStep?.(t)} className="absolute top-1/2 right-2 -translate-y-1/2" />
       <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
       <div className="mt-0.5 h-4 truncate text-xs text-slate-500">{[t.organization, t.account_type].filter(Boolean).join(' · ')}</div>
-      {(t.priority_of || t.labels?.length > 0) && (
+      {(t.ticket_type === 'work' || t.priority_of || t.labels?.length > 0) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          <TicketKindTag ticket={t} />
           <PriorityTag of={t.priority_of} />
           <LabelList labels={t.labels} />
         </div>
       )}
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1">
-          <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 tabular-nums">{t.value != null ? money(t.value) : '—'}</span>
+          {t.ticket_type !== 'work' && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 tabular-nums">{t.value != null ? money(t.value) : '—'}</span>}
           {t.pwin && (
             <span className="rounded bg-brand-50 px-1.5 py-0.5 text-xs font-semibold whitespace-nowrap text-brand-700 tabular-nums" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>
               {t.pwin.score}%

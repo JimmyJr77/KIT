@@ -45,6 +45,33 @@ function money(s) {
   return { list: bids(f).filter(keep), deals: contracts(f).filter(keep) };
 }
 
+const PACE_WEEKS = 12;
+
+/**
+ * How many priorities the scope's people closed in the finished weeks (this one is still going), up to the last twelve,
+ * and how many such weeks there were, counting from the first week any of them had a priority. A priority waiting on
+ * the client isn't closed, however it's flagged. Archiving doesn't undo a week, so archived cards count like any other.
+ */
+function closedPerWeek(s, today) {
+  const people = inList(s.people);
+  let closed = 0;
+  let weeks = 0;
+  for (const t of db.prepare('SELECT id, checkin_dow FROM teams').all()) {
+    const thisWeek = weekStartFor(today, t.checkin_dow);
+    const from = addDays(thisWeek, -7 * PACE_WEEKS);
+    const { first, done } = db.prepare(`SELECT MIN(c.week_start) AS first,
+        COUNT(DISTINCT CASE WHEN c.week_start >= ? AND c.week_start < ? AND c.completed = 1
+          AND COALESCE((SELECT k.waiting_client FROM ticket_tasks k WHERE k.id = c.activity_id), 0) = 0 THEN c.id END) AS done
+      FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id
+      WHERE c.team_id = ? AND a.user_id IN (SELECT value FROM json_each(?))`).get(from, thisWeek, t.id, people);
+    if (!first || first >= thisWeek) continue;
+    const start = first > from ? first : from;
+    closed += done;
+    weeks = Math.max(weeks, Math.round((Date.parse(thisWeek) - Date.parse(start)) / (7 * 864e5)));
+  }
+  return { closed, weeks };
+}
+
 /** This week's priorities, open activities, alerts, trips, events and account objectives for the scope's people. */
 function todo(s) {
   const today = localToday();
@@ -60,6 +87,7 @@ function todo(s) {
   // A planned priority that's still open because we're waiting on the client doesn't count against completion.
   const waiting = cards.filter((c) => c.is_planned && !c.completed && c.waiting_client);
   const planned = cards.filter((c) => c.is_planned && !waiting.includes(c));
+  const pace = closedPerWeek(s, today);
   const activities = db.prepare(`SELECT k.id, k.text, k.due_date, k.ticket_id, t.opportunity_title, u.first_name || ' ' || u.last_name AS who
     FROM ticket_tasks k JOIN tickets t ON t.id = k.ticket_id LEFT JOIN users u ON u.id = k.assignee_id
     WHERE k.done = 0 AND k.assignee_id IN (SELECT value FROM json_each(?)) AND t.archived_at IS NULL`).all(people);
@@ -82,6 +110,7 @@ function todo(s) {
   return {
     priorities: {
       planned: planned.length, completed: planned.filter((c) => c.completed).length, work: cards.filter((c) => !c.is_planned).length, waiting: waiting.length,
+      perWeek: pace.weeks ? Math.round((pace.closed / pace.weeks) * 10) / 10 : null, weeks: pace.weeks,
       open: cards.filter((c) => !c.completed).map((c) => ({ id: c.id, ticket_id: c.ticket_id, title: c.title, ticket: c.opportunity_title, due_date: c.due_date, who: many ? c.who : null, waiting_client: !!c.waiting_client })),
     },
     activities: {
@@ -111,6 +140,31 @@ function expenses(s, entries, deals, start, end) {
   return { travel, travelEstimated: estimated, marketing, total, revenue, ratio: revenue ? total / revenue : null };
 }
 
+
+const SPEND_LIMITS = { month: 15000, quarter: 45000 };
+const SPEND_AHEAD = { months: 12, quarters: 4 };
+
+/**
+ * The months and quarters ahead (this one included) whose spend goes over the limit, actual or estimated. Actual is
+ * travel actuals plus marketing spend; estimated is trip estimates plus marketing spend. Only the ones over are returned.
+ */
+function spendWatch(s, entries, deals, today) {
+  const [y, m] = today.split('-').map(Number);
+  const months = Array.from({ length: SPEND_AHEAD.months }, (_, i) => {
+    const d = new Date(Date.UTC(y, m - 1 + i, 1));
+    const end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+    return { key: d.toISOString().slice(0, 7), label: d.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }),
+      start: d.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10), limit: SPEND_LIMITS.month };
+  });
+  const qs = quarters(SPEND_AHEAD.quarters, 0, today).map((q) => ({ key: q, label: q, ...quarterRange(q), limit: SPEND_LIMITS.quarter }));
+  const check = (p) => {
+    const e = expenses(s, entries, deals, p.start, p.end);
+    const actual = e.travel + e.marketing;
+    const estimated = e.travelEstimated + e.marketing;
+    return { key: p.key, label: p.label, limit: p.limit, actual, estimated, over: Math.max(actual, estimated) > p.limit };
+  };
+  return { limits: SPEND_LIMITS, ahead: SPEND_AHEAD, months: months.map(check).filter((x) => x.over), quarters: qs.map(check).filter((x) => x.over) };
+}
 
 /** `basis` is how the yearly figures run: 'calendar' (this year to date) or 't4q' (the last four finished quarters). */
 export function bdDashboard(s, basis = 'calendar') {
@@ -167,6 +221,7 @@ export function bdDashboard(s, basis = 'calendar') {
         all: { count: qualified.length, weighted: sum(qualified, weighted) },
       },
       expenses: { quarter: { label: thisQ, ...expenses(s, entries, deals, qr.start, qr.end) }, year: { label: yr.label, ...expenses(s, entries, deals, yr.start, t4q ? yr.end : yearEnd) } },
+      spendWatch: spendWatch(s, entries, deals, today),
     },
     basis: t4q ? 't4q' : 'calendar',
     // Per person in a team: what each spent and brought in over the year (calendar or trailing).

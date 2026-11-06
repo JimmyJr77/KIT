@@ -5,13 +5,15 @@ import { fullName, initials } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import SidePanel from './SidePanel.jsx';
 import PriorityAccounts from './PriorityAccounts.jsx';
-import { TicketCard } from '../pages/Pipeline.jsx';
+import { TicketCard, TicketKindTag } from '../pages/Pipeline.jsx';
 import TicketTimeline from '../pages/TicketTimeline.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 import { isClosed } from '../lib/lanes.js';
 const readPref = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 const writePref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
+/** " · $1,200,000" over the open pipeline tickets among these; nothing when they're all work tickets. */
+const pipelineTotal = (open) => { const bids = open.filter((k) => k.ticket_type !== 'work'); return bids.length ? ` · ${money(bids.reduce((s, k) => s + (k.value || 0), 0))}` : ''; };
 const hasAny = (p) => p.list.length > 0 || p.tiers.some((t) => t.accounts.length);
 
 /**
@@ -126,7 +128,7 @@ function TeamRollup({ people }) {
     return [...m.values()].sort((a, b) => b.people.length - a.people.length || best(a) - best(b) || mean(a) - mean(b));
   }, [people]);
   const idKey = ranked.map((x) => x.id).sort((a, b) => a - b).join(',');
-  const loadCards = () => (idKey ? api.get(`/tickets?scope=all&kind=bid&ids=${idKey}`).then((d) => setCards(d.tickets)) : Promise.resolve(setCards([])));
+  const loadCards = () => (idKey ? api.get(`/tickets?scope=all&ids=${idKey}`).then((d) => setCards(d.tickets)) : Promise.resolve(setCards([])));
   useEffect(() => { loadCards(); }, [idKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const cardById = new Map(cards.map((c) => [c.id, c]));
   const list = ranked.filter((x) => cardById.has(x.id));
@@ -140,7 +142,7 @@ function TeamRollup({ people }) {
       <div>
         <div className="mb-3">
           <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Building2 size={17} className="text-brand-600" /> Priority accounts</h2>
-          <p className="text-xs text-slate-500">Everyone&apos;s tiers together. Faces show who lists each account; click one to see its priority pipeline tickets.</p>
+          <p className="text-xs text-slate-500">Everyone&apos;s tiers together. Faces show who lists each account; click one to see its priority tickets.</p>
         </div>
         <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(15rem,1fr))]">
           {tiers.map((t) => (
@@ -154,7 +156,7 @@ function TeamRollup({ people }) {
                       className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-left text-sm hover:border-brand-500">
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-medium text-slate-800">{a.name}</span>
-                        <span className="block text-[11px] text-slate-500">{a.tickets.length ? `${a.tickets.length} ticket${a.tickets.length === 1 ? '' : 's'} · ${money(open.reduce((s, k) => s + (k.value || 0), 0))}` : 'No tickets'}</span>
+                        <span className="block text-[11px] text-slate-500">{a.tickets.length ? `${a.tickets.length} ticket${a.tickets.length === 1 ? '' : 's'}${pipelineTotal(open)}` : 'No tickets'}</span>
                       </span>
                       <Avatars list={a.people} max={3} />
                     </button>
@@ -194,22 +196,22 @@ function TeamRollup({ people }) {
 
       {account && (
         <SidePanel title={account.name} subtitle={`${account.tier} · listed by ${account.people.map((p) => fullName(p.member)).join(', ')}`} onClose={() => setOpenAccount(null)} wide>
-          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority pipeline tickets</h3>
+          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority tickets</h3>
           {account.tickets.length ? (
             <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
               {account.tickets.map((k) => (
                 <li key={k.id}>
                   <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={() => { setTicketStep(undefined); setTicketId(k.id); }}>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium text-slate-800">{k.opportunity_title}</span>
-                      <span className="block truncate text-xs text-slate-500">{[k.organization, k.pipeline_status, money(k.value)].filter(Boolean).join(' · ')}</span>
+                      <span className="flex items-center gap-1.5"><span className="truncate font-medium text-slate-800">{k.opportunity_title}</span><TicketKindTag ticket={k} /></span>
+                      <span className="block truncate text-xs text-slate-500">{[k.organization, ...(k.ticket_type === 'work' ? [] : [k.pipeline_status, money(k.value)])].filter(Boolean).join(' · ')}</span>
                     </span>
                     <Avatars list={k.people} max={4} />
                   </button>
                 </li>
               ))}
             </ul>
-          ) : <p className="text-sm text-slate-400">No pipeline tickets chosen for this account.</p>}
+          ) : <p className="text-sm text-slate-400">No tickets chosen for this account.</p>}
           <h3 className="mt-5 mb-1.5 text-sm font-semibold text-slate-800">Foothold strategy</h3>
           {account.strategies.length ? (
             <div className="space-y-3">
