@@ -41,7 +41,7 @@ export default function RaceGame({ onClose, track: initialTrack }) {
   const canRace = !!info && (info.unlimited || info.tokens >= info.cost);
 
   return (
-    <div className="fixed inset-0 z-[70] bg-slate-950 text-slate-100" role="dialog" aria-label="KITT race">
+    <div className="fixed inset-0 z-[70] bg-slate-950 text-slate-100" role="dialog" aria-label="KIT Raceway">
       {run ? (
         <Race key={run.n} track={run.track} info={info} canRace={canRace} error={error}
           onAgain={() => start(run.track.id)} onExit={() => { setRun(null); load(); }}
@@ -60,7 +60,7 @@ function Lobby({ info, error, selected, onSelect, canRace, onRace, onClose }) {
     <div className="mx-auto flex h-full max-w-5xl flex-col gap-5 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold"><Flag className="text-red-500" /> KITT Raceway</h1>
+          <h1 className="flex items-center gap-2 text-2xl font-bold"><Flag className="text-red-500" /> KIT Raceway</h1>
           <p className="mt-1 text-sm text-slate-400">Drive from the start line to the chequered flag as fast as you can. Arrow keys or WASD, or drag the car. Touch a wall and it’s over.</p>
         </div>
         <button type="button" onClick={onClose} className="rounded-md p-2 text-slate-400 hover:bg-slate-800 hover:text-white" aria-label="Close"><X size={18} /></button>
@@ -100,10 +100,9 @@ function Lobby({ info, error, selected, onSelect, canRace, onRace, onClose }) {
   );
 }
 
-const Tokens = ({ info }) => info && (
+const Tokens = ({ info }) => info && !info.unlimited && (
   <p className="text-sm text-slate-300">
-    {info.unlimited ? <><span className="font-semibold text-amber-300">Admin</span> · unlimited races</>
-      : <><span className="font-semibold text-amber-300">{info.tokens} token{info.tokens === 1 ? '' : 's'}</span> · a race costs {info.cost}. Finish a task to earn one, a priority to earn five.</>}
+    <span className="font-semibold text-amber-300">{info.tokens} token{info.tokens === 1 ? '' : 's'}</span> · a race costs {info.cost}. Finish a task to earn one, a priority to earn five.
   </p>
 );
 
@@ -345,7 +344,7 @@ function Race({ track, info, canRace, error, onAgain, onExit, onResult }) {
         <span className="text-slate-500">{track.difficulty}</span>
         <span ref={timeEl} className="ml-auto text-lg font-bold tabular-nums">0.00s</span>
         <span className="text-slate-500">{status === 'ready' ? 'Press an arrow key, or drag the car, to start the clock' : status === 'running' ? 'Go!' : ''}</span>
-        <span className="text-xs text-slate-500">{info?.unlimited ? 'Admin · unlimited' : `${info?.tokens ?? 0} token${info?.tokens === 1 ? '' : 's'}`} · Esc to quit</span>
+        <span className="text-xs text-slate-500">{info?.unlimited ? '' : `${info?.tokens ?? 0} token${info?.tokens === 1 ? '' : 's'} · `}Esc to quit</span>
       </div>
       <div ref={box} className="relative min-h-0 flex-1 select-none">
         <canvas ref={canvas} className={`block ${status === 'ready' || status === 'running' ? 'cursor-grab' : ''}`} />

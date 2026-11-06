@@ -17,6 +17,8 @@ const TEMPLATES = [
   { key: 'blank', name: 'Blank', hint: 'No lanes. Make your own.', lanes: [] },
 ];
 const STAGES = ['brainstorm', 'actions', 'closed'];
+const TIMER_MAX = 60 * 60 * 1000; // an hour
+const TIMES_UP_FOR = 60 * 1000;   // how long "Time's up" stays on screen after a countdown ends
 
 const text = (v, max) => String(v ?? '').trim().slice(0, max);
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
@@ -64,6 +66,13 @@ const leadOnly = (req, res, next) => (req.lead ? next() : res.status(403).json({
 const openBoard = (req, res, next) => (req.board.stage === 'closed' ? res.status(409).json({ error: 'This retro is closed' }) : next());
 const brainstorming = (req, res, next) => (req.board.stage === 'brainstorm' ? next() : res.status(409).json({ error: 'Brainstorming has ended' }));
 
+/** The countdown as it stands now: how much is left (0 once it's up) and how long it was set for. Null when there's none. */
+function timerOf(board) {
+  if (!board.timer_ends_at) return null;
+  const left = board.timer_ends_at - Date.now();
+  return left > -TIMES_UP_FOR ? { left_ms: Math.max(0, left), total_ms: board.timer_length } : null;
+}
+
 /** The board as this person may see it. While tickets are hidden, only their own show. */
 function view(board, lead, key) {
   const notes = db.prepare(`SELECT n.*, (SELECT COUNT(*) FROM retro_votes v WHERE v.note_id = n.id) AS votes,
@@ -73,7 +82,7 @@ function view(board, lead, key) {
     WHERE n.board_id = ? ORDER BY n.id`).all(key, board.id);
   const person = db.prepare('SELECT first_name, last_name FROM users WHERE id = ?').get(board.created_by);
   return {
-    board: { id: board.id, name: board.name, retro_date: board.retro_date, template: board.template, stage: board.stage, hide_notes: board.hide_notes, lead: person ? leadOf(person) : null },
+    board: { id: board.id, name: board.name, retro_date: board.retro_date, template: board.template, stage: board.stage, hide_notes: board.hide_notes, lead: person ? leadOf(person) : null, timer: timerOf(board) },
     is_lead: lead,
     lanes: db.prepare('SELECT id, name, lean FROM retro_lanes WHERE board_id = ? ORDER BY position, id').all(board.id),
     notes: notes.map((n) => {
@@ -104,6 +113,34 @@ r.put('/:id', leadOnly, (req, res) => {
   if (!STAGES.includes(stage)) return res.status(400).json({ error: 'That isn’t a retro stage' });
   const hide = b.reveal || stage !== 'brainstorm' ? 0 : req.board.hide_notes;
   db.prepare('UPDATE retro_boards SET name = ?, retro_date = ?, stage = ?, hide_notes = ? WHERE id = ?').run(name, date, stage, hide, req.board.id);
+  if (stage !== req.board.stage) db.prepare('UPDATE retro_boards SET timer_ends_at = NULL, timer_length = NULL WHERE id = ?').run(req.board.id); // a new stage, a fresh clock
+  send(req, res);
+});
+
+// ---- Countdown (lead). Everyone sees it on their next poll.
+
+/** Body: { seconds }. Starts a countdown, replacing any that's running. */
+r.post('/:id/timer', leadOnly, openBoard, (req, res) => {
+  const ms = Math.round(Number(req.body?.seconds) * 1000);
+  if (!(ms > 0) || ms > TIMER_MAX) return res.status(400).json({ error: 'Set the timer between a second and an hour' });
+  db.prepare('UPDATE retro_boards SET timer_ends_at = ?, timer_length = ? WHERE id = ?').run(Date.now() + ms, ms, req.board.id);
+  send(req, res);
+});
+
+/** Body: { seconds }. Adds time to the running countdown, or to one that's just ended. */
+r.put('/:id/timer', leadOnly, openBoard, (req, res) => {
+  const ms = Math.round(Number(req.body?.seconds) * 1000);
+  if (!(ms > 0)) return res.status(400).json({ error: 'Say how much time to add' });
+  if (!timerOf(req.board)) return res.status(409).json({ error: 'No timer is running' });
+  const from = Math.max(req.board.timer_ends_at, Date.now());
+  if (from + ms - Date.now() > TIMER_MAX) return res.status(400).json({ error: 'The timer can’t run past an hour' });
+  db.prepare('UPDATE retro_boards SET timer_ends_at = ?, timer_length = timer_length + ? WHERE id = ?').run(from + ms, ms, req.board.id);
+  send(req, res);
+});
+
+/** Stops the countdown, or clears "Time's up". */
+r.delete('/:id/timer', leadOnly, (req, res) => {
+  db.prepare('UPDATE retro_boards SET timer_ends_at = NULL, timer_length = NULL WHERE id = ?').run(req.board.id);
   send(req, res);
 });
 

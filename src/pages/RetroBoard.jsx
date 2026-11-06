@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { ArrowLeft, ArrowRight, Check, EyeOff, Eye, Pencil, Plus, Settings2, ThumbsUp, Trash2, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, EyeOff, Eye, Pencil, Plus, Settings2, ThumbsUp, Timer, Trash2, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -15,11 +15,95 @@ const NEXT_LABEL = { brainstorm: 'Start actions', actions: 'Close retro' };
 const BACK = { actions: 'brainstorm', closed: 'actions' };
 const BACK_LABEL = { actions: 'Back to brainstorm', closed: 'Reopen' };
 const LEAN_STYLE = { good: 'border-t-emerald-400', bad: 'border-t-red-400' };
+const TIMER_PRESETS = [1, 2, 3, 5, 10]; // minutes
 
 /** Enter sends, Shift+Enter starts a new line. */
 const submitOnEnter = (send) => (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 };
+
+const clock = (ms) => {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
+/**
+ * The lead's countdown, as everyone sees it. The server says how much is left on every poll; between polls this
+ * ticks it down on its own, so the clock runs smoothly and everyone's screen agrees to about a second.
+ */
+function Countdown({ timer, isLead, boardId, onAct }) {
+  const endsAt = useMemo(() => Date.now() + timer.left_ms, [timer]);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, []);
+  const left = Math.max(0, endsAt - now);
+  const up = left === 0;
+  const done = timer.total_ms ? Math.min(100, 100 - (left / timer.total_ms) * 100) : 100;
+
+  return (
+    <div role="timer" aria-live={up ? 'assertive' : 'off'} aria-label={up ? 'Time’s up' : `${clock(left)} left`}
+      className={`flex items-center gap-4 rounded-md px-3 py-2 text-sm ${up ? 'bg-red-50 text-red-800' : 'bg-slate-900 text-white'}`}>
+      <Timer size={18} className={up ? 'animate-pulse' : 'text-slate-400'} />
+      <span className="text-2xl font-bold tabular-nums">{up ? 'Time’s up' : clock(left)}</span>
+      {!up && (
+        <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/20" aria-hidden="true">
+          <div className="h-full rounded-full bg-brand-500" style={{ width: `${done}%` }} />
+        </div>
+      )}
+      {isLead && (
+        <div className={`flex items-center gap-1.5 ${up ? 'ml-auto' : ''}`}>
+          <button type="button" className={`btn px-2 py-1 text-xs ${up ? '' : 'border-white/30 bg-transparent text-white hover:bg-white/10'}`}
+            onClick={() => onAct(() => api.put(`/retros/${boardId}/timer`, { seconds: 60 }))}>+1 min</button>
+          <button type="button" className={`btn px-2 py-1 text-xs ${up ? '' : 'border-white/30 bg-transparent text-white hover:bg-white/10'}`}
+            onClick={() => onAct(() => api.del(`/retros/${boardId}/timer`))}>{up ? 'Clear' : 'Stop'}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The lead's Timer button: pick a length and the countdown starts for everyone. */
+function TimerMenu({ boardId, onAct }) {
+  const [open, setOpen] = useState(false);
+  const [minutes, setMinutes] = useState('');
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [open]);
+  const start = (mins) => {
+    setOpen(false);
+    setMinutes('');
+    onAct(() => api.post(`/retros/${boardId}/timer`, { seconds: Math.round(mins * 60) }));
+  };
+  const custom = Number(minutes);
+  const customOk = custom > 0 && custom <= 60;
+
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" className="btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}><Timer size={14} /> Timer</button>
+      {open && (
+        <div role="menu" aria-label="Start a timer" className="absolute right-0 z-10 mt-1 w-44 overflow-hidden rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-slate-200"
+          onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), setOpen(false))}>
+          {TIMER_PRESETS.map((m) => (
+            <button key={m} type="button" role="menuitem" className="flex w-full px-3 py-1.5 text-left text-slate-700 hover:bg-slate-50" onClick={() => start(m)}>
+              {m} minute{m === 1 ? '' : 's'}
+            </button>
+          ))}
+          <form className="flex items-center gap-1 border-t border-slate-100 px-3 pt-2 pb-1" onSubmit={(e) => { e.preventDefault(); if (customOk) start(custom); }}>
+            <input type="number" min="1" max="60" step="1" inputMode="numeric" className="input w-16 py-1 text-sm" placeholder="min" aria-label="Minutes"
+              value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+            <button type="submit" className="btn-primary px-2 py-1 text-xs" disabled={!customOk}>Start</button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** A ticket's face. Its controls sit in `children`, so the drag overlay can show it without them. */
 const Face = ({ note, overlay, children }) => (
@@ -265,6 +349,7 @@ export default function RetroBoard() {
         {isLead && (
           <>
             {board.hide_notes ? <button className="btn" onClick={() => act(() => api.put(`/retros/${id}`, { reveal: true }))}><Eye size={14} /> Reveal tickets</button> : null}
+            {board.stage !== 'closed' && <TimerMenu boardId={id} onAct={act} />}
             <button className="btn" onClick={openDetails}><Settings2 size={14} /> Details</button>
             {BACK[board.stage] && <button className="btn" onClick={() => stageTo(BACK[board.stage])}>{BACK_LABEL[board.stage]}</button>}
             {NEXT[board.stage] && <button className="btn-primary" onClick={() => stageTo(NEXT[board.stage])}>{NEXT_LABEL[board.stage]} <ArrowRight size={14} /></button>}
@@ -273,6 +358,7 @@ export default function RetroBoard() {
       </PageHeader>
 
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {board.timer && <Countdown timer={board.timer} isLead={isLead} boardId={id} onAct={act} />}
       {!!board.hide_notes && <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">Tickets are hidden. {hiddenCount} from others so far. Write yours; the lead reveals them when everyone’s done.</p>}
       {board.stage === 'actions' && (
         <p className="rounded-md bg-brand-50 px-3 py-2 text-sm text-brand-800">

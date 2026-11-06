@@ -1279,6 +1279,9 @@ CREATE TABLE IF NOT EXISTS retro_votes (
 CREATE INDEX IF NOT EXISTS retro_lanes_board ON retro_lanes(board_id);
 CREATE INDEX IF NOT EXISTS retro_notes_board ON retro_notes(board_id);
 `);
+// The lead's countdown, in epoch milliseconds so everyone's screen agrees to the second.
+addColumn('retro_boards', 'timer_ends_at', 'INTEGER');
+addColumn('retro_boards', 'timer_length', 'INTEGER'); // how long it was set for, in ms
 
 
 // ---- Pipedrive, in full: a home on tickets, contacts and contracts for everything a deal, person, organization, product
