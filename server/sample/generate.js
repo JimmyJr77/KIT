@@ -335,5 +335,78 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
     quarter: lastQuarter, taken_on: qStart, ticket_id: c.id, opportunity_title: c.title, bd_director_id: c.director.id, pipeline_status: 'Under Evaluation', value: c.value, pwin: 0.55, weighted: c.value * 0.55,
   }));
 
+  generateSampleLessons({ people, today });
+
   return { people: people.length, bids: bids.length + closed.length, work: work.length, contacts: contacts.length, events: events.length };
+}
+
+/**
+ * The sample's retrospectives and lessons, for `people` (sample users: { id }) as of `today`. Apart from generateSample so a
+ * development database that already has the sample can take just these (recordSample records what they add).
+ */
+export function generateSampleLessons({ people, today }) {
+  const stamp = (iso, time = '14:00:00') => `${iso} ${time}`;
+  // ---- Retrospectives and Lessons Learned: a run of bid hot washes over the past year and a half, and the lessons they
+  // and people on their own wrote down. The same few problems come back (pricing late, past performance thin, color
+  // teams slipping) while others get fixed and stay fixed, so the trends have something to say.
+  const tagId = (name) => db.prepare('SELECT id FROM lesson_tags WHERE name = ? COLLATE NOCASE').get(name)?.id
+    ?? insert('lesson_tags', { name, tag_group: 'Added by users', created_by: people[0].id });
+  const linkTag = db.prepare('INSERT OR IGNORE INTO lesson_tag_links (lesson_id, tag_id) VALUES (?, ?)');
+  const RETROS = [['Army Training Records Cloud hot wash', 470], ['Case Data Migration hot wash', 330], ['Intel Data Lake hot wash', 230],
+    ['Wargaming Lab Support hot wash', 150], ['Software Factory pink team retro', 75], ['Q3 BD retro', 25]];
+  const retroNotes = RETROS.map(([name, daysAgo]) => {
+    const retroDate = addDays(today, -daysAgo);
+    const boardId = insert('retro_boards', { name, retro_date: retroDate, template: 'hot_wash', stage: 'closed', hide_notes: 0, created_by: people[0].id, created_at: stamp(retroDate, '09:00:00') });
+    const lanes = [['Helped us', 'good'], ['Hurt us', 'bad'], ['Surprised us', null]].map(([laneName, lean], position) => insert('retro_lanes', { board_id: boardId, name: laneName, lean, position }));
+    const note = (lane, text) => insert('retro_notes', { board_id: boardId, lane_id: lanes[lane], text, author_key: crypto.createHash('sha256').update(`${boardId}:${int(1, 6)}`).digest('hex').slice(0, 16) });
+    return { retroDate, good: (t) => note(0, t), bad: (t) => note(1, t) };
+  });
+  // [retro index or days ago, kind, action, title, tags, context, problem, solution, author index]
+  const LESSONS = [
+    [0, 'bad', 'change', 'Price volume started after the technical volume was done', ['Proposal', 'Pricing', 'ROM'], 'Army Training Records Cloud, a $11M full-and-open bid.', 'Pricing began in the last ten days. The BOE never matched the staffing in the technical volume and we came in 18% high.', 'Start the ROM at the Initial Gate Review and refresh it at every color team.', 0],
+    [0, 'bad', 'change', 'Past performance citations were a year out of date', ['Proposal', 'Past performance'], 'Same bid.', 'Two of three citations ended before the recency window. The evaluators scored past performance Marginal.', null, 1],
+    [0, 'good', 'continue', 'Capture calls with the program office before the draft RFP', ['Capture', 'Customer calls'], 'Three calls with the PM and the requirements lead in the six months before release.', null, 'Keep booking the calls as KIT activities so the whole team sees them.', 0],
+    [0, 'bad', 'change', 'Teaming agreement signed a week before submission', ['Capture', 'Teaming'], 'Our data partner on the bid.', 'The partner’s workshare was still open at pink team, so their section arrived late and unreviewed.', 'Sign teaming agreements before the Initial Gate Review or drop the partner.', 2],
+    [1, 'bad', 'change', 'Pricing still started late', ['Proposal', 'Pricing'], 'Case Data Migration, DHS/DOJ.', 'We started the ROM at the gate review as planned, but nobody refreshed it; the final price was built in four days again.', 'Make the pricing refresh a named step on each color team checklist.', 3],
+    [1, 'bad', 'change', 'Red team ran two days before submission', ['Proposal', 'Color team'], 'Case Data Migration.', 'Red team comments could not be worked in; half were ignored.', null, 1],
+    [1, 'good', 'change', 'Win themes were set early but never made it into the volumes', ['Capture', 'Proposal', 'Win themes'], 'Themes agreed at the Initial Gate Review.', 'Writers did not have them in front of them.', 'Put the win themes at the top of every volume outline.', 0],
+    [1, 'good', 'continue', 'Teaming agreement signed before the gate review', ['Capture', 'Teaming'], 'The fix from the Army bid, applied here.', null, 'Worked: the partner section was in the pink team draft.', 2],
+    [2, 'bad', 'change', 'Past performance again thin on the data lake bid', ['Proposal', 'Past performance'], 'Intel Data Lake Modernization, $22M. Won, but past performance scored lowest.', 'We have the work but nobody keeps the citations current; writing them from scratch each time.', null, 4],
+    [2, 'good', 'continue', 'Pink team held three weeks out', ['Proposal', 'Color team'], 'The pink team date was set at the gate review and held.', null, 'Keep setting color team dates at the Initial Gate Review.', 3],
+    [2, 'good', 'continue', 'Pricing refreshed at pink team', ['Proposal', 'Pricing'], 'First bid where the color team checklist had the pricing refresh on it.', null, 'The final price took one day instead of four. Keep the checklist step.', 0],
+    [2, 'bad', 'change', 'Compliance matrix built from the draft RFP, not the final', ['Proposal', 'Compliance'], 'Section L changed between draft and final.', 'Two required attachments were missed until the red team caught them.', 'Rebuild the compliance matrix from the final RFP on release day.', 1],
+    [3, 'bad', 'change', 'Price was not competitive on Wargaming Lab Support', ['Proposal', 'Pricing', 'Under Evaluation'], 'Lost on price; debrief said we were 22% above the winner.', 'Pricing started on time, but the labor mix assumed senior staff throughout.', null, 4],
+    [3, 'bad', 'change', 'Red team slipped again', ['Proposal', 'Color team'], 'Wargaming Lab Support.', 'Red team moved from ten days out to three because the technical volume was not ready.', 'Hold the red team date even if the draft is rough.', 3],
+    [3, 'good', 'continue', 'KIT activities kept the capture plan visible', ['Capture', 'KIT'], 'Every customer call and gate review was a KIT activity with a next step.', null, 'The weekly check-in ran off the ticket. Keep doing this on every pipeline ticket.', 0],
+    [3, 'bad', 'change', 'No key personnel identified until the proposal phase', ['Capture', 'Staffing'], 'The PM named in the proposal had never met the customer.', 'Customer asked about the PM at orals and we had little to say.', 'Name the PM candidate by the Final Gate Review.', 2],
+    [4, 'good', 'continue', 'Red team held ten days out', ['Proposal', 'Color team'], 'Software Factory Support, $33M, in evaluation.', null, 'The date was held even with a rough draft; the comments were all worked in.', 3],
+    [4, 'bad', 'change', 'Past performance volume still written from scratch', ['Proposal', 'Past performance'], 'Software Factory Support.', 'Third bid in a row where the citations took a week of a writer’s time.', 'Build a past performance library in the shared drive with one owner.', 1],
+    [4, 'bad', 'change', 'Pricing labor mix too senior again', ['Proposal', 'Pricing'], 'Software Factory Support.', 'Same mix as Wargaming Lab; we corrected it only after the Operations review.', 'Have Operations review the labor mix at pink team, not at red.', 4],
+    [4, 'good', 'continue', 'Win themes on every volume outline', ['Proposal', 'Win themes'], 'The fix from Case Data Migration.', null, 'Writers used them; the pink team scored the themes clear. Keep it.', 0],
+    [5, 'bad', 'change', 'Key personnel letters of commitment arrived late', ['Proposal', 'Staffing'], 'Two bids this quarter.', 'Letters came the day before submission; one candidate withdrew the week after.', null, 2],
+    [5, 'bad', 'change', 'Customer calls dropped off during proposal phase', ['Capture', 'Customer calls'], 'C5ISR Help Desk Recompete and Satellite Ground Systems.', 'Once writing started nobody called the customer for two months; we missed a change in the evaluation board.', 'Keep one capture call a month through submission.', 0],
+    [5, 'good', 'continue', 'Past performance library in use', ['Proposal', 'Past performance'], 'Started after the Software Factory retro.', null, 'Citations took two days on the last bid. Keep it current after every award.', 1],
+    [5, 'bad', 'change', 'Pink team moved for a trade show', ['Proposal', 'Color team'], 'Satellite Ground Systems Sustainment.', 'Half the reviewers were at a conference; pink team slipped a week.', null, 3],
+    // Lessons people wrote on their own, apart from a retro.
+    [440, 'bad', 'change', 'Gate review packages missing the ROM', ['Initial Gate Review', 'ROM'], 'Three gate reviews in a row.', 'Reviewers could not judge price-to-win without a ROM.', 'A gate review is not scheduled until the ROM is attached in KIT.', 0],
+    [410, 'good', 'continue', 'Weekly BD check-in runs off KIT', ['KIT', 'Admin'], 'Moved the check-in from a slide deck to the KIT pipeline board.', null, 'Thirty minutes shorter. Keep it.', 1],
+    [290, 'bad', 'change', 'RFI responses written without a capture plan', ['RFI Response', 'Capture'], 'Two RFIs answered in the same week.', 'Both read as capability statements; neither shaped the requirement.', 'Treat an RFI as a capture step: a call with the customer first, then the response.', 2],
+    [260, 'good', 'change', 'Debriefs requested on every loss', ['Lost', 'Capture'], 'We asked for a debrief on both losses this quarter.', 'One debrief came late because the request went in after the deadline.', 'Request the debrief the day the notice arrives.', 4],
+    [200, 'bad', 'change', 'Teaming partner unresponsive after award', ['Awarded', 'Teaming', 'Software'], 'Joint Logistics Data Hub.', 'The partner’s staff were not cleared in time for transition.', 'Add clearance status to the teaming checklist.', 3],
+    [120, 'bad', 'change', 'ROM in KIT left unlocked after the gate review', ['ROM', 'KIT'], 'Two tickets had ROMs edited after the decision.', 'The gate review decided on a number that then changed.', 'Lock the estimate at the gate review.', 0],
+    [60, 'good', 'continue', 'Estimate lock after gate reviews', ['ROM', 'KIT', 'Final/Follow-on Gate Review'], 'The lock from the earlier lesson is in KIT now.', null, 'No surprises since. Keep it.', 0],
+    [40, 'bad', 'change', 'Orals rehearsal scheduled for the day before', ['Proposal', 'Orals'], 'AI-Enabled Maintenance Forecasting.', 'One rehearsal, the night before; the PM read from slides.', null, 2],
+    [10, 'bad', 'change', 'Pricing started late on the Biometric bid', ['Proposal', 'Pricing'], 'Biometric Matching Modernization, in capture.', 'The ROM has not been refreshed since the gate review four months ago.', null, 4],
+  ];
+  LESSONS.forEach(([when, kind, action, title, tags, context, problem, solution, who]) => {
+    const retro = typeof when === 'number' && when < RETROS.length ? retroNotes[when] : null;
+    const retroDate = retro ? retro.retroDate : addDays(today, -when);
+    const sourceId = retro ? (kind === 'good' ? retro.good : retro.bad)(title) : null;
+    const id = insert('lessons', {
+      title, kind, action, context, problem, solution, retro_date: retroDate, source: retro ? 'retro' : 'manual', source_id: sourceId,
+      created_by: people[who].id, created_at: stamp(addDays(retroDate, int(0, 3)), '15:00:00'),
+    });
+    tags.forEach((t) => linkTag.run(id, tagId(t)));
+  });
+
 }

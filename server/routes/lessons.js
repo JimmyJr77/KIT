@@ -6,6 +6,8 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { allStatuses } from '../pipelines.js';
 import { PROCESS_TYPES } from '../../src/lib/process.js';
+import { geminiConfigured } from '../services/gemini.js';
+import { askAboutLessons, choosePeriod, dateOrNull, generateTrendReport, inRange, latestTrendReport, lessonDate, storeTrendReport, trendStats } from '../services/lessonInsights.js';
 
 const r = Router();
 
@@ -24,7 +26,7 @@ const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(
  * Every stage, milestone and area is a tag. Stages can arrive with a Pipedrive sync, so this runs each time the tags are
  * read rather than once. A name in two groups stays in the first (Proposal is a stage and a milestone).
  */
-function seedTags() {
+export function seedTags() {
   const add = db.prepare('INSERT OR IGNORE INTO lesson_tags (name, tag_group) VALUES (?, ?)');
   db.transaction(() => {
     allStatuses().forEach((name) => add.run(name, 'Pipeline stages'));
@@ -42,7 +44,7 @@ function listTags() {
 const canEdit = (lesson, user) => user.role === 'admin' || lesson.created_by === user.id;
 
 /** Lessons with their tags and author, newest number first. */
-function listLessons(user, id = null) {
+export function listLessons(user, id = null) {
   const rows = db.prepare(`SELECT l.*, u.first_name AS author_first_name, u.last_name AS author_last_name, b.name AS retro_name FROM lessons l
     LEFT JOIN users u ON u.id = l.created_by
     LEFT JOIN retro_notes n ON l.source = 'retro' AND n.id = l.source_id LEFT JOIN retro_boards b ON b.id = n.board_id
@@ -133,6 +135,52 @@ r.delete('/:id', (req, res) => {
   if (!canEdit(lesson, req.user)) return res.status(403).json({ error: 'Only its author or an admin can delete a lesson' });
   db.prepare('DELETE FROM lessons WHERE id = ?').run(lesson.id);
   res.json({ ok: true });
+});
+
+// ---- KIT on the lessons: questions answered from the records, and the trend report. Both read the lessons as this
+// person sees them, scoped by a date range on the retro date (or the date logged when there is none).
+const NO_GEMINI = 'KIT’s assistant isn’t set up on this server: Gemini needs a GEMINI_API_KEY.';
+
+/** Body: { question, from, to, history: [{ role: 'user' | 'kit', text }] }. Answers from the lessons in range. */
+r.post('/ask', async (req, res) => {
+  if (!geminiConfigured()) return res.status(503).json({ error: NO_GEMINI });
+  const b = req.body || {};
+  const question = text(b.question, 2000);
+  if (!question) return res.status(400).json({ error: 'Ask something about the lessons' });
+  const from = dateOrNull(b.from), to = dateOrNull(b.to);
+  const history = (Array.isArray(b.history) ? b.history : []).slice(-8)
+    .map((h) => ({ role: h?.role === 'kit' ? 'kit' : 'user', text: text(h?.text, 6000) })).filter((h) => h.text);
+  const lessons = inRange(listLessons(req.user), from, to);
+  try {
+    const answer = await askAboutLessons({ question, lessons, from, to, history });
+    res.json({ text: answer, scope: { lessons: lessons.length, from, to, lesson_ids: lessons.map((l) => l.id) } });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+/** The latest trend report, if one has been generated. */
+r.get('/trends', (req, res) => res.json({ report: latestTrendReport(), gemini: geminiConfigured() }));
+
+/** Body: { from, to, period: 'auto' | 'month' | 'quarter' }. Generates a fresh report over the lessons in range and keeps it as the latest. */
+r.post('/trends', async (req, res) => {
+  if (!geminiConfigured()) return res.status(503).json({ error: NO_GEMINI });
+  const b = req.body || {};
+  const from = dateOrNull(b.from), to = dateOrNull(b.to);
+  if (from && to && from > to) return res.status(400).json({ error: 'The range ends before it starts' });
+  const lessons = inRange(listLessons(req.user), from, to);
+  if (lessons.length < 2) return res.status(400).json({ error: 'KIT needs at least two lessons in the range to see a trend' });
+  // An open end closes over the lessons, so the periods cover the data and nothing more.
+  const dates = lessons.map(lessonDate).sort();
+  const start = from || dates[0], end = to || dates.at(-1);
+  const period = choosePeriod(start, end, b.period);
+  const stats = trendStats(lessons, start, end, period);
+  try {
+    const report = await generateTrendReport(lessons, stats);
+    res.json({ report: storeTrendReport({ from, to, period, stats, report, userId: req.user.id }) });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
 });
 
 export default r;

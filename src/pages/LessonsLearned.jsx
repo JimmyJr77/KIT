@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, ChevronUp, ChevronDown, ChevronsUpDown, Lightbulb, Trash2 } from 'lucide-react';
+import { Plus, Search, ChevronUp, ChevronDown, ChevronsUpDown, Lightbulb, Trash2, List, Sparkles, TrendingUp } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName, parseUtc, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
+import LessonAssistant from '../components/LessonAssistant.jsx';
+import LessonTrends from '../components/LessonTrends.jsx';
 
 const KINDS = [['good', 'Good / Keep'], ['bad', 'Bad / Change']];
 const ACTIONS = [['continue', 'Continue'], ['change', 'Change']];
 const nameOf = (list, key) => list.find(([k]) => k === key)?.[1] || '—';
+// The page's views: the lessons themselves, KIT answering questions about them, and KIT's trend report over them.
+const VIEWS = [['lessons', 'Lessons', List], ['ask', 'Ask KIT', Sparkles], ['trends', 'Trends', TrendingUp]];
 
 export const lessonNo = (l) => `LL-${String(l.id).padStart(3, '0')}`;
 const day = (d) => (d ? shortDate(d, { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
@@ -133,10 +137,15 @@ const Verdict = ({ kind }) => (
   <span className={`rounded-full px-2 py-0.5 text-xs font-semibold whitespace-nowrap ${kind === 'good' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>{nameOf(KINDS, kind)}</span>
 );
 
-/** The record of what's working and what isn't. Select a lesson to read or change it. */
+/**
+ * The record of what's working and what isn't. Select a lesson to read or change it. Ask KIT answers questions from the
+ * records in a date range, and Trends is KIT's report over them period by period.
+ */
 export default function LessonsLearned() {
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState('');
+  const [view, setView] = useState('lessons');
+  const [gemini, setGemini] = useState(true);
   const [q, setQ] = useState('');
   const [kind, setKind] = useState('');
   const [action, setAction] = useState('');
@@ -145,7 +154,7 @@ export default function LessonsLearned() {
   const [panel, setPanel] = useState(null); // 'new', or the lesson open
 
   const load = () => api.get('/lessons').then((d) => { setData(d); setLoadError(''); }).catch((e) => setLoadError(e.message));
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); api.get('/ai/status').then((d) => setGemini(!!d.gemini)).catch(() => {}); }, []);
 
   const lessons = data?.lessons;
   const filtersOn = q || kind || action || tagFilter.length;
@@ -183,66 +192,81 @@ export default function LessonsLearned() {
   return (
     <div className="space-y-5 p-8">
       <PageHeader title="Lessons Learned" subtitle="What’s working and what isn’t, one short lesson at a time.">
+        <div className="flex flex-wrap gap-1" role="tablist" aria-label="Lessons Learned views">
+          {VIEWS.map(([key, label, Icon]) => (
+            <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition ${view === key ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+              <Icon size={14} /> {label}
+            </button>
+          ))}
+        </div>
         <button className="btn-primary" disabled={!data} onClick={() => setPanel('new')}><Plus size={16} /> New lesson</button>
       </PageHeader>
 
-      <div className="panel flex flex-wrap items-center gap-3">
-        <div className="relative w-full sm:w-64">
-          <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
-          <input className="input pl-9" placeholder="Search lessons…" value={q} onChange={(e) => setQ(e.target.value)} />
-        </div>
-        <select className="input w-40" aria-label="Good or bad" value={kind} onChange={(e) => setKind(e.target.value)}>
-          <option value="">Good and bad</option>
-          {KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-        </select>
-        <select className="input w-52" aria-label="Continue or change" value={action} onChange={(e) => setAction(e.target.value)}>
-          <option value="">Continue and change</option>
-          {ACTIONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-        </select>
-        <div className="w-full sm:w-64">
-          <MultiSelect compact options={(data?.tags || []).map((t) => ({ value: t.id, label: t.name, group: t.tag_group }))} value={tagFilter} onChange={setTagFilter} placeholder="Filter by tag…" />
-        </div>
-        {!!filtersOn && <button className="btn-ghost" onClick={clearFilters}>Clear</button>}
-        <div className="ml-auto text-sm text-slate-500">{rows.length.toLocaleString()} lesson{rows.length === 1 ? '' : 's'}</div>
-      </div>
-
       {loadError && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{loadError}</p>}
-      {!data && !loadError && <p className="text-sm text-slate-400">Loading lessons…</p>}
-      {data && !rows.length ? (
-        <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
-          <Lightbulb size={28} className="mx-auto mb-2 text-slate-300" />
-          {lessons.length ? 'No lessons match.' : 'No lessons yet. Add the first one.'}
+      {view === 'ask' && <LessonAssistant lessons={lessons || []} gemini={gemini} />}
+      {view === 'trends' && <LessonTrends lessons={lessons || []} />}
+
+      {view === 'lessons' && (
+        <>
+        <div className="panel flex flex-wrap items-center gap-3">
+          <div className="relative w-full sm:w-64">
+            <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
+            <input className="input pl-9" placeholder="Search lessons…" value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          <select className="input w-40" aria-label="Good or bad" value={kind} onChange={(e) => setKind(e.target.value)}>
+            <option value="">Good and bad</option>
+            {KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+          <select className="input w-52" aria-label="Continue or change" value={action} onChange={(e) => setAction(e.target.value)}>
+            <option value="">Continue and change</option>
+            {ACTIONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+          <div className="w-full sm:w-64">
+            <MultiSelect compact options={(data?.tags || []).map((t) => ({ value: t.id, label: t.name, group: t.tag_group }))} value={tagFilter} onChange={setTagFilter} placeholder="Filter by tag…" />
+          </div>
+          {!!filtersOn && <button className="btn-ghost" onClick={clearFilters}>Clear</button>}
+          <div className="ml-auto text-sm text-slate-500">{rows.length.toLocaleString()} lesson{rows.length === 1 ? '' : 's'}</div>
         </div>
-      ) : data && (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-          <table className="w-full min-w-[50rem] text-sm">
-            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
-              <tr>
-                {header('id', 'LL #')}{header('kind', 'Good / Bad')}{header('action', 'Action')}{header('title', 'Lesson')}
-                {header('retro', 'Retro date')}{header('logged', 'Logged')}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((l) => (
-                <tr key={l.id} className="cursor-pointer border-t border-slate-100 align-top hover:bg-brand-50/40" onClick={() => setPanel(l)}>
-                  <td className="px-4 py-3 font-medium whitespace-nowrap text-slate-700 tabular-nums">{lessonNo(l)}</td>
-                  <td className="px-4 py-3"><Verdict kind={l.kind} /></td>
-                  <td className="px-4 py-3 text-slate-600">{nameOf(ACTIONS, l.action)}</td>
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-slate-800">{l.title}</div>
-                    {l.context && <div className="line-clamp-1 text-xs text-slate-500">{l.context}</div>}
-                    {l.tags.length > 0 && <div className="mt-1 flex flex-wrap gap-1">{l.tags.map((t) => <span key={t.id} className="chip">{t.name}</span>)}</div>}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-slate-500">{day(l.retro_date)}</td>
-                  <td className="px-4 py-3 whitespace-nowrap text-slate-500">
-                    {day(logged(l))}
-                    {author(l) && <div className="text-xs">{author(l)}</div>}
-                  </td>
+
+        {!data && !loadError && <p className="text-sm text-slate-400">Loading lessons…</p>}
+        {data && !rows.length ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
+            <Lightbulb size={28} className="mx-auto mb-2 text-slate-300" />
+            {lessons.length ? 'No lessons match.' : 'No lessons yet. Add the first one.'}
+          </div>
+        ) : data && (
+          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table className="w-full min-w-[50rem] text-sm">
+              <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
+                <tr>
+                  {header('id', 'LL #')}{header('kind', 'Good / Bad')}{header('action', 'Action')}{header('title', 'Lesson')}
+                  {header('retro', 'Retro date')}{header('logged', 'Logged')}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map((l) => (
+                  <tr key={l.id} className="cursor-pointer border-t border-slate-100 align-top hover:bg-brand-50/40" onClick={() => setPanel(l)}>
+                    <td className="px-4 py-3 font-medium whitespace-nowrap text-slate-700 tabular-nums">{lessonNo(l)}</td>
+                    <td className="px-4 py-3"><Verdict kind={l.kind} /></td>
+                    <td className="px-4 py-3 text-slate-600">{nameOf(ACTIONS, l.action)}</td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-800">{l.title}</div>
+                      {l.context && <div className="line-clamp-1 text-xs text-slate-500">{l.context}</div>}
+                      {l.tags.length > 0 && <div className="mt-1 flex flex-wrap gap-1">{l.tags.map((t) => <span key={t.id} className="chip">{t.name}</span>)}</div>}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-slate-500">{day(l.retro_date)}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-slate-500">
+                      {day(logged(l))}
+                      {author(l) && <div className="text-xs">{author(l)}</div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        </>
       )}
 
       {panel && (

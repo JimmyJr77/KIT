@@ -1198,6 +1198,22 @@ if (db.prepare('PRAGMA table_info(lessons)').all().some((c) => c.name === 'scope
   })();
 }
 
+// The Lessons Learned trend report: the latest one KIT generated, kept so the page shows it on return without asking
+// Gemini again. One row per period choice would be more than anyone needs; the newest report replaces the last.
+db.exec(`
+CREATE TABLE IF NOT EXISTS lesson_trend_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_date TEXT,            -- YYYY-MM-DD, or NULL for all time
+  to_date TEXT,
+  period TEXT NOT NULL,      -- month | quarter
+  stats TEXT NOT NULL,       -- JSON: the counts per period, computed from the lessons
+  report TEXT NOT NULL,      -- JSON: Gemini's assessment, in the fixed report schema
+  model TEXT,
+  generated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  generated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
+
 // ---- Retrospectives. A retro's tickets and thumbs are anonymous: author_key and voter_key are keyed hashes (anonKey in
 // auth.js) that only say "the same person" within one retro, and tickets keep no timestamps. Never store a user id on them.
 db.exec(`

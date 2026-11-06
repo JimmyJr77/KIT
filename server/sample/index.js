@@ -3,6 +3,7 @@
 // cleanProduction) so real users never meet fake records.
 import { recordSample, removeSample, sampleStatus, setSampleHidden } from './registry.js';
 import { generateSample } from './generate.js';
+import { seedTags } from '../routes/lessons.js';
 
 export { removeSample, sampleStatus, setSampleHidden };
 
@@ -11,6 +12,8 @@ export const production = () => process.env.NODE_ENV === 'production';
 /** Load the sample if it isn't loaded yet. Never in production. */
 export function ensureSample() {
   if (production() || sampleStatus().loaded) return null;
+  // The stage, milestone and area tags are the app's, not the sample's: seed them first so the sample only links to them.
+  seedTags();
   const loaded = recordSample(() => generateSample());
   setSampleHidden(false);
   return loaded;
@@ -42,6 +45,7 @@ export function resetSample() {
   if (production()) return null;
   const { hidden } = sampleStatus();
   const removed = removeSample();
+  seedTags();
   const loaded = recordSample(() => generateSample());
   setSampleHidden(hidden);
   return { removed, loaded };
