@@ -159,7 +159,7 @@ export default function Travel() {
         <button className="btn h-9" onClick={refresh} disabled={refreshing}>
           <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /> {refreshing ? 'Refreshing estimates…' : 'Refresh estimates'}
         </button>
-        <button className="btn h-9" onClick={() => navigate('/profile#travel')} title="Your travel defaults: where you usually travel from and your flight preferences">
+        <button className="btn h-9" onClick={() => navigate('/profile#travel', { state: { from: location.pathname + location.search } })} title="Your travel defaults: where you usually travel from and your flight preferences">
           <Settings size={15} /> Settings
         </button>
       </PageHeader>

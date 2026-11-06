@@ -6,6 +6,7 @@ import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
 import { ledTeams } from '../pages/MyTeam.jsx';
 import { markOnDark } from '../lib/brand.js';
+import FeedbackWidget from './FeedbackWidget.jsx';
 
 const NAV = [
   { to: '/alerts', label: 'Alerts', icon: Bell },
@@ -34,7 +35,7 @@ function useUnreadAlerts() {
   const { pathname } = useLocation();
   const [count, setCount] = useState(0);
   useEffect(() => {
-    const load = () => api.get('/alerts/unread').then((d) => setCount(d.count)).catch(() => {});
+    const load = () => api.get('/alerts/unread', { quiet: true }).then((d) => setCount(d.count)).catch(() => {});
     load();
     const t = setInterval(load, 60000);
     window.addEventListener('kit:alerts', load);
@@ -49,7 +50,7 @@ function usePendingRequests(isAdmin) {
   const [count, setCount] = useState(0);
   useEffect(() => {
     if (!isAdmin) return undefined;
-    const load = () => api.get('/users/access-requests').then((d) => setCount(d.pending)).catch(() => {});
+    const load = () => api.get('/users/access-requests', { quiet: true }).then((d) => setCount(d.pending)).catch(() => {});
     load();
     const t = setInterval(load, 60000);
     window.addEventListener('kit:access-requests', load);
@@ -140,6 +141,7 @@ export default function Layout() {
       <main className="min-w-0 flex-1 overflow-y-auto print:overflow-visible">
         <Outlet />
       </main>
+      <FeedbackWidget />
     </div>
   );
 }

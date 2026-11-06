@@ -15,6 +15,7 @@ import SampleDataPanel from '../components/SampleDataPanel.jsx';
 import BackupPanel from '../components/BackupPanel.jsx';
 import PipedrivePanel from '../components/PipedrivePanel.jsx';
 import NewPipelineTicketsPanel from '../components/NewPipelineTicketsPanel.jsx';
+import SiteFeedbackPanel from '../components/SiteFeedbackPanel.jsx';
 import { TerritoryTags, TerritoryChecklist, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
 
 /** Admins only: access requests from the sign-in page, approved accounts, and the team directory. */
@@ -35,6 +36,7 @@ function AdminPage() {
       <PageHeader title="Admin Access" subtitle="Who can use KIT, and the team directory" />
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       <RequestsPanel onApproved={approved.reload} />
+      <SiteFeedbackPanel />
       <ApprovedPanel approved={approved} teams={teamList} onError={setError} />
       <DirectoryPanel approved={approved} users={users} teams={teamList} territories={territories.data?.territories || []} onError={setError} />
       <TerritoriesPanel territories={territories} onChanged={users.reload} />

@@ -10,6 +10,14 @@
   --color-brand-900: #14204f;
   --animate-blink: blink 1s steps(2, start) infinite;
   @keyframes blink { to { opacity: 0.25; } }
+  /* KITT's reply after feedback is sent: pops in, holds, then fades over its last half second. */
+  --animate-kitt-bubble: kitt-bubble 3s ease-in-out forwards;
+  @keyframes kitt-bubble {
+    0% { opacity: 0; transform: translateY(6px) scale(0.9); }
+    8% { opacity: 1; transform: translateY(0) scale(1); }
+    82% { opacity: 1; transform: translateY(0) scale(1); }
+    100% { opacity: 0; transform: translateY(-4px) scale(0.97); }
+  }
 }
 
 @utility label { @apply block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1; }

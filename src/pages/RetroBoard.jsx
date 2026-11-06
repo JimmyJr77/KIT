@@ -191,7 +191,7 @@ export default function RetroBoard() {
 
   const load = useCallback(() => {
     const started = changes.current;
-    return api.get(`/retros/${id}`).then((d) => {
+    return api.get(`/retros/${id}`, { quiet: true }).then((d) => {
       if (started === changes.current && !dragging.current) { setData(d); setError(''); }
     }).catch((e) => { if (e.status === 404) setGone(true); else setError(e.message); });
   }, [id]);

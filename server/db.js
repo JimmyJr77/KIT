@@ -915,6 +915,16 @@ CREATE TABLE IF NOT EXISTS pipedrive_deletes (
   PRIMARY KEY (kind, pipedrive_id)
 );
 `);
+db.exec(`
+-- Site feedback: what people typed into the KITT widget (bottom-right of every page), with the page they were on.
+CREATE TABLE IF NOT EXISTS site_feedback (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  message TEXT NOT NULL,
+  path TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
 addColumn('ticket_contacts', 'is_primary', 'INTEGER NOT NULL DEFAULT 0'); // the deal's main contact person
 addColumn('contacts', 'pipedrive_id', 'INTEGER');
 addColumn('ticket_comments', 'pinned', 'INTEGER NOT NULL DEFAULT 0'); // kind 'note' is a Pipedrive note; notes can be pinned

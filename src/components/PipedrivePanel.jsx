@@ -33,7 +33,7 @@ function usePipedrive() {
   const s = status.data;
   useEffect(() => {
     if (!s?.running) return undefined;
-    const t = setTimeout(() => status.reload(), 2000);
+    const t = setTimeout(() => status.reload({ quiet: true }), 2000);
     return () => clearTimeout(t);
   }, [s]); // eslint-disable-line react-hooks/exhaustive-deps
   return status;
@@ -324,7 +324,7 @@ export function PipedriveSend({ status }) {
   // While anything is on Auto, check every 30 seconds so its latest run shows.
   useEffect(() => {
     if (!autoKinds.length || s?.running) return undefined;
-    const t = setTimeout(() => status.reload(), 30000);
+    const t = setTimeout(() => status.reload({ quiet: true }), 30000);
     return () => clearTimeout(t);
   }, [s, autoKinds.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -643,7 +643,7 @@ function LiveLine() {
   const live = useApi('/pipedrive/live');
   const l = live.data;
   useEffect(() => {
-    const t = setTimeout(() => live.reload(), 60000);
+    const t = setTimeout(() => live.reload({ quiet: true }), 60000);
     return () => clearTimeout(t);
   }, [l]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!l) return null;

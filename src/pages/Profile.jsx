@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
-import { Plane } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Plane, ArrowLeft } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import ProfileFields from '../components/ProfileFields.jsx';
@@ -19,6 +19,7 @@ export const rolesOf = (u) => Object.fromEntries((u?.teams || []).map((t) => [t.
 
 export default function Profile() {
   const { user, setUser } = useAuth();
+  const back = useBackToTravel();
   const [form, setForm] = useState(pick(user));
   const [msg, setMsg] = useState(null);
 
@@ -35,7 +36,7 @@ export default function Profile() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-8">
-      <PageHeader title="Profile" subtitle="Your contact details and team" />
+      <PageHeader title="Profile" subtitle="Your contact details and team">{back && <BackToTravel onClick={back} />}</PageHeader>
       <form onSubmit={save} className="panel space-y-5">
         <ProfileFields value={form} onChange={setForm} roles={rolesOf(user)} />
         <div className="flex items-center gap-3">
@@ -75,9 +76,23 @@ function PasswordPanel() {
   );
 }
 
+/**
+ * The Travel page's Settings button lands on this page at #travel, with where it came from in the location state. When it
+ * did, the page offers a way back there; opened any other way (the sidebar, a typed address), there is nowhere to go back to.
+ */
+function useBackToTravel() {
+  const { hash, state } = useLocation();
+  const navigate = useNavigate();
+  if (hash !== '#travel') return null;
+  return () => navigate(state?.from || '/travel');
+}
+
+const BackToTravel = ({ onClick }) => <button type="button" className="btn h-9" onClick={onClick}><ArrowLeft size={15} /> Back to Travel</button>;
+
 /** Where you usually travel from and the flights you'll take: new trips start from them. The Travel page's Settings button lands here (#travel). */
 function TravelDefaults() {
   const { user, setUser } = useAuth();
+  const back = useBackToTravel();
   const saved = travelFromOf(user);
   const [form, setForm] = useState({ location: { ...EMPTY_LOCATION, ...saved?.location }, airport: saved?.airport || '', flight: flightPrefs(saved?.flight) });
   const [msg, setMsg] = useState(null);
@@ -111,6 +126,7 @@ function TravelDefaults() {
       </div>
       <div className="mt-4 flex items-center gap-3">
         <button className="btn-primary">Save travel defaults</button>
+        {back && <BackToTravel onClick={back} />}
         {msg && <span className={`text-sm ${msg.ok ? 'text-emerald-600' : 'text-red-600'}`}>{msg.text}</span>}
       </div>
     </form>
