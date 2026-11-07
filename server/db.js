@@ -1623,6 +1623,41 @@ export function setSetting(key, value) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, String(value));
 }
 
+db.exec(`
+-- ---- Compensation: the BD Director bonus plan (the 3/2/1 plan) applied to each director's won deals.
+-- A director's plan inputs for a plan year. Rates are percents of gross recognized revenue by contract year; left null,
+-- the plan's defaults (3 / 2 / 1) apply. Goals are the director's own targets for the year, apart from booking targets.
+CREATE TABLE IF NOT EXISTS comp_plans (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_year INTEGER NOT NULL,
+  base_salary REAL,
+  rate_y1 REAL,
+  rate_y2 REAL,
+  rate_y3 REAL,
+  revenue_goal REAL,  -- recognized revenue on their contracts, for the year
+  bonus_goal REAL,    -- bonus earned, for the year
+  eligible INTEGER NOT NULL DEFAULT 1, -- an active full-time employee: a payout is forfeited otherwise (plan §6.1)
+  notes TEXT,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, plan_year)
+);
+-- What the plan needs to know about a won deal beyond what Pipedrive carries: when contract year 1 starts and how long
+-- the contract runs (read from the deal when blank), whether the bid had its CEO and VP of Finance sign-off (plan §3.2),
+-- how its recognized revenue is counted, and whether it's left out of the plan.
+CREATE TABLE IF NOT EXISTS comp_contracts (
+  ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+  start_date TEXT,        -- YYYY-MM-DD; null = the contract's start date, else the day the deal was won
+  term_months INTEGER,    -- null = read from the deal's Expected Contract Term, else its dates
+  approval TEXT,          -- approved | not_approved | null (not recorded)
+  revenue_basis TEXT,     -- null (auto) | billed | straight: see server/compensation.js
+  excluded INTEGER NOT NULL DEFAULT 0,
+  notes TEXT,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
+
 /** Whether an admin has stopped people creating pipeline tickets in KIT. Deals pulled from Pipedrive still come in. */
 export const pipelineTicketsClosed = () => getSetting('pipeline_tickets_closed') === '1';
 export const PIPELINE_TICKETS_CLOSED = 'An admin has turned off creating new pipeline tickets.';

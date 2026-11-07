@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, Lightbulb, BookOpenText, MessagesSquare, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, Lightbulb, BookOpenText, MessagesSquare, BadgeDollarSign, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
@@ -20,6 +20,7 @@ const NAV = [
   { to: '/pipeline', label: 'BD Pipeline', icon: SquareKanban },
   { to: '/delivery', label: 'Delivery', icon: BriefcaseBusiness },
   { to: '/closed-deals', label: 'Closed deals', icon: FolderArchive },
+  { to: '/compensation', label: 'Compensation', icon: BadgeDollarSign },
   { to: '/crm', label: 'CRM', icon: ContactRound },
   { to: '/solutions', label: 'Technical Solutions', icon: Blocks },
   { to: '/marketing', label: 'Marketing', icon: Megaphone },

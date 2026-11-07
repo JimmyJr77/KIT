@@ -45,6 +45,7 @@ import feedbackRoutes from './routes/feedback.js';
 import raceRoutes from './routes/race.js';
 import aiRoutes from './routes/ai.js';
 import playbookRoutes from './routes/playbook.js';
+import compensationRoutes from './routes/compensation.js';
 import { seedBdPlaybook } from './services/playbook.js';
 
 ensureGsaRates();
@@ -98,6 +99,7 @@ app.use('/api/feedback', requireAuth, feedbackRoutes);
 app.use('/api/race', requireAuth, raceRoutes);
 app.use('/api/ai', requireAuth, aiRoutes);
 app.use('/api/playbook', requireAuth, playbookRoutes);
+app.use('/api/compensation', requireAuth, compensationRoutes);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // In production, serve the built React app.

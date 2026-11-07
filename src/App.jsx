@@ -29,6 +29,7 @@ import LessonsLearned from './pages/LessonsLearned.jsx';
 import Retros from './pages/Retros.jsx';
 import RetroBoard from './pages/RetroBoard.jsx';
 import Playbook from './pages/Playbook.jsx';
+import Compensation from './pages/Compensation.jsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -66,6 +67,7 @@ export default function App() {
           <Route path="/marketing" element={<Marketing />} />
           <Route path="/lessons" element={<LessonsLearned />} />
           <Route path="/playbook" element={<Playbook />} />
+          <Route path="/compensation" element={<Compensation />} />
           <Route path="/retros" element={<Retros />} />
           <Route path="/retros/:id" element={<RetroBoard />} />
           <Route path="/settings" element={<Settings />} />

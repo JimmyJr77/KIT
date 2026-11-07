@@ -1,0 +1,52 @@
+// Compensation: the BD Director bonus plan (3/2/1) applied to each director's won deals. Admins see every director and
+// set the plan's inputs (defaults, each director's salary, rates and goals, and what the plan knows about each contract).
+// Everyone else sees their own compensation only. The math is in ../compensation.js.
+import { Router } from 'express';
+import { requireAdmin } from '../auth.js';
+import { compensation, bdMembers, savePlanSettings, savePlan, deletePlan, saveContract } from '../compensation.js';
+
+const r = Router();
+
+const yearOf = (v) => Number(v) || new Date().getFullYear();
+const isAdmin = (u) => u.role === 'admin';
+
+/** ?year=2026 (default: this year). Admins: everyone, plus the BD members who could be added. Others: themselves. */
+r.get('/', (req, res) => {
+  const year = yearOf(req.query.year);
+  const admin = isAdmin(req.user);
+  const data = compensation(year, admin ? null : [req.user.id]);
+  const listed = new Set(data.directors.map((d) => d.id));
+  res.json({ ...data, canEdit: admin, members: admin ? bdMembers().filter((m) => !listed.has(m.id)) : [] });
+});
+
+/** Body: any of rate_y1, rate_y2, rate_y3 (percents), effective_date (YYYY-MM-DD or blank). */
+r.put('/settings', requireAdmin, (req, res) => {
+  try { res.json({ settings: savePlanSettings(req.body || {}) }); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+/** Body: { user_id, plan_year, base_salary?, rate_y1?, rate_y2?, rate_y3?, revenue_goal?, bonus_goal?, eligible?, notes? }. */
+r.put('/plans', requireAdmin, (req, res) => {
+  const { user_id, plan_year, ...body } = req.body || {};
+  const year = Number(plan_year);
+  if (!Number.isInteger(year) || !user_id) return res.status(400).json({ error: 'Choose a person and a plan year' });
+  try {
+    savePlan(Number(user_id), year, body, req.user.id);
+    res.json(compensation(year).directors.find((d) => d.id === Number(user_id)) || null);
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+/** Remove a director's plan inputs for a year. They stay listed while they have won deals. */
+r.delete('/plans/:userId/:year', requireAdmin, (req, res) => {
+  deletePlan(Number(req.params.userId), Number(req.params.year));
+  res.json({ ok: true });
+});
+
+/** Body: any of start_date, term_months, approval, revenue_basis, excluded, notes. ?year= says which year's figures come back. */
+r.put('/contracts/:ticketId', requireAdmin, (req, res) => {
+  try {
+    saveContract(Number(req.params.ticketId), req.body || {}, req.user.id);
+    res.json(compensation(yearOf(req.query.year)));
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+export default r;
