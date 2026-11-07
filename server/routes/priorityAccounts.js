@@ -12,6 +12,9 @@ const name = (v) => String(v ?? '').trim().slice(0, 120);
 const ownTier = (id, me) => db.prepare('SELECT * FROM priority_tiers WHERE id = ? AND user_id = ?').get(id, me);
 const ownAccount = (id, me) => db.prepare(`SELECT a.* FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
   WHERE a.id = ? AND t.user_id = ?`).get(id, me);
+const ownStrategy = (id, me) => db.prepare(`SELECT s.* FROM account_strategies s JOIN priority_accounts a ON a.id = s.account_id
+  JOIN priority_tiers t ON t.id = a.tier_id WHERE s.id = ? AND t.user_id = ?`).get(id, me);
+const strategyText = (v) => String(v ?? '').trim().slice(0, STRATEGY_MAX);
 
 /**
  * An account's activities live on a hidden ticket of type 'account', so they work just as they do on pipeline tickets (next step,
@@ -38,11 +41,13 @@ function dropActivityTickets(ids) {
 /** Someone's tiers, accounts, account tickets and priority list. Tickets archived (by hand or by a full reset) are left out. */
 export function priorityAccounts(userId) {
   const tiers = db.prepare('SELECT id, name, position FROM priority_tiers WHERE user_id = ? ORDER BY position, id').all(userId);
-  const accounts = db.prepare(`SELECT a.id, a.tier_id, a.name, a.position, a.strategy, a.ticket_id FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
+  const accounts = db.prepare(`SELECT a.id, a.tier_id, a.name, a.position, a.ticket_id FROM priority_accounts a JOIN priority_tiers t ON t.id = a.tier_id
     WHERE t.user_id = ? ORDER BY a.position, a.id`).all(userId);
   const tickets = db.prepare(`SELECT pt.account_id, pt.position, t.id, t.opportunity_title, t.organization, t.pipeline_status, t.value, t.ticket_type
     FROM priority_account_tickets pt JOIN priority_accounts a ON a.id = pt.account_id JOIN priority_tiers tr ON tr.id = a.tier_id
     JOIN tickets t ON t.id = pt.ticket_id WHERE tr.user_id = ? AND t.archived_at IS NULL ORDER BY pt.position`).all(userId);
+  const strategies = db.prepare(`SELECT s.id, s.account_id, s.body, s.status FROM account_strategies s JOIN priority_accounts a ON a.id = s.account_id
+    JOIN priority_tiers tr ON tr.id = a.tier_id WHERE tr.user_id = ? ORDER BY s.position, s.id`).all(userId);
   const list = db.prepare(`SELECT l.ticket_id FROM priority_list_tickets l JOIN tickets t ON t.id = l.ticket_id
     WHERE l.user_id = ? AND t.archived_at IS NULL ORDER BY l.position`).all(userId).map((x) => x.ticket_id);
   return {
@@ -50,6 +55,7 @@ export function priorityAccounts(userId) {
       ...t,
       accounts: accounts.filter((a) => a.tier_id === t.id).map((a) => ({
         ...a, tickets: tickets.filter((k) => k.account_id === a.id).map(({ account_id, position, ...k }) => k),
+        strategies: strategies.filter((s) => s.account_id === a.id).map(({ account_id, ...s }) => s),
       })),
     })),
     list,
@@ -159,11 +165,39 @@ r.post('/accounts/:id/activity-ticket', (req, res) => {
   res.json({ ticket: activityTicket(account) });
 });
 
-/** Body: { strategy }: how the owner plans to gain a foothold at this account. */
-r.put('/accounts/:id/strategy', (req, res) => {
+/** Body: { body }: a new way to gain a foothold at this account, at the bottom of its list. */
+r.post('/accounts/:id/strategies', (req, res) => {
   if (!ownAccount(req.params.id, req.user.id)) return res.status(404).json({ error: 'Account not found' });
-  const strategy = String(req.body?.strategy ?? '').trim().slice(0, STRATEGY_MAX) || null;
-  db.prepare('UPDATE priority_accounts SET strategy = ? WHERE id = ?').run(strategy, req.params.id);
+  const body = strategyText(req.body?.body);
+  if (!body) return res.status(400).json({ error: 'Write the strategy' });
+  const pos = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM account_strategies WHERE account_id = ?').get(req.params.id).n;
+  db.prepare('INSERT INTO account_strategies (account_id, body, position) VALUES (?, ?, ?)').run(req.params.id, body, pos);
+  res.json(priorityAccounts(req.user.id));
+});
+
+/** Body: { ids: [] }, in order, top priority first. Ids that aren't this account's are ignored. */
+r.put('/accounts/:id/strategies', (req, res) => {
+  if (!ownAccount(req.params.id, req.user.id)) return res.status(404).json({ error: 'Account not found' });
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number) : [];
+  const move = db.prepare('UPDATE account_strategies SET position = ? WHERE id = ? AND account_id = ?');
+  db.transaction(() => ids.forEach((id, i) => move.run(i, id, req.params.id)))();
+  res.json(priorityAccounts(req.user.id));
+});
+
+/** Body: { body?, status? }: either or both. A strategy needs its text; a status can be cleared. */
+r.put('/strategies/:id', (req, res) => {
+  const s = ownStrategy(req.params.id, req.user.id);
+  if (!s) return res.status(404).json({ error: 'Strategy not found' });
+  const body = 'body' in (req.body || {}) ? strategyText(req.body.body) : s.body;
+  if (!body) return res.status(400).json({ error: 'Write the strategy' });
+  const status = 'status' in (req.body || {}) ? strategyText(req.body.status) || null : s.status;
+  db.prepare('UPDATE account_strategies SET body = ?, status = ? WHERE id = ?').run(body, status, s.id);
+  res.json(priorityAccounts(req.user.id));
+});
+
+r.delete('/strategies/:id', (req, res) => {
+  if (!ownStrategy(req.params.id, req.user.id)) return res.status(404).json({ error: 'Strategy not found' });
+  db.prepare('DELETE FROM account_strategies WHERE id = ?').run(req.params.id);
   res.json(priorityAccounts(req.user.id));
 });
 

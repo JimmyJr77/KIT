@@ -111,6 +111,9 @@ GSA doesn't cover international (OCONUS) locations, so those take a manual rate 
 ### Delivery
 Won contracts. A pipeline ticket becomes a contract the moment its deal is marked **won** (on the ticket, on the BD Pipeline board's last column, or in Pipedrive), and comes with its Pipedrive project: overview, phase on the Delivery board, dates, owner, labels, the plan (tasks with subtasks, and activities, ticked off on either side), project notes, documents, and the deal's payment schedule. A contract whose deal is reopened or lost goes on hold until an admin keeps or deletes it.
 
+### Playbook
+Each team's expectations and guidance, written in sections of markdown with the **team battle rhythm** pinned at the top. Pick the team at the top of the page; everyone can read any team's playbook, and admins and that team's leads can edit it (sections, their order, the tagline and version). **Search** marks every keyword match and narrows the page to the sections that match; **Ask KIT** docks beside the page and answers from the sections on it (Gemini); **Workflow** shows the team's workflow diagram when one is set (`playbooks.workflow_image`, a path under `public/`). The BD playbook (the BD & Sales Playbook and the Streamlined Response Workflow) loads once, the first time the BD team has no sections; after that the page's editors own the text.
+
 ### Weekly Priorities
 - Pick a team and its **check-in day**. The week strip scrolls left and right through past and future weeks; use the arrows, a date picker, or "This week."
 - Each team member gets a lane. Lanes scroll horizontally, and a multi-select text filter narrows the board to chosen people.

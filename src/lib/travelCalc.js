@@ -41,6 +41,27 @@ export function quarterFor(iso) {
   return `${y} Q${Math.floor((m - 1) / 3) + 1}`;
 }
 
+export const isQuarter = (s) => /^\d{4} Q[1-4]$/.test(s || '');
+
+/** The first day of a quarter: "2026 Q4" → "2026-10-01". */
+export function quarterStart(q) {
+  const [y, n] = q.split(' Q').map(Number);
+  return `${y}-${String((n - 1) * 3 + 1).padStart(2, '0')}-01`;
+}
+
+/** A quarter's three months as "YYYY-MM". */
+export function quarterMonths(q) {
+  const [y, n] = q.split(' Q').map(Number);
+  return [0, 1, 2].map((i) => `${y}-${String((n - 1) * 3 + 1 + i).padStart(2, '0')}`);
+}
+
+/** The quarter `n` quarters after `q` (before it when negative): shiftQuarter("2026 Q4", 1) → "2027 Q1". */
+export function shiftQuarter(q, n) {
+  const [y, k] = q.split(' Q').map(Number);
+  const i = y * 4 + (k - 1) + n;
+  return `${Math.floor(i / 4)} Q${(i % 4) + 1}`;
+}
+
 /** The quarter containing `iso` (default today) and the `count - 1` quarters after it, e.g. ["2026 Q4", "2027 Q1", …]. */
 export function upcomingQuarters(count = 4, iso = new Date().toLocaleDateString('en-CA')) {
   const [y, m] = iso.split('-').map(Number);

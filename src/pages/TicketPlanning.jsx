@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Loader2, Check, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { X, Plus, Trash2, Loader2, Check, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, Ticket } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { api } from '../lib/api.js';
@@ -10,24 +11,31 @@ import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, milestoneOf } from '../lib/proc
 import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
-/** The menu items along the ticket pane's left edge. Strategy and the win assessment are for pipeline tickets only. Priority accounts share the `account` ones. */
+/**
+ * The menu items along the ticket pane's left edge. Strategy and the win assessment are for pipeline tickets only. Priority
+ * accounts share the `account` ones, under `accountLabel` if they have one; their priority tickets (`accountOnly`) are theirs alone.
+ */
 export const PLAN_TOOLS = [
   { key: 'strategy', label: 'Strategy', icon: ChessPawn, bidOnly: true, account: true },
   { key: 'activities', label: 'Activity', icon: CalendarCheck, account: true },
+  { key: 'tickets', label: 'Priority tickets', icon: Ticket, account: true, accountOnly: true },
   { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
-  { key: 'people', label: 'People', icon: ContactRound },
+  { key: 'people', label: 'People', accountLabel: 'CRM', icon: ContactRound, account: true },
   { key: 'process', label: 'Milestones', icon: Workflow, bidOnly: true },
   { key: 'details', label: 'Deal details', icon: ClipboardList, bidOnly: true },
 ];
 
 export function PlanRail({ ticket, active, onSelect, skip = [] }) {
-  const shown = (t) => !skip.includes(t.key) && (ticket.ticket_type === 'account' ? t.account : !t.bidOnly || ticket.ticket_type !== 'work');
-  return PLAN_TOOLS.filter(shown).map(({ key, label, icon: Icon }) => (
-    <button key={key} type="button" onClick={() => onSelect(active === key ? null : key)} title={label} aria-label={label} aria-pressed={active === key}
-      className={`grid h-9 w-9 place-items-center rounded-md transition ${active === key ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-brand-700 hover:shadow-sm'}`}>
-      <Icon size={18} />
-    </button>
-  ));
+  const shown = (t) => !skip.includes(t.key) && (ticket.ticket_type === 'account' ? t.account : !t.accountOnly && (!t.bidOnly || ticket.ticket_type !== 'work'));
+  return PLAN_TOOLS.filter(shown).map(({ key, label, accountLabel, icon: Icon }) => {
+    const name = (ticket.ticket_type === 'account' && accountLabel) || label;
+    return (
+      <button key={key} type="button" onClick={() => onSelect(active === key ? null : key)} title={name} aria-label={name} aria-pressed={active === key}
+        className={`grid h-9 w-9 place-items-center rounded-md transition ${active === key ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-brand-700 hover:shadow-sm'}`}>
+        <Icon size={18} />
+      </button>
+    );
+  });
 }
 
 /** The extra pane for whichever menu item is open. `onChanged` refreshes the timeline after a save. */
@@ -60,12 +68,15 @@ export function DrawerShell({ title, subtitle, onClose, footer, children }) {
 // ---- People (CRM)
 
 /**
- * The people involved in this ticket. Anyone added here also goes into the master CRM; people already in the
- * CRM can be linked instead. Selecting someone opens their details and interaction log.
+ * The people involved in this ticket, or priority account (where it's the CRM pane, topped by everyone we know there).
+ * Anyone added here also goes into the master CRM; people already in the CRM can be linked instead. Selecting someone
+ * opens their details and interaction log.
  */
 function PeopleDrawer({ ticket, onClose, onChanged }) {
   const [view, setView] = useState('list'); // list | new | link | <contact id>
   const [people, setPeople] = useState(null);
+  const account = ticket.ticket_type === 'account';
+  const noun = account ? 'account' : 'ticket';
   const load = () => api.get(`/contacts/ticket/${ticket.id}`).then((d) => setPeople(d.contacts));
   useEffect(() => { load(); }, [ticket.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const back = () => { setView('list'); load(); };
@@ -75,7 +86,7 @@ function PeopleDrawer({ ticket, onClose, onChanged }) {
     onChanged();
   };
   const unlink = async (c) => {
-    if (!confirm(`Take ${contactName(c)} off this ticket? They stay in the CRM.`)) return;
+    if (!confirm(`Take ${contactName(c)} off this ${noun}? They stay in the CRM.`)) return;
     await api.del(`/contacts/${c.id}/tickets/${ticket.id}`);
     load();
     onChanged();
@@ -87,16 +98,18 @@ function PeopleDrawer({ ticket, onClose, onChanged }) {
   const selected = typeof view === 'number' ? people?.find((p) => p.id === view) : null;
 
   return (
-    <DrawerShell title={selected ? contactName(selected) : view === 'new' ? 'Add a person' : view === 'link' ? 'Add from the CRM' : 'People'}
+    <DrawerShell title={selected ? contactName(selected) : view === 'new' ? 'Add a person' : view === 'link' ? 'Add from the CRM' : account ? 'CRM' : 'People'}
       subtitle={selected ? contactLine(selected) || 'In the CRM' : 'Everyone added here also goes into the CRM'} onClose={onClose}>
       {header}
       {view === 'list' && (
         <div className="space-y-3">
+          {account && <CrmPeople organization={ticket.organization} account reloadKey={people} />}
+          {account && <h4 className="border-t border-slate-200 pt-3 text-xs font-medium text-slate-700">On this account</h4>}
           <div className="flex gap-2">
             <button type="button" className="btn-primary flex-1 text-xs" onClick={() => setView('new')}><Plus size={14} /> Add a person</button>
             <button type="button" className="btn flex-1 text-xs" onClick={() => setView('link')}><Link2 size={14} /> Add from the CRM</button>
           </div>
-          {people && !people.length && <p className="text-sm text-slate-400">No one on this ticket yet.</p>}
+          {people && !people.length && <p className="text-sm text-slate-400">No one on this {noun} yet.</p>}
           <ul className="space-y-2">
             {people?.map((c) => (
               <li key={c.id} className="group flex items-start gap-2 rounded-lg border border-slate-200 bg-white p-2.5 hover:border-brand-500">
@@ -114,7 +127,7 @@ function PeopleDrawer({ ticket, onClose, onChanged }) {
                   className={`rounded p-1 hover:bg-slate-100 ${c.is_primary ? 'text-amber-500' : 'text-slate-300 opacity-0 group-hover:opacity-100 hover:text-amber-500'}`}>
                   <Star size={14} fill={c.is_primary ? 'currentColor' : 'none'} />
                 </button>
-                <button type="button" onClick={() => unlink(c)} title="Take off this ticket" aria-label="Take off this ticket"
+                <button type="button" onClick={() => unlink(c)} title={`Take off this ${noun}`} aria-label={`Take off this ${noun}`}
                   className="rounded p-1 text-slate-300 opacity-0 group-hover:opacity-100 hover:bg-slate-100 hover:text-slate-600"><Unlink size={14} /></button>
               </li>
             ))}
@@ -159,7 +172,7 @@ function LinkFromCrm({ ticket, linked, onLinked }) {
             </button>
           </li>
         ))}
-        {results && !shown.length && <li className="px-3 py-3 text-sm text-slate-400">{q ? 'No one matches.' : 'Everyone in the CRM is already on this ticket.'}</li>}
+        {results && !shown.length && <li className="px-3 py-3 text-sm text-slate-400">{q ? 'No one matches.' : `Everyone in the CRM is already on this ${ticket.ticket_type === 'account' ? 'account' : 'ticket'}.`}</li>}
       </ul>
     </div>
   );
@@ -494,10 +507,122 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
               aria-label="Your strategy"
               placeholder={'Win themes, customer hot buttons, discriminators, teaming approach, price-to-win, and the actions that get us there…'} />
           </section>
+          <CrmSection organization={ticket.organization} ticketId={ticket.id} />
           <SuggestedStrategy />
         </div>
       ) : <p className="text-sm text-slate-400">Loading…</p>}
     </DrawerShell>
+  );
+}
+
+const OBJECTIVE_TINT = { 'Not started': 'bg-slate-100 text-slate-600', 'In progress': 'bg-sky-50 text-sky-800', Achieved: 'bg-emerald-50 text-emerald-700', Missed: 'bg-red-50 text-red-700' };
+
+/**
+ * Who we know at an organization and the account objectives there, plus anyone on `ticketId`. On a priority account (`inclusive`)
+ * that's anything with the name as whole words in any field, as the CRM page's filter finds. `reloadKey` fetches again when it changes.
+ */
+function useCrm(organization, { ticketId, inclusive, reloadKey } = {}) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const p = new URLSearchParams();
+    if (organization) p.set('organization', organization);
+    if (ticketId) p.set('ticket', ticketId);
+    if (inclusive) p.set('inclusive', '1');
+    api.get(`/contacts/crm?${p}`).then(setData).catch((e) => setError(e.message));
+  }, [organization, ticketId, inclusive, reloadKey]);
+  return { data, error };
+}
+
+/** The CRM page on one tab, filtered to the organization. */
+const crmLink = (tab, organization) => `/crm?${new URLSearchParams({ tab, organization })}`;
+
+/**
+ * Who we know at the organization and how well, best first. With a `ticketId`, the people on that ticket are in too, marked.
+ * Read-only: people are managed in the People pane. On a priority account (`account`) this tops that pane, and its link
+ * opens the CRM filtered to the account.
+ */
+function CrmPeople({ organization, ticketId, account, reloadKey }) {
+  const { data, error } = useCrm(organization, { ticketId, inclusive: account, reloadKey });
+  const people = data?.contacts || [];
+  const best = people[0]?.relationship || 0;
+  const known = people.filter((c) => c.relationship >= 3).length;
+  return (
+    <section className="space-y-2" aria-label="CRM">
+      <h4 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+        <ContactRound size={13} /> CRM
+        <Link to={account ? crmLink('contacts', organization) : '/crm'} className="ml-auto text-[11px] font-medium tracking-normal text-brand-700 normal-case hover:underline">Open the CRM</Link>
+      </h4>
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      {!data && !error && <p className="text-xs text-slate-400">Loading…</p>}
+      {data && (
+        <div>
+          <div className="mb-1 flex items-baseline justify-between gap-2">
+            <span className="text-xs font-medium text-slate-700">People{organization ? ` at ${organization}` : ''}</span>
+            {people.length > 0 && (
+              <span className="flex items-center gap-1 text-[11px] text-slate-400">{people.length} known · {known} working relationship{known === 1 ? '' : 's'} or better{best >= 4 && <> · strongest <RelationshipBadge level={best} short /></>}</span>
+            )}
+          </div>
+          {people.length ? (
+            <ul className="divide-y divide-slate-100 rounded-lg bg-white ring-1 ring-slate-200">
+              {people.map((c) => (
+                <li key={c.id} className="flex items-center gap-2 px-2.5 py-1.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm font-medium text-slate-800">{contactName(c)}</span>
+                      {c.is_primary && <span className="rounded bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-800">Primary</span>}
+                      {ticketId && c.on_ticket && !c.is_primary && <span className="rounded bg-slate-100 px-1.5 text-[10px] font-medium text-slate-600">On this ticket</span>}
+                    </div>
+                    <div className="truncate text-[11px] text-slate-500">
+                      {[c.role, c.organization && c.organization !== organization ? c.organization : null, c.last_interaction_at ? `last ${stamp(c.last_interaction_at)}` : 'no interactions yet'].filter(Boolean).join(' · ')}
+                    </div>
+                  </div>
+                  <RelationshipBadge level={c.relationship} short />
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-xs text-slate-400">No one {organization ? `at ${organization} ` : ''}in the CRM yet.{!account && ` Add people in the People pane${ticketId ? ' on this ticket' : ''}.`}</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** The open account objectives at the organization. Read-only: they're managed on the CRM page, which a priority account (`account`) links to filtered. */
+export function CrmObjectives({ organization, account }) {
+  const { data, error } = useCrm(organization, { inclusive: account });
+  if (!data) return error ? <p className="text-xs text-red-600">{error}</p> : null;
+  const objectives = data.objectives.filter((o) => !['Achieved', 'Missed'].includes(o.status));
+  return (
+    <section aria-label="Account objectives">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-slate-700">Account objectives</span>
+        <Link to={account ? crmLink('objectives', organization) : '/crm?tab=objectives'} className="text-[11px] text-brand-700 hover:underline">{objectives.length ? 'All objectives' : 'Add one'}</Link>
+      </div>
+      {objectives.length ? (
+        <ul className="divide-y divide-slate-100 rounded-lg bg-white ring-1 ring-slate-200">
+          {objectives.map((o) => (
+            <li key={o.id} className="flex items-start gap-2 px-2.5 py-1.5">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm text-slate-800">{o.objective}</div>
+                <div className="text-[11px] text-slate-500">{[o.owner && fullName(o.owner), o.target_date && `by ${shortDate(o.target_date, { month: 'short', day: 'numeric', year: 'numeric' })}`].filter(Boolean).join(' · ')}</div>
+              </div>
+              <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${OBJECTIVE_TINT[o.status]}`}>{o.status}</span>
+            </li>
+          ))}
+        </ul>
+      ) : <p className="text-xs text-slate-400">No open account objectives{organization ? ` for ${organization}` : ''}.</p>}
+    </section>
+  );
+}
+
+/** The CRM behind a pipeline ticket's strategy: the people, then the account objectives. */
+function CrmSection({ organization, ticketId }) {
+  return (
+    <div className="space-y-2">
+      <CrmPeople organization={organization} ticketId={ticketId} />
+      <CrmObjectives organization={organization} />
+    </div>
   );
 }
 

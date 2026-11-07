@@ -16,9 +16,9 @@ const overdue = (o) => o.target_date && o.target_date < todayIso() && !['Achieve
 
 /**
  * Account development: what each BD director is working toward with a customer (access, relationships, shaping demand),
- * by when, and whether it happened.
+ * by when, and whether it happened. With `organization`, only those with it as whole words in any field, and new ones start with it.
  */
-export default function AccountObjectives() {
+export default function AccountObjectives({ organization = '' }) {
   const { user } = useAuth();
   const users = useApi('/users');
   const territories = useApi('/territories').data?.territories || [];
@@ -32,9 +32,10 @@ export default function AccountObjectives() {
     const p = new URLSearchParams({ status });
     if (owner) p.set('owner', owner);
     if (territory) p.set('territory', territory);
+    if (organization) p.set('filter', organization);
     return api.get(`/objectives?${p}`).then(setData);
   };
-  useEffect(() => { load(); }, [owner, territory, status]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [owner, territory, status, organization]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const directors = (users.data?.users || []).filter((u) => u.teams?.some((t) => t.name === 'BD'));
   const list = data?.objectives || [];
@@ -56,7 +57,7 @@ export default function AccountObjectives() {
               className={`rounded px-3 ${status === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
           ))}
         </div>
-        <button type="button" className="btn-primary h-[38px]" onClick={() => setEditing({ new: true, owner_id: directors.some((u) => u.id === user.id) ? user.id : '' })}>
+        <button type="button" className="btn-primary h-[38px]" onClick={() => setEditing({ new: true, organization, owner_id: directors.some((u) => u.id === user.id) ? user.id : '' })}>
           <Plus size={16} /> New objective
         </button>
       </div>
@@ -64,7 +65,7 @@ export default function AccountObjectives() {
       {data && !list.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <Flag size={28} className="mx-auto mb-2 text-slate-300" />
-          {status === 'done' ? 'Nothing achieved or missed yet.' : 'No account objectives yet. Add one for each customer you\'re building access with.'}
+          {organization ? `No ${status === 'open' ? 'open ' : status === 'done' ? 'achieved or missed ' : ''}objectives for ${organization}.` : status === 'done' ? 'Nothing achieved or missed yet.' : 'No account objectives yet. Add one for each customer you\'re building access with.'}
         </div>
       )}
 

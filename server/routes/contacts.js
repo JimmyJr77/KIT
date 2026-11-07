@@ -2,6 +2,7 @@
 // ticket are linked to it, and every contact appears on the master CRM page.
 import { Router } from 'express';
 import { db, json } from '../db.js';
+import { OBJECTIVE_SQL, objectiveHasWord, objectiveOut } from './objectives.js';
 
 const r = Router();
 
@@ -10,9 +11,20 @@ const LIST_SQL = `SELECT c.*, u.first_name AS by_first, u.last_name AS by_last,
     (SELECT MAX(i.created_at) FROM contact_interactions i WHERE i.contact_id = c.id) AS last_interaction_at
   FROM contacts c LEFT JOIN users u ON u.id = c.created_by`;
 
+/** Everything searchable on a contact: their fields, labels and tickets, and their interaction log. */
+const CONTACT_TEXT = `c.first_name || ' ' || COALESCE(c.last_name, '') || ' ' || COALESCE(c.organization, '') || ' ' || COALESCE(c.role, '') || ' ' ||
+  COALESCE(c.email, '') || ' ' || COALESCE(c.phone, '') || ' ' || COALESCE(c.notes, '') || ' ' || COALESCE(c.labels, '') || ' ' ||
+  COALESCE((SELECT group_concat(k.opportunity_title, ' ') FROM ticket_contacts tc JOIN tickets k ON k.id = tc.ticket_id WHERE tc.contact_id = c.id AND k.ticket_type != 'account'), '') || ' ' ||
+  COALESCE((SELECT group_concat(i.body, ' ') FROM contact_interactions i WHERE i.contact_id = c.id), '')`;
+/** SQL for "this text is somewhere on the contact", for the search box: any case, any part of a word. */
+const contactHas = (param) => `instr(lower(${CONTACT_TEXT}), lower(${param})) > 0`;
+/** SQL for "this name is on the contact as whole words", for filtering to an organization. */
+const contactHasWord = (param) => `has_word(${CONTACT_TEXT}, ${param})`;
+
 function withTickets(rows) {
+  // A priority account's hidden ticket isn't a ticket to list here.
   const links = db.prepare(`SELECT tc.contact_id, t.id, t.opportunity_title, t.ticket_type FROM ticket_contacts tc
-    JOIN tickets t ON t.id = tc.ticket_id ORDER BY t.opportunity_title`).all();
+    JOIN tickets t ON t.id = tc.ticket_id WHERE t.ticket_type != 'account' ORDER BY t.opportunity_title`).all();
   return rows.map(({ by_first, by_last, ...c }) => ({
     ...c, labels: json.parse(c.labels, []),
     created_by_user: by_first ? { id: c.created_by, first_name: by_first, last_name: by_last } : null,
@@ -47,16 +59,38 @@ function organizationFor(name) {
     ?? db.prepare('INSERT INTO organizations (name) VALUES (?)').run(name).lastInsertRowid;
 }
 
-/** Every contact, alphabetical by last name. `q` searches name, organization, role, email, and notes. */
+/** Every contact, alphabetical by last name. `q` finds any part of a word and `filter` whole words, each across all of a contact; with both, a contact has to match both. */
 r.get('/', (req, res) => {
-  const q = `%${String(req.query.q || '').trim()}%`;
-  const rows = db.prepare(`${LIST_SQL} WHERE (c.first_name || ' ' || COALESCE(c.last_name, '') || ' ' || COALESCE(c.organization, '') || ' ' ||
-      COALESCE(c.role, '') || ' ' || COALESCE(c.email, '') || ' ' || COALESCE(c.notes, '')) LIKE ?
-    ORDER BY COALESCE(c.last_name, c.first_name) COLLATE NOCASE, c.first_name COLLATE NOCASE`).all(q);
+  const q = String(req.query.q || '').trim();
+  const filter = String(req.query.filter || '').trim();
+  const rows = db.prepare(`${LIST_SQL} WHERE (@q = '' OR ${contactHas('@q')}) AND (@filter = '' OR ${contactHasWord('@filter')})
+    ORDER BY COALESCE(c.last_name, c.first_name) COLLATE NOCASE, c.first_name COLLATE NOCASE`).all({ q, filter });
   res.json({ contacts: withTickets(rows) });
 });
 
 /** The contacts linked to one ticket. */
+/**
+ * The CRM picture behind a strategy: everyone we know at an organization (plus anyone on the ticket, if given),
+ * best relationship first, and the open account objectives there. ?organization=<name>&ticket=<id>. With inclusive=1 (a priority
+ * account), that's anyone and anything with the name as whole words in any field, matching the CRM page's filter; otherwise the exact organization.
+ */
+r.get('/crm', (req, res) => {
+  const org = String(req.query.organization || '').trim();
+  const ticketId = Number(req.query.ticket) || null;
+  const inclusive = req.query.inclusive === '1';
+  const rows = db.prepare(`${LIST_SQL} WHERE (@org != '' AND ${inclusive ? contactHasWord('@org') : 'c.organization = @org COLLATE NOCASE'})
+      OR c.id IN (SELECT contact_id FROM ticket_contacts WHERE ticket_id = @ticket)
+    ORDER BY c.relationship DESC, COALESCE(c.last_name, c.first_name) COLLATE NOCASE`).all({ org, ticket: ticketId });
+  const links = ticketId ? db.prepare('SELECT contact_id, is_primary FROM ticket_contacts WHERE ticket_id = ?').all(ticketId) : [];
+  const contacts = withTickets(rows).map((c) => {
+    const l = links.find((x) => x.contact_id === c.id);
+    return { ...c, on_ticket: !!l, is_primary: !!l?.is_primary };
+  });
+  const objectives = org ? db.prepare(`${OBJECTIVE_SQL} WHERE ${inclusive ? objectiveHasWord('@org') : 'o.organization = @org COLLATE NOCASE'}
+      ORDER BY o.status IN ('Achieved', 'Missed'), o.target_date IS NULL, o.target_date`).all({ org }).map(objectiveOut) : [];
+  res.json({ contacts, objectives });
+});
+
 r.get('/ticket/:ticketId', (req, res) => {
   const rows = db.prepare(`${LIST_SQL} JOIN ticket_contacts tc ON tc.contact_id = c.id WHERE tc.ticket_id = ?
     ORDER BY c.relationship DESC, COALESCE(c.last_name, c.first_name) COLLATE NOCASE`).all(req.params.ticketId);

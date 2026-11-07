@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Plus, Trash2, Loader2, ArrowLeft, Phone, Users, SquareCheck, Clock, Mail, Utensils, Flag, Video, MapPin, ExternalLink, GripVertical, ListChecks, MessageSquare, CalendarRange, Hourglass } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Plus, Trash2, Loader2, ArrowLeft, Phone, Users, SquareCheck, Clock, Mail, Utensils, Flag, Video, MapPin, ExternalLink, GripVertical, ListChecks, MessageSquare, CalendarRange, CalendarPlus, Check, Hourglass } from 'lucide-react';
 import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -113,6 +113,7 @@ function ActivityRow({ a, ticketId, sortable, onToggle, onOpen, onChanged }) {
   const Icon = TYPE_ICONS[a.activity_type] || SquareCheck;
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: a.id, disabled: !sortable });
   const [commenting, setCommenting] = useState(false);
+  const [picking, setPicking] = useState(null); // { x, y }: where the week menu opens
   const next = a.rank === 1;
   return (
     <li ref={setNodeRef} style={sortable ? { transform: CSS.Transform.toString(transform), transition } : undefined}
@@ -136,7 +137,7 @@ function ActivityRow({ a, ticketId, sortable, onToggle, onOpen, onChanged }) {
           <span className={`mt-0.5 block text-[11px] ${overdue(a) ? 'font-medium text-red-600' : 'text-slate-500'}`}>
             {[when(a) || 'No date', overdue(a) && 'overdue', a.assignee_name].filter(Boolean).join(' · ')}
           </span>
-          {a.cards.length > 0 && <span className="mt-0.5 flex items-center gap-0.5 text-[11px] text-slate-400"><CalendarRange size={11} /> Priority, week of {shortDate(a.cards[0].week_start)}</span>}
+          {a.cards.length > 0 && <span className="mt-0.5 flex items-center gap-0.5 text-[11px] text-slate-400"><CalendarRange size={11} /> Priority, week of {a.cards.map((c) => shortDate(c.week_start)).join(', ')}</span>}
           {(a.location || a.video_call || a.participants.length > 0) && (
             <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-slate-400">
               {a.location && <span className="flex items-center gap-0.5"><MapPin size={10} /> {a.location}</span>}
@@ -145,11 +146,20 @@ function ActivityRow({ a, ticketId, sortable, onToggle, onOpen, onChanged }) {
             </span>
           )}
         </button>
+        {!a.done && (
+          <button type="button" title="Make this a weekly priority" aria-label={`Make “${a.subject}” a weekly priority`} aria-haspopup="menu" aria-expanded={!!picking}
+            onMouseDown={(e) => e.stopPropagation()} // so the menu's click-away doesn't fire first and reopen it
+            onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPicking(picking ? null : { x: r.right, y: r.bottom }); }}
+            className={`flex items-center text-[11px] ${a.cards.length || picking ? 'text-brand-600' : 'text-slate-300 opacity-0 group-hover:opacity-100 focus:opacity-100'} hover:text-brand-700`}>
+            <CalendarPlus size={14} />
+          </button>
+        )}
         <button type="button" onClick={() => setCommenting(!commenting)} title="Comment on this activity" aria-label={`Comment on “${a.subject}”`}
           className={`flex items-center gap-0.5 text-[11px] ${a.comment_count ? 'text-violet-600' : 'text-slate-300 opacity-0 group-hover:opacity-100 focus:opacity-100'} hover:text-violet-700`}>
           <MessageSquare size={14} />{a.comment_count > 0 && a.comment_count}
         </button>
       </div>
+      {picking && <PriorityWeekMenu activity={a} ticketId={ticketId} x={picking.x} y={picking.y} onClose={() => setPicking(null)} onAdded={() => { setPicking(null); onChanged(); }} />}
       {commenting && (
         <div className="mt-1.5 ml-6">
           <CommentComposer ticketId={ticketId} target={{ type: 'activity', id: a.id }} autoFocus placeholder={`Comment on “${a.subject}”…`}
@@ -480,6 +490,75 @@ function ActivityComments({ comments, activity }) {
     </div>
   );
   return <div className="mb-2 space-y-1.5">{comments.map((m) => <div key={m.id} className="space-y-1">{one(m)}{m.replies.map((x) => one(x, true))}</div>)}</div>;
+}
+
+/**
+ * The menu behind an activity's priority icon: pick the week to make it a priority in, for one of your teams.
+ * Weeks start on the team's check-in day. A week whose planning has closed takes it as work instead.
+ */
+function PriorityWeekMenu({ activity, ticketId, x, y, onClose, onAdded }) {
+  const { user } = useAuth();
+  const teams = user.teams || [];
+  const [team, setTeam] = useState(teams[0]?.id ?? '');
+  const [weeks, setWeeks] = useState(null);
+  const [busy, setBusy] = useState(null); // the week being added
+  const [error, setError] = useState('');
+  const ref = useRef(null);
+  useEffect(() => {
+    const away = (e) => { if (!ref.current?.contains(e.target)) onClose(); };
+    const key = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', key); };
+  }, [onClose]);
+  useEffect(() => {
+    if (!team) return;
+    setWeeks(null);
+    api.get(`/priorities/weeks?team=${team}`).then(setWeeks).catch((e) => setError(e.message));
+  }, [team]);
+
+  const onWeek = (w) => activity.cards.some((c) => c.team_id === Number(team) && c.week_start === w);
+  const add = async (week) => {
+    setBusy(week);
+    setError('');
+    try {
+      await api.post('/priorities/cards', { team_id: team, ticket_id: ticketId, activity_id: activity.id, week_start: week, assignees: [activity.assignee_id || user.id] });
+      onAdded();
+    } catch (e) {
+      setError(e.message);
+      setBusy(null);
+    }
+  };
+  const width = 240;
+  return (
+    <div ref={ref} role="menu" aria-label="Make it a priority for the week of" style={{ left: Math.max(8, Math.min(x - width, window.innerWidth - width - 8)), top: y + 4 }}
+      className="fixed z-50 rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
+      <div className="px-3 pt-1 pb-1.5 text-[11px] font-semibold text-slate-500 uppercase" style={{ width }}>Priority for the week of</div>
+      {!teams.length && <p className="px-3 py-1.5 text-xs text-slate-400">You’re not on a team yet.</p>}
+      {teams.length > 1 && (
+        <div className="px-3 pb-1.5">
+          <select className="input h-7 w-full py-0 text-xs" value={team} onChange={(e) => setTeam(Number(e.target.value))} aria-label="Team">
+            {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+      )}
+      {team && !weeks && !error && <p className="px-3 py-1.5 text-xs text-slate-400">Loading…</p>}
+      {weeks?.weeks.map((w) => {
+        const current = w.week_start === weeks.currentWeekStart;
+        const on = onWeek(w.week_start);
+        return (
+          <button key={w.week_start} type="button" role="menuitem" disabled={on || !!busy} onClick={() => add(w.week_start)}
+            title={on ? 'Already a priority for this team that week' : w.closed ? 'Planning for this week has closed, so it’s added as work' : undefined}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-50 focus:bg-slate-50 focus:outline-none disabled:cursor-default disabled:opacity-60">
+            <span className="w-3.5 shrink-0">{on ? <Check size={14} className="text-brand-600" /> : busy === w.week_start ? <Loader2 size={14} className="animate-spin text-slate-400" /> : null}</span>
+            <span className="flex-1">{current ? 'Current week' : shortDate(w.week_start)}{current && <span className="ml-1 text-xs text-slate-400">{shortDate(w.week_start)}</span>}</span>
+            {w.closed && !on && <span className="shrink-0 rounded bg-amber-100 px-1.5 text-[10px] font-medium text-amber-800" title="Planning closed: added as work">Work</span>}
+          </button>
+        );
+      })}
+      {error && <p className="px-3 py-1 text-[11px] text-red-600">{error}</p>}
+    </div>
+  );
 }
 
 /** Which weeks this activity is someone's priority, and a way to make it one this week. */

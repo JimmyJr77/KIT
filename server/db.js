@@ -11,6 +11,19 @@ export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+// has_word(text, term) in SQL: is the term in the text as whole words, anywhere in it and in any case? Punctuation breaks words,
+// so CIA is in "CIA Directorate" and "a@cia.gov" but not "Patricia" or "Artificial". A term of several words matches as a phrase.
+let word = { term: null, regex: null }; // SQLite calls this once per row, usually with one term
+db.function('has_word', { deterministic: true }, (text, term) => {
+  const t = String(term ?? '').trim();
+  if (text == null || !t) return 0;
+  if (word.term !== t) {
+    const body = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    word = { term: t, regex: new RegExp(`(?<![\\p{L}\\p{N}])${body}(?![\\p{L}\\p{N}])`, 'iu') };
+  }
+  return word.regex.test(String(text)) ? 1 : 0;
+});
+
 // While the sample data is hidden, temporary views stand in for the tables (see server/sample/registry.js), and views
 // can't be written to. So every write names the real table: "UPDATE tickets" runs as "UPDATE main.tickets".
 const WRITE = /^(\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+)("?)(\w+)\2(?![\w.])/i;
@@ -903,6 +916,17 @@ CREATE TABLE IF NOT EXISTS travel_actuals (
 );
 CREATE INDEX IF NOT EXISTS travel_actuals_date ON travel_actuals(spent_on);
 `);
+// Locking a trip's estimate is how its actual costs are entered: the locked total is recorded here as one actual cost
+// entry for the trip, kept in step with the lock and gone when the trip is unlocked or deleted.
+addColumn('travel_actuals', 'trip_id', 'INTEGER REFERENCES trips(id) ON DELETE CASCADE');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS travel_actuals_trip ON travel_actuals(trip_id)');
+// Trips locked before that get their entry.
+db.exec(`INSERT INTO travel_actuals (traveler_id, spent_on, amount, note, created_by, trip_id)
+  SELECT t.traveler_id, t.date_from, t.total_estimate, 'Trip: ' || COALESCE((SELECT e.name FROM events e WHERE e.id = t.event_id),
+      NULLIF(TRIM(COALESCE(json_extract(t.location_to, '$.city'), '') || CASE WHEN json_extract(t.location_to, '$.state') IS NOT NULL
+        AND json_extract(t.location_to, '$.city') IS NOT NULL THEN ', ' ELSE '' END || COALESCE(json_extract(t.location_to, '$.state'), '')), ''), 'trip'),
+    t.created_by, t.id
+  FROM trips t WHERE t.locked_estimate IS NOT NULL AND t.total_estimate > 0 AND NOT EXISTS (SELECT 1 FROM travel_actuals a WHERE a.trip_id = t.id)`);
 // Labels tickets already carry get a place in the list.
 db.exec(`INSERT OR IGNORE INTO labels (name) SELECT DISTINCT j.value FROM tickets t, json_each(t.labels) j
   WHERE t.labels IS NOT NULL AND json_valid(t.labels) AND TRIM(j.value) != ''`);
@@ -1096,8 +1120,27 @@ CREATE TABLE IF NOT EXISTS priority_list_tickets (
 );
 `);
 addColumn('priority_accounts', 'ticket_id', 'INTEGER REFERENCES tickets(id) ON DELETE SET NULL'); // a hidden ticket (type account) that holds the account's activities
-addColumn('priority_accounts', 'strategy', 'TEXT'); // the owner's strategy for gaining a foothold at this account
+addColumn('priority_accounts', 'strategy', 'TEXT'); // no longer used: moved to account_strategies
 addColumn('priority_list_tickets', 'direct', 'INTEGER NOT NULL DEFAULT 0'); // no longer used: the priority list doesn't depend on accounts
+// The owner's strategies for gaining a foothold at an account, top priority first, each with a status they write.
+db.exec(`
+CREATE TABLE IF NOT EXISTS account_strategies (
+  id INTEGER PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES priority_accounts(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  status TEXT,
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS account_strategies_account ON account_strategies(account_id);
+`);
+// An account's one strategy from before becomes the first on its list. The old column is left as it was.
+if (!getSettingRaw('account_strategies_split')) {
+  db.transaction(() => {
+    db.exec(`INSERT INTO account_strategies (account_id, body) SELECT a.id, a.strategy FROM priority_accounts a
+      WHERE TRIM(COALESCE(a.strategy, '')) != '' AND NOT EXISTS (SELECT 1 FROM account_strategies s WHERE s.account_id = a.id)`);
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('account_strategies_split', '1')").run();
+  })();
+}
 
 function migrateToActivities() {
   const hasTable = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
@@ -1423,6 +1466,9 @@ addColumn('delivery_programs', 'health_status', 'INTEGER');
 addColumn('delivery_programs', 'project_archived_at', 'TEXT');
 addColumn('delivery_programs', 'pipedrive_snapshot', 'TEXT');
 addColumn('delivery_programs', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');
+// When the period of performance ends (YYYY-MM-DD). Set on the contract; when blank, the deal's "Period of Performance End"
+// custom field stands in (see popEndOf in routes/delivery.js). An Active contract past it is flagged as likely delivered.
+addColumn('delivery_programs', 'pop_end', 'TEXT');
 addColumn('delivery_files', 'pipedrive_id', 'INTEGER');
 addColumn('delivery_files', 'url', 'TEXT');
 addColumn('pipedrive_deletes', 'project_id', 'INTEGER'); // for project items: the Pipedrive project they were on
@@ -1661,3 +1707,38 @@ export const json = {
   },
   str: (v) => JSON.stringify(v ?? null),
 };
+
+// ---- Playbooks: a team's expectations and guidance, in sections written in markdown. Every team has one; its battle
+// rhythm is a section of its own (kind 'rhythm') that stays at the top and can't be deleted. Admins and the team's
+// leads write them (canEditPlaybook); everyone reads them.
+db.exec(`
+CREATE TABLE IF NOT EXISTS playbooks (
+  team_id INTEGER PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
+  tagline TEXT,
+  version TEXT,
+  workflow_image TEXT, -- a diagram shown by the page's Workflow button, as a path under public/
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS playbook_sections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'section', -- rhythm | section
+  position INTEGER NOT NULL DEFAULT 0,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',        -- markdown
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS playbook_sections_rhythm ON playbook_sections(team_id) WHERE kind = 'rhythm';
+CREATE INDEX IF NOT EXISTS playbook_sections_team ON playbook_sections(team_id, position);
+`);
+
+/** Admins and a team's leads write that team's playbook. */
+export function canEditPlaybook(user, teamId) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  return !!db.prepare("SELECT 1 FROM user_teams WHERE user_id = ? AND team_id = ? AND role = 'lead'").get(user.id, teamId);
+}

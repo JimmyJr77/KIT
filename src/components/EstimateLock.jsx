@@ -5,9 +5,9 @@ import { tripCosts, lockSum, lockTotal, LOCK_FIELDS, usd } from '../lib/travelCa
 import SidePanel from './SidePanel.jsx';
 import Money from './Money.jsx';
 
-/** Grey until the trip's estimate is locked, then black. Sits inside clickable rows, so the click stops here. */
+/** Grey until the trip's estimate is locked at its actual costs, then black. Sits inside clickable rows, so the click stops here. */
 export function LockButton({ locked, onClick }) {
-  const label = locked ? 'Estimate locked' : 'Lock estimate';
+  const label = locked ? 'Actual costs entered (estimate locked)' : 'Enter actual costs (locks the estimate)';
   return (
     <button type="button" title={label} aria-label={label} onClick={(e) => { e.stopPropagation(); onClick(); }}
       className={`rounded p-1 hover:bg-slate-100 ${locked ? 'text-slate-900' : 'text-slate-400 hover:text-slate-600'}`}>
@@ -24,8 +24,9 @@ const startingCosts = (trip) => {
 };
 
 /**
- * Lock a trip's estimate: each amount can be changed, and Save makes their total the trip's estimate. A total cost
- * override replaces that total whatever the amounts are. `onSaved` gets the updated trip.
+ * Enter a trip's actual costs, which locks its estimate: each amount can be changed, and Save makes their total the
+ * trip's estimate and records it as actual travel spend. A total cost override replaces that total whatever the amounts
+ * are. Entering them never sends an approved request back for approval. `onSaved` gets the updated trip.
  */
 export function EstimateLockPanel({ trip, onClose, onSaved }) {
   const locked = !!trip.locked_estimate;
@@ -47,15 +48,19 @@ export function EstimateLockPanel({ trip, onClose, onSaved }) {
   };
 
   return (
-    <SidePanel title="Trip estimate" subtitle={trip.traveler_name} onClose={onClose}
+    <SidePanel title={locked ? 'Actual trip costs' : 'Enter actual trip costs'} subtitle={`${trip.traveler_name} · saving locks the estimate at these amounts and counts them as actual spend`} onClose={onClose}
       footer={(
         <div className="flex items-center gap-2">
           {error && <p className="min-w-0 flex-1 text-sm text-red-600">{error}</p>}
           {locked && <button type="button" className="btn" disabled={busy} onClick={() => run(() => api.del(`/travel/${trip.id}/lock`))}>Unlock</button>}
           <button type="button" className="btn ml-auto" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn-primary" disabled={busy} onClick={() => run(() => api.put(`/travel/${trip.id}/lock`, { costs, override }))}>Save</button>
+          <button type="button" className="btn-primary" disabled={busy} onClick={() => run(() => api.put(`/travel/${trip.id}/lock`, { costs, override }))}>{locked ? 'Save' : 'Save & lock'}</button>
         </div>
       )}>
+      <p className="mb-4 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+        Put in what each part of the trip actually cost. Saving locks the trip at this total, so re-pricing and edits leave it alone,
+        and the total shows under Actual travel spend{trip.approval === 'approved' ? '. The request stays approved' : ''}.
+      </p>
       <div className="space-y-3">
         {LOCK_FIELDS.map(([k, label]) => (
           <Money key={k} label={label} value={costs[k]} onChange={(v) => setCosts((c) => ({ ...c, [k]: v }))} />

@@ -3,9 +3,8 @@ import { Building2, Star, Users, UserRound } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName, initials } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
-import SidePanel from './SidePanel.jsx';
-import PriorityAccounts from './PriorityAccounts.jsx';
-import { TicketCard, TicketKindTag } from '../pages/Pipeline.jsx';
+import PriorityAccounts, { AccountPanel } from './PriorityAccounts.jsx';
+import { TicketCard } from '../pages/Pipeline.jsx';
 import TicketTimeline from '../pages/TicketTimeline.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
@@ -56,7 +55,7 @@ export default function StrategicPriorities({ members, me }) {
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
       {!people ? <p className="text-sm text-slate-400">Loading…</p> : mode === 'team'
-        ? <TeamRollup people={withSome} />
+        ? <TeamRollup people={withSome} me={me} reload={load} />
         : <ByMember people={withSome} without={without} members={members} me={me} />}
     </div>
   );
@@ -82,13 +81,15 @@ function Avatars({ list, max = 4 }) {
 
 // ---- Team: everyone's together.
 
-function TeamRollup({ people }) {
-  const [openAccount, setOpenAccount] = useState(null);
+function TeamRollup({ people, me, reload }) {
+  const [openAccount, setOpenAccount] = useState(null); // { key, userId }: whose account of that name the pane shows
+  const [error, setError] = useState('');
   const [ticketId, setTicketId] = useState(null);
   const [ticketStep, setTicketStep] = useState(undefined);
   const [cards, setCards] = useState([]);
 
-  // Tiers merged by name (Tier 1 with Tier 1), in their usual order; accounts merged by name within a tier.
+  // Tiers merged by name (Tier 1 with Tier 1), in their usual order; accounts merged by name within a tier. Each merged account keeps
+  // `entries`: each person's own account record and tiers, for the account pane.
   const tiers = useMemo(() => {
     const cols = new Map();
     people.forEach((p) => p.tiers.forEach((t, i) => {
@@ -98,10 +99,10 @@ function TeamRollup({ people }) {
       col.positions.push(i);
       t.accounts.forEach((a) => {
         const ak = a.name.trim().toLowerCase();
-        if (!col.accounts.has(ak)) col.accounts.set(ak, { key: `${key}|${ak}`, name: a.name, tier: t.name, people: [], strategies: [], tickets: new Map() });
+        if (!col.accounts.has(ak)) col.accounts.set(ak, { key: `${key}|${ak}`, name: a.name, tier: t.name, people: [], entries: [], tickets: new Map() });
         const acc = col.accounts.get(ak);
         acc.people.push({ member: p.member, extra: t.name });
-        if (a.strategy) acc.strategies.push({ member: p.member, text: a.strategy });
+        acc.entries.push({ userId: p.user_id, member: p.member, account: { ...a, tier_id: t.id }, tiers: p.tiers });
         a.tickets.forEach((k) => {
           if (!acc.tickets.has(k.id)) acc.tickets.set(k.id, { ...k, people: [] });
           acc.tickets.get(k.id).people.push({ member: p.member });
@@ -132,7 +133,12 @@ function TeamRollup({ people }) {
   useEffect(() => { loadCards(); }, [idKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const cardById = new Map(cards.map((c) => [c.id, c]));
   const list = ranked.filter((x) => cardById.has(x.id));
-  const account = openAccount && tiers.flatMap((t) => t.accounts).find((a) => a.key === openAccount);
+  const merged = openAccount && tiers.flatMap((t) => t.accounts).find((a) => a.key === openAccount.key);
+  const entry = merged && (merged.entries.find((x) => x.userId === openAccount.userId) || merged.entries[0]);
+  // Open an account on your own entry when you list it, else the first person's.
+  const openOn = (a) => setOpenAccount({ key: a.key, userId: (a.entries.find((x) => x.userId === me) || a.entries[0]).userId });
+  /** A change to your own account: every call returns your whole arrangement, so reload everyone's. */
+  const save = (p) => p.then((d) => { setError(''); reload(); return d; }).catch((e) => { setError(e.message); reload(); });
 
   if (!people.length) {
     return <p className="rounded-xl border-2 border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-400">No strategic priorities yet. Each person sets theirs under By member, or at the top of My dashboard.</p>;
@@ -142,8 +148,9 @@ function TeamRollup({ people }) {
       <div>
         <div className="mb-3">
           <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Building2 size={17} className="text-brand-600" /> Priority accounts</h2>
-          <p className="text-xs text-slate-500">Everyone&apos;s tiers together. Faces show who lists each account; click one to see its priority tickets.</p>
+          <p className="text-xs text-slate-500">Everyone&apos;s tiers together. Faces show who lists each account; click one to open it, as on their dashboard.</p>
         </div>
+        {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
         <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(15rem,1fr))]">
           {tiers.map((t) => (
             <div key={t.key} className="flex flex-col rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -152,7 +159,7 @@ function TeamRollup({ people }) {
                 {t.accounts.map((a) => {
                   const open = a.tickets.filter((k) => !isClosed(k));
                   return (
-                    <button key={a.key} type="button" onClick={() => setOpenAccount(a.key)}
+                    <button key={a.key} type="button" onClick={() => openOn(a)}
                       className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-left text-sm hover:border-brand-500">
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-medium text-slate-800">{a.name}</span>
@@ -194,36 +201,11 @@ function TeamRollup({ people }) {
         )}
       </div>
 
-      {account && (
-        <SidePanel title={account.name} subtitle={`${account.tier} · listed by ${account.people.map((p) => fullName(p.member)).join(', ')}`} onClose={() => setOpenAccount(null)} wide>
-          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority tickets</h3>
-          {account.tickets.length ? (
-            <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-              {account.tickets.map((k) => (
-                <li key={k.id}>
-                  <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={() => { setTicketStep(undefined); setTicketId(k.id); }}>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5"><span className="truncate font-medium text-slate-800">{k.opportunity_title}</span><TicketKindTag ticket={k} /></span>
-                      <span className="block truncate text-xs text-slate-500">{[k.organization, ...(k.ticket_type === 'work' ? [] : [k.pipeline_status, money(k.value)])].filter(Boolean).join(' · ')}</span>
-                    </span>
-                    <Avatars list={k.people} max={4} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="text-sm text-slate-400">No tickets chosen for this account.</p>}
-          <h3 className="mt-5 mb-1.5 text-sm font-semibold text-slate-800">Foothold strategy</h3>
-          {account.strategies.length ? (
-            <div className="space-y-3">
-              {account.strategies.map((s) => (
-                <div key={s.member.id}>
-                  <div className="text-xs font-medium text-slate-500">{fullName(s.member)}</div>
-                  <p className="text-sm whitespace-pre-wrap text-slate-700">{s.text}</p>
-                </div>
-              ))}
-            </div>
-          ) : <p className="text-sm text-slate-400">No strategy yet.</p>}
-        </SidePanel>
+      {entry && (
+        <AccountPanel key={entry.account.id} account={entry.account} tiers={entry.tiers} edit={entry.userId === me} save={save}
+          subtitle={`${entry.tiers.find((t) => t.id === entry.account.tier_id)?.name || merged.tier} · ${fullName(entry.member)}${entry.userId === me ? ' (you)' : ''}`}
+          people={{ list: merged.entries.map((x) => ({ userId: x.userId, label: `${fullName(x.member)}${x.userId === me ? ' (you)' : ''}` })), current: entry.userId, onPick: (userId) => setOpenAccount({ key: merged.key, userId }) }}
+          onClose={() => setOpenAccount(null)} onOpenTicket={(id) => { setTicketStep(undefined); setTicketId(id); }} />
       )}
       {ticketId && <TicketTimeline key={`${ticketId}-${ticketStep}`} ticketId={ticketId} activityId={ticketStep} onClose={() => { setTicketId(null); loadCards(); }} onChanged={loadCards} />}
     </section>

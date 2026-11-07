@@ -166,6 +166,25 @@ function spendWatch(s, entries, deals, today) {
   return { limits: SPEND_LIMITS, ahead: SPEND_AHEAD, months: months.map(check).filter((x) => x.over), quarters: qs.map(check).filter((x) => x.over) };
 }
 
+/**
+ * Travel estimated against actual, month by month: the last five finished months and this one. Estimated is the trips
+ * starting in the month; actual, the travel actuals dated in it (a locked trip's actual costs among them). Variance is
+ * actual less estimated, so over the estimate is positive.
+ */
+function travelVariance(s, today) {
+  const [y, m] = today.split('-').map(Number);
+  const people = inList(s.people);
+  const estimated = db.prepare(`SELECT COALESCE(SUM(total_estimate), 0) AS n FROM trips WHERE traveler_id IN (SELECT value FROM json_each(?)) AND substr(date_from, 1, 7) = ?`);
+  const actual = db.prepare(`SELECT COALESCE(SUM(amount), 0) AS n FROM travel_actuals WHERE traveler_id IN (SELECT value FROM json_each(?)) AND substr(spent_on, 1, 7) = ?`);
+  return Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(Date.UTC(y, m - 6 + i, 1));
+    const key = d.toISOString().slice(0, 7);
+    const e = estimated.get(people, key).n;
+    const a = actual.get(people, key).n;
+    return { key, label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }), estimated: e, actual: a, variance: a - e, current: i === 5 };
+  });
+}
+
 /** `basis` is how the yearly figures run: 'calendar' (this year to date) or 't4q' (the last four finished quarters). */
 export function bdDashboard(s, basis = 'calendar') {
   const today = localToday();
@@ -222,6 +241,7 @@ export function bdDashboard(s, basis = 'calendar') {
       },
       expenses: { quarter: { label: thisQ, ...expenses(s, entries, deals, qr.start, qr.end) }, year: { label: yr.label, ...expenses(s, entries, deals, yr.start, t4q ? yr.end : yearEnd) } },
       spendWatch: spendWatch(s, entries, deals, today),
+      travelVariance: travelVariance(s, today),
     },
     basis: t4q ? 't4q' : 'calendar',
     // Per person in a team: what each spent and brought in over the year (calendar or trailing).

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Plus, ContactRound } from 'lucide-react';
+import { Search, Plus, ContactRound, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { ago, fullStamp } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -8,9 +8,14 @@ import SidePanel from '../components/SidePanel.jsx';
 import { ContactForm, ContactDetail, RelationshipBadge, RELATIONSHIP, contactName, contactLine } from './ContactEditor.jsx';
 import AccountObjectives from './AccountObjectives.jsx';
 
-/** The CRM: customer contacts, and the account development objectives BD directors are working on with each customer. */
+/**
+ * The CRM: customer contacts, and the account development objectives BD directors are working on with each customer.
+ * ?organization=<name> shows only what has that name as whole words in any field, on either tab, until its chip is cleared.
+ */
 export default function Crm() {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  const organization = params.get('organization') || '';
+  const clearOrganization = () => setParams((p) => { p.delete('organization'); return p; }, { replace: true });
   // ?tab=objectives opens on that tab (links from the dashboard); otherwise the tab last used.
   const [tab, setTabState] = useState(() => {
     if (['contacts', 'objectives'].includes(params.get('tab'))) return params.get('tab');
@@ -18,36 +23,44 @@ export default function Crm() {
   });
   const setTab = (t) => { setTabState(t); try { localStorage.setItem('kit.crm.tab', t); } catch { /* ignore */ } };
   const tabs = (
-    <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="tablist">
-      {[['contacts', 'Contacts'], ['objectives', 'Account objectives']].map(([k, l]) => (
-        <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-          className={`rounded px-3 ${tab === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
-      ))}
-    </div>
+    <>
+      <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="tablist">
+        {[['contacts', 'Contacts'], ['objectives', 'Account objectives']].map(([k, l]) => (
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+            className={`rounded px-3 ${tab === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
+        ))}
+      </div>
+      {organization && (
+        <button type="button" onClick={clearOrganization} title="Show every organization" aria-label={`Stop filtering to ${organization}`}
+          className="flex h-9 items-center gap-1.5 rounded-md bg-brand-50 px-2.5 text-sm font-medium text-brand-800 ring-1 ring-brand-200 hover:ring-brand-500">
+          {organization} <X size={14} />
+        </button>
+      )}
+    </>
   );
   if (tab === 'objectives') {
     return (
       <div className="space-y-5 p-8">
         <PageHeader title="CRM" subtitle="Account objectives: what each BD director is working toward with a customer, and by when.">{tabs}</PageHeader>
-        <AccountObjectives />
+        <AccountObjectives organization={organization} />
       </div>
     );
   }
-  return <Contacts tabs={tabs} />;
+  return <Contacts tabs={tabs} organization={organization} />;
 }
 
 /** The master contact list: everyone added anywhere in the app, with how well we know them and what tickets they're on. */
-function Contacts({ tabs }) {
+function Contacts({ tabs, organization }) {
   const [q, setQ] = useState('');
   const [minLevel, setMinLevel] = useState('');
   const [contacts, setContacts] = useState(null);
   const [open, setOpen] = useState(null); // contact id, or 'new'
 
-  const load = () => api.get(`/contacts?q=${encodeURIComponent(q)}`).then((d) => setContacts(d.contacts));
+  const load = () => api.get(`/contacts?${new URLSearchParams({ q, filter: organization })}`).then((d) => setContacts(d.contacts));
   useEffect(() => {
     const h = setTimeout(load, q ? 200 : 0);
     return () => clearTimeout(h);
-  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q, organization]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = (contacts || []).filter((c) => minLevel === '' || c.relationship >= Number(minLevel));
   const selected = typeof open === 'number' ? contacts?.find((c) => c.id === open) : null;
@@ -65,7 +78,7 @@ function Contacts({ tabs }) {
       <div className="flex flex-wrap items-end gap-3">
         <div className="relative w-full max-w-md">
           <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
-          <input className="input pl-9" placeholder="Search by name, organization, role, or email…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="input pl-9" placeholder="Search every field: name, organization, role, email, notes, tickets…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <button type="button" onClick={() => setOpen('new')} title="New contact" aria-label="New contact"
           className="btn-primary h-[38px] w-[38px] shrink-0 p-0"><Plus size={18} /></button>
@@ -74,7 +87,7 @@ function Contacts({ tabs }) {
       {contacts && !shown.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <ContactRound size={28} className="mx-auto mb-2 text-slate-300" />
-          {q || minLevel ? 'No one matches.' : 'No contacts yet. Add one with +, or from the People pane on any ticket.'}
+          {q || minLevel || organization ? 'No one matches.' : 'No contacts yet. Add one with +, or from the People pane on any ticket.'}
         </div>
       )}
 

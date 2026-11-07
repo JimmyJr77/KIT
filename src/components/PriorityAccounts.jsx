@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDroppable, closestCorners } from '@dnd-kit/core';
+import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDroppable, closestCorners, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Building2, Plus, Pencil, Trash2, Star, X, Search, GripVertical, Check, Sparkles } from 'lucide-react';
@@ -7,9 +7,8 @@ import { api } from '../lib/api.js';
 import { usd } from '../lib/travelCalc.js';
 import SidePanel from './SidePanel.jsx';
 import { TicketCard, TicketKindTag } from '../pages/Pipeline.jsx';
-import TicketTimeline from '../pages/TicketTimeline.jsx';
-import { PlanRail, DrawerShell } from '../pages/TicketPlanning.jsx';
-import { ActivitiesDrawer } from '../pages/TicketActivities.jsx';
+import TicketTimeline, { AccountTimeline } from '../pages/TicketTimeline.jsx';
+import { PlanRail, PlanDrawer, DrawerShell, CrmObjectives } from '../pages/TicketPlanning.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 /** The line under a ticket's title: organization, then stage and value for a pipeline ticket. */
@@ -243,10 +242,91 @@ function AccountChip({ account, edit, onOpen, handle, overlay }) {
   );
 }
 
-// ---- An account: its name, tier and priority tickets (pipeline or work).
+// ---- An account: its pane works like a pipeline ticket's. Notes and documents go on the main pane (its hidden ticket's
+// timeline); the strategy, activities, priority tickets and CRM open off the left edge.
 
-function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
+/**
+ * `people`, from the team roll-up, is who lists an account of this name: { list: [{ userId, label }], current, onPick }.
+ * The pane shows one person's account at a time; the chips switch between them.
+ */
+export function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket, people, subtitle }) {
   const [name, setName] = useState(account.name);
+  const [ticket, setTicket] = useState(null); // the hidden ticket that holds the account's notes, documents and activities
+  const [tlKey, setTlKey] = useState(0);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    api.post(`/priority-accounts/accounts/${account.id}/activity-ticket`).then((d) => setTicket(d.ticket)).catch((e) => setError(e.message));
+  }, [account.id]);
+  const remove = () => {
+    if (!window.confirm(`Remove ${account.name} and its activities? Your priority tickets stay on your list.`)) return;
+    save(api.del(`/priority-accounts/accounts/${account.id}`)).then(onClose);
+  };
+  // The panes off the left edge, as on a ticket. Strategy saves as you leave its box; an activity asks before losing unsaved changes.
+  const [tool, setTool] = useState(null);
+  const [openActivity, setOpenActivity] = useState(null);
+  const toolDirty = useRef(false);
+  const setToolDirty = (v) => { toolDirty.current = v; };
+  const leaveTool = () => !toolDirty.current || window.confirm('You have unsaved changes. Discard them?');
+  const switchTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setTool(next); } };
+  const showActivity = (id) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(id); setTool('activities'); } };
+  const close = () => { if (leaveTool()) onClose(); };
+  const changed = () => setTlKey((k) => k + 1);
+  const focus = name.trim() || account.name; // the organization the CRM parts follow: whatever's in the Name field
+  const moveTo = (tierId) => save(api.put('/priority-accounts/layout', {
+    tiers: tiers.map((t) => ({ id: t.id, accounts: t.id === Number(tierId) ? [...t.accounts.map((a) => a.id).filter((x) => x !== account.id), account.id] : t.accounts.map((a) => a.id).filter((x) => x !== account.id) })),
+  }));
+
+  return (
+    <SidePanel title={account.name} subtitle={subtitle || tiers.find((t) => t.id === account.tier_id)?.name} onClose={close} wide
+      onEscape={tool ? () => switchTool(null) : close}
+      rail={<PlanRail ticket={{ ticket_type: 'account' }} active={tool} onSelect={switchTool} />}
+      drawer={tool === 'strategy' ? <StrategyDrawer account={account} organization={focus} edit={edit} save={save} onClose={() => switchTool(null)} />
+        : tool === 'tickets' ? <TicketsDrawer account={account} edit={edit} save={save} onOpenTicket={onOpenTicket} onClose={() => switchTool(null)} />
+          : tool && (ticket
+            ? <PlanDrawer key={`${tool}-${openActivity}`} tool={tool} ticket={{ ...ticket, organization: focus }} activityId={openActivity} onClose={() => switchTool(null)} onChanged={changed} onDirty={setToolDirty} />
+            : <DrawerShell title={tool === 'people' ? 'CRM' : 'Activity'} onClose={() => switchTool(null)}><p className="text-sm text-slate-400">Loading…</p></DrawerShell>)}
+      footer={edit && (
+        <div className="flex justify-between">
+          <button type="button" className="btn-ghost text-red-600" onClick={remove}><Trash2 size={15} /> Remove account</button>
+          <button type="button" className="btn-primary" onClick={close}>Done</button>
+        </div>
+      )}>
+      <div className="space-y-5">
+        {people && people.list.length > 1 && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+            <span>Listed by</span>
+            {people.list.map((x) => (
+              <button key={x.userId} type="button" onClick={() => people.onPick(x.userId)} aria-pressed={x.userId === people.current}
+                className={`rounded-full px-2 py-0.5 ring-1 transition ${x.userId === people.current ? 'bg-brand-600 text-white ring-brand-600' : 'bg-white text-slate-700 ring-slate-200 hover:ring-brand-500'}`}>
+                {x.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {edit && (
+          <div className="grid grid-cols-[1fr_10rem] gap-3">
+            <div>
+              <label className="label" htmlFor="acct-name">Name</label>
+              <input id="acct-name" className="input" value={name} onChange={(e) => setName(e.target.value)}
+                onBlur={() => name.trim() && name.trim() !== account.name && save(api.put(`/priority-accounts/accounts/${account.id}`, { name }))} />
+            </div>
+            <div>
+              <label className="label" htmlFor="acct-tier">Tier</label>
+              <select id="acct-tier" className="input" value={account.tier_id} onChange={(e) => moveTo(e.target.value)}>
+                {tiers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {ticket ? <AccountTimeline ticketId={ticket.id} reloadKey={tlKey} onOpenActivity={showActivity} /> : !error && <p className="text-sm text-slate-400">Loading…</p>}
+      </div>
+    </SidePanel>
+  );
+}
+
+/** The ticket icon's pane: the account's priority tickets, in the owner's order (dragged), and the open tickets to add. */
+function TicketsDrawer({ account, edit, save, onOpenTicket, onClose }) {
   const [all, setAll] = useState(null); // every open pipeline and work ticket, for picking
   const [q, setQ] = useState('');
   const [everyOrg, setEveryOrg] = useState(false);
@@ -268,74 +348,15 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
     .filter((t) => everyOrg || q || forAccount.has(t.id))
     .filter((t) => !q || `${t.opportunity_title} ${t.organization || ''}`.toLowerCase().includes(q.toLowerCase()))
     .slice(0, 60), [all, chosen, everyOrg, q, forAccount]);
-  const remove = () => {
-    if (!window.confirm(`Remove ${account.name} and its activities? Your priority tickets stay on your list.`)) return;
-    save(api.del(`/priority-accounts/accounts/${account.id}`)).then(onClose);
-  };
-  // The panes off the left edge, as on a ticket. Strategy saves as you leave its box; an activity asks before losing unsaved changes.
-  const [tool, setTool] = useState(null);
-  const [ticket, setTicket] = useState(null);
-  const toolDirty = useRef(false);
-  const setToolDirty = (v) => { toolDirty.current = v; };
-  const leaveTool = () => !toolDirty.current || window.confirm('You have unsaved changes. Discard them?');
-  const switchTool = (next) => { if (leaveTool()) { toolDirty.current = false; setTool(next); } };
-  const close = () => { if (leaveTool()) onClose(); };
-  useEffect(() => {
-    if (tool === 'activities' && !ticket) api.post(`/priority-accounts/accounts/${account.id}/activity-ticket`).then((d) => setTicket(d.ticket));
-  }, [tool, ticket, account.id]);
-  const moveTo = (tierId) => save(api.put('/priority-accounts/layout', {
-    tiers: tiers.map((t) => ({ id: t.id, accounts: t.id === Number(tierId) ? [...t.accounts.map((a) => a.id).filter((x) => x !== account.id), account.id] : t.accounts.map((a) => a.id).filter((x) => x !== account.id) })),
-  }));
 
   return (
-    <SidePanel title={account.name} subtitle={tiers.find((t) => t.id === account.tier_id)?.name} onClose={close} wide
-      onEscape={tool ? () => switchTool(null) : close}
-      rail={<PlanRail ticket={{ ticket_type: 'account' }} active={tool} onSelect={switchTool} />}
-      drawer={tool === 'strategy' ? <StrategyDrawer account={account} edit={edit} save={save} onClose={() => switchTool(null)} />
-        : tool === 'activities' && (ticket
-          ? <ActivitiesDrawer ticket={ticket} onClose={() => switchTool(null)} onChanged={() => {}} onDirty={setToolDirty} />
-          : <DrawerShell title="Activity" onClose={() => switchTool(null)}><p className="text-sm text-slate-400">Loading…</p></DrawerShell>)}
-      footer={edit && (
-        <div className="flex justify-between">
-          <button type="button" className="btn-ghost text-red-600" onClick={remove}><Trash2 size={15} /> Remove account</button>
-          <button type="button" className="btn-primary" onClick={close}>Done</button>
-        </div>
-      )}>
+    <DrawerShell title="Priority tickets" subtitle={account.name} onClose={onClose}>
       <div className="space-y-5">
-        {edit && (
-          <div className="grid grid-cols-[1fr_10rem] gap-3">
-            <div>
-              <label className="label" htmlFor="acct-name">Name</label>
-              <input id="acct-name" className="input" value={name} onChange={(e) => setName(e.target.value)}
-                onBlur={() => name.trim() && name.trim() !== account.name && save(api.put(`/priority-accounts/accounts/${account.id}`, { name }))} />
-            </div>
-            <div>
-              <label className="label" htmlFor="acct-tier">Tier</label>
-              <select id="acct-tier" className="input" value={account.tier_id} onChange={(e) => moveTo(e.target.value)}>
-                {tiers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            </div>
-          </div>
-        )}
         <div>
-          <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Priority tickets</h3>
+          <p className="mb-2 text-xs text-slate-500">The pipeline and work tickets that matter at this account{edit ? ', in your order. Drag to reorder; click one to open it.' : '. Click one to open it.'}</p>
           {account.tickets.length ? (
-            <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-              {account.tickets.map((t, i) => (
-                <li key={t.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-                  <button type="button" className="min-w-0 flex-1 text-left hover:underline" onClick={() => onOpenTicket(t.id)}>
-                    <div className="flex items-center gap-1.5"><span className="truncate font-medium text-slate-800">{t.opportunity_title}</span><TicketKindTag ticket={t} /></div>
-                    <div className="truncate text-xs text-slate-500">{detail(t)}</div>
-                  </button>
-                  {edit && (
-                    <>
-                      <button type="button" className="btn-ghost p-1 text-slate-400" disabled={i === 0} onClick={() => setTickets(arrayMove(chosen, i, i - 1))} aria-label="Move up">↑</button>
-                      <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-red-600" onClick={() => setTickets(chosen.filter((x) => x !== t.id))} aria-label={`Remove ${t.opportunity_title}`}><X size={14} /></button>
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <AccountTicketList tickets={account.tickets} edit={edit} onOpen={onOpenTicket}
+              onReorder={setTickets} onRemove={(id) => setTickets(chosen.filter((x) => x !== id))} />
           ) : <p className="text-sm text-slate-400">None yet.</p>}
         </div>
         {edit && (
@@ -352,7 +373,7 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
               </label>
             </div>
             {!all ? <p className="text-sm text-slate-400">Loading…</p> : candidates.length ? (
-              <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+              <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 bg-white">
                 {candidates.map((t) => (
                   <li key={t.id}>
                     <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-brand-50" onClick={() => setTickets([...chosen, t.id])}>
@@ -371,16 +392,60 @@ function AccountPanel({ account, tiers, edit, save, onClose, onOpenTicket }) {
           </div>
         )}
       </div>
-    </SidePanel>
+    </DrawerShell>
   );
 }
 
-/** The pawn's pane: the foothold strategy and the AI strategy session. */
-function StrategyDrawer({ account, edit, save, onClose }) {
+/** An account's priority tickets as a list, dragged by the handle into the owner's order. */
+function AccountTicketList({ tickets, edit, onReorder, onRemove, onOpen }) {
+  const [order, setOrder] = useState(null);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  const ids = order || tickets.map((t) => t.id);
+  const byId = new Map(tickets.map((t) => [t.id, t]));
+  const onDragEnd = ({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    const next = arrayMove(ids, ids.indexOf(active.id), ids.indexOf(over.id));
+    setOrder(next);
+    onReorder(next).finally(() => setOrder(null));
+  };
+  return (
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+        <ol className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+          {ids.map((id, i) => byId.get(id) && <SortableAccountTicket key={id} n={i + 1} ticket={byId.get(id)} edit={edit} onOpen={onOpen} onRemove={onRemove} />)}
+        </ol>
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+function SortableAccountTicket({ n, ticket: t, edit, onOpen, onRemove }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: t.id, disabled: !edit });
+  return (
+    <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`flex items-center gap-1.5 bg-white py-2 pr-2 text-sm first:rounded-t-lg last:rounded-b-lg ${edit ? 'pl-1' : 'pl-3'} ${isDragging ? 'relative z-10 opacity-60 shadow-lg' : ''}`}>
+      {edit && (
+        <span {...attributes} {...listeners} className="cursor-grab touch-none p-1 text-slate-300 hover:text-slate-500 active:cursor-grabbing" aria-label={`Move ${t.opportunity_title}`}>
+          <GripVertical size={14} />
+        </span>
+      )}
+      <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-slate-800 px-1 text-[11px] font-semibold text-white">{n}</span>
+      <button type="button" className="min-w-0 flex-1 text-left hover:underline" onClick={() => onOpen(t.id)}>
+        <div className="flex items-center gap-1.5"><span className="truncate font-medium text-slate-800">{t.opportunity_title}</span><TicketKindTag ticket={t} /></div>
+        <div className="truncate text-xs text-slate-500">{detail(t)}</div>
+      </button>
+      {edit && <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-red-600" onClick={() => onRemove(t.id)} aria-label={`Remove ${t.opportunity_title}`}><X size={14} /></button>}
+    </li>
+  );
+}
+
+/** The pawn's pane: the foothold strategies and the AI strategy session. */
+function StrategyDrawer({ account, organization, edit, save, onClose }) {
   return (
     <DrawerShell title="Strategy" subtitle={account.name} onClose={onClose}>
       <div className="space-y-5">
-        <AccountStrategy account={account} edit={edit} save={save} />
+        <AccountStrategies account={account} edit={edit} save={save} />
+        <CrmObjectives organization={organization} account />
         {edit && (
           <div className="rounded-lg border-2 border-dashed border-slate-200 px-4 py-4">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800"><Sparkles size={15} className="text-brand-600" /> AI strategy session</h3>
@@ -393,26 +458,100 @@ function StrategyDrawer({ account, edit, save, onClose }) {
   );
 }
 
-/** The owner's strategy for gaining a foothold at the account. Saved on leaving the box, like the account's name. */
-function AccountStrategy({ account, edit, save }) {
-  const saved = account.strategy || '';
-  const [text, setText] = useState(saved);
+/** The owner's foothold strategies, top priority first, dragged by the handle into order. Each has a status of its own. */
+function AccountStrategies({ account, edit, save }) {
+  const [order, setOrder] = useState(null); // while a move saves
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState('');
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  useEffect(() => { setOrder(null); }, [account.strategies]);
+  const byId = new Map(account.strategies.map((s) => [s.id, s]));
+  const ids = (order || account.strategies.map((s) => s.id)).filter((id) => byId.has(id));
+  const onDragEnd = ({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    const next = arrayMove(ids, ids.indexOf(active.id), ids.indexOf(over.id));
+    setOrder(next);
+    save(api.put(`/priority-accounts/accounts/${account.id}/strategies`, { ids: next }));
+  };
+  const add = async () => {
+    if (!draft.trim()) return;
+    const d = await save(api.post(`/priority-accounts/accounts/${account.id}/strategies`, { body: draft }));
+    if (d) { setDraft(''); setAdding(false); }
+  };
+  return (
+    <div className="space-y-2">
+      <div>
+        <h3 className="text-sm font-semibold text-slate-800">Foothold strategies</h3>
+        {edit && ids.length > 1 && <p className="text-xs text-slate-500">Drag to set their priority. The top one comes first.</p>}
+      </div>
+      {!ids.length && !adding && <p className="text-sm text-slate-400">No strategies yet.</p>}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+          <ol className="space-y-2">
+            {ids.map((id, i) => <StrategyCard key={id} n={i + 1} strategy={byId.get(id)} edit={edit} save={save} accountName={account.name} />)}
+          </ol>
+        </SortableContext>
+      </DndContext>
+      {edit && (adding ? (
+        <div className="space-y-1.5 rounded-lg border border-slate-200 bg-white p-2.5">
+          <textarea rows={3} autoFocus className="input resize-y text-sm" maxLength={10000} aria-label={`New foothold strategy for ${account.name}`} value={draft}
+            placeholder={`How will you gain a foothold at ${account.name}? Who to reach, where to start, what would open the door…`}
+            onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.preventDefault(), add())} />
+          <div className="flex justify-end gap-1.5">
+            <button type="button" className="btn-ghost text-xs" onClick={() => { setAdding(false); setDraft(''); }}>Cancel</button>
+            <button type="button" className="btn-primary text-xs" onClick={add} disabled={!draft.trim()}>Add strategy</button>
+          </div>
+        </div>
+      ) : <button type="button" className="btn text-xs" onClick={() => setAdding(true)}><Plus size={14} /> Add a strategy</button>)}
+    </div>
+  );
+}
+
+/** One foothold strategy: its text and its status, each the card's full width. Its move and remove controls show on hover. */
+function StrategyCard({ n, strategy: s, edit, save, accountName }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: s.id, disabled: !edit });
+  const update = (fields) => save(api.put(`/priority-accounts/strategies/${s.id}`, fields));
+  const remove = () => { if (window.confirm('Remove this foothold strategy and its status?')) save(api.del(`/priority-accounts/strategies/${s.id}`)); };
+  return (
+    <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`group rounded-lg border border-slate-200 bg-white p-2 ${isDragging ? 'relative z-10 opacity-60 shadow-lg' : ''}`}>
+      {edit ? <StrategyText rows={4} value={s.body} required label={`Foothold strategy ${n} for ${accountName}`} onSave={(body) => update({ body })} />
+        : <p className="text-sm whitespace-pre-wrap text-slate-700">{s.body}</p>}
+      <div className="mt-1.5 mb-1 flex h-6 items-center justify-between">
+        <span className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Status</span>
+        {edit && (
+          <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+            <span {...attributes} {...listeners} className="cursor-grab touch-none p-1 text-slate-400 hover:text-slate-600 active:cursor-grabbing" aria-label={`Move strategy ${n}`}>
+              <GripVertical size={14} />
+            </span>
+            <button type="button" className="btn-ghost p-1 text-slate-400 hover:text-red-600" onClick={remove} title="Remove strategy" aria-label={`Remove strategy ${n}`}><Trash2 size={14} /></button>
+          </span>
+        )}
+      </div>
+      {edit ? <StrategyText rows={3} value={s.status || ''} label={`Status of strategy ${n}`} placeholder="Where does this stand? What’s next?" onSave={(status) => update({ status })} />
+        : s.status ? <p className="text-sm whitespace-pre-wrap text-slate-700">{s.status}</p> : <p className="text-sm text-slate-400">No status yet.</p>}
+    </li>
+  );
+}
+
+/** A box that saves on leaving it, like the account's name. A `required` one goes back to what it was if emptied. */
+function StrategyText({ value, required, label, onSave, rows, placeholder }) {
+  const [text, setText] = useState(value);
   const [state, setState] = useState('');
-  const title = <h3 className="mb-1.5 text-sm font-semibold text-slate-800">Foothold strategy</h3>;
-  if (!edit) return <div>{title}{saved ? <p className="text-sm whitespace-pre-wrap text-slate-700">{saved}</p> : <p className="text-sm text-slate-400">No strategy yet.</p>}</div>;
+  useEffect(() => { setText(value); }, [value]);
   const leave = async () => {
-    if (text.trim() === saved) return;
+    const next = text.trim();
+    if (next === value) return;
+    if (required && !next) { setText(value); return; }
     setState('saving');
-    const d = await save(api.put(`/priority-accounts/accounts/${account.id}/strategy`, { strategy: text }));
+    const d = await onSave(next);
     setState(d ? 'saved' : 'failed');
   };
   return (
     <div>
-      {title}
-      <textarea rows={6} className="input resize-y text-sm" maxLength={10000} aria-label={`Foothold strategy for ${account.name}`} value={text}
-        placeholder={`How will you gain a foothold at ${account.name}? Who to reach, where to start, what would open the door…`}
+      <textarea rows={rows} className="input resize-y text-sm" maxLength={10000} aria-label={label} placeholder={placeholder} value={text}
         onChange={(e) => { setText(e.target.value); setState(''); }} onBlur={leave} />
-      {state && <p className={`mt-1 text-xs ${state === 'failed' ? 'text-red-600' : 'text-slate-400'}`}>{{ saving: 'Saving…', saved: 'Saved', failed: 'Couldn’t save. Try again.' }[state]}</p>}
+      {state && <p className={`mt-0.5 text-[11px] ${state === 'failed' ? 'text-red-600' : 'text-slate-400'}`}>{{ saving: 'Saving…', saved: 'Saved', failed: 'Couldn’t save. Try again.' }[state]}</p>}
     </div>
   );
 }

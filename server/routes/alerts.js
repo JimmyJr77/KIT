@@ -1,4 +1,4 @@
-// A user's alerts: @mentions, support requests from Weekly Priorities and tickets made from yours, marketing support requests, travel requests to approve and their decisions, and being put on a won contract in Delivery. Ones about a priority come first,
+// A user's alerts: @mentions, comments on tickets they own, support requests from Weekly Priorities and tickets made from yours, marketing support requests, travel requests to approve and their decisions, and being put on a won contract in Delivery. Ones about a priority come first,
 // then the rest, each newest first.
 import { Router } from 'express';
 import { db, json } from '../db.js';

@@ -21,6 +21,9 @@ import { fieldsOf } from '../services/pipedriveFields.js';
 
 const r = Router();
 const STATUSES = ['Active', 'Complete', 'Canceled'];
+// A deal custom field named like this (a date) stands in for a contract's period of performance end when none is set here.
+const POP_FIELD = /period of performance end|\bpop end\b/i;
+const isIsoDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
 
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
@@ -31,6 +34,13 @@ const upload = multer({
   }),
   limits: { fileSize: 25 * 1024 * 1024 },
 });
+
+/** The contract's period of performance end and where it came from: the contract, its deal's custom field, or nowhere. */
+function popEndOf(row) {
+  if (row.pop_end) return { date: row.pop_end, source: 'contract' };
+  const f = json.parse(row.ticket_custom, []).find((x) => POP_FIELD.test(x.name || '') && isIsoDate(x.value));
+  return f ? { date: f.value, source: 'deal' } : { date: null, source: null };
+}
 
 const person = (row, prefix) => (row[`${prefix}_first`] ? { id: row[`${prefix}_id`], first_name: row[`${prefix}_first`], last_name: row[`${prefix}_last`] } : null);
 
@@ -48,9 +58,12 @@ function programsOut(rows) {
   const installments = db.prepare('SELECT * FROM ticket_installments ORDER BY billing_date, id').all();
   const products = db.prepare('SELECT * FROM ticket_products ORDER BY position, id').all();
   const phases = db.prepare('SELECT id, name FROM delivery_phases').all();
+  const today = new Date().toLocaleDateString('en-CA');
   return rows.map((p) => ({
     id: p.id, ticket_id: p.ticket_id, ticket_exists: !!p.ticket_title, name: p.name, organization: p.organization,
     account_type: p.account_type, value: p.value, awarded_at: p.awarded_at, status: p.status, notes: p.notes, updated_at: p.updated_at, completed_at: p.completed_at,
+    // The period of performance end, and whether the contract is still Active past it (so it's likely delivered).
+    ...(({ date, source }) => ({ pop_end: date, pop_end_source: source, past_pop: !!date && date < today && p.status === 'Active' && !p.held_at }))(popEndOf(p)),
     held_at: p.held_at, ticket_stage: p.ticket_stage, deal_status: p.deal_status, pipedrive_deal_id: p.pipedrive_deal_id,
     bd_director: p.dir_first ? { id: p.bd_director_id, first_name: p.dir_first, last_name: p.dir_last } : null, territory_name: p.territory_name,
     // The Pipedrive project: its status as Pipedrive has it, phase, dates, owner and labels.
@@ -97,7 +110,7 @@ function money(p, entries) {
 }
 // The BD director and territory come from the pipeline ticket the contract was won from.
 const SELECT = `SELECT p.*, u.first_name AS pm_first, u.last_name AS pm_last, l.first_name AS tl_first, l.last_name AS tl_last, ow.first_name AS own_first, ow.last_name AS own_last,
-    t.opportunity_title AS ticket_title, t.pipeline_status AS ticket_stage, t.deal_status, t.pipedrive_id AS pipedrive_deal_id,
+    t.opportunity_title AS ticket_title, t.pipeline_status AS ticket_stage, t.deal_status, t.pipedrive_id AS pipedrive_deal_id, t.custom_fields AS ticket_custom,
     t.bd_director_id, d.first_name AS dir_first, d.last_name AS dir_last, tr.name AS territory_name
   FROM delivery_programs p LEFT JOIN users u ON u.id = p.program_manager_id LEFT JOIN users l ON l.id = p.technical_lead_id LEFT JOIN users ow ON ow.id = p.owner_id
   LEFT JOIN tickets t ON t.id = p.ticket_id LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id`;
@@ -191,7 +204,8 @@ r.delete('/:id', requireAdmin, (req, res) => {
 /**
  * Body may hold: program_manager_id and technical_lead_id (null to clear), status (Active | Complete | Canceled), notes (the
  * project overview), value (the contract value; null to clear), start_date, end_date, phase_id, labels [names], owner_id,
- * and the government's people by name: contracting_officer, cor, gov_tech_lead.
+ * pop_end (when the period of performance ends; null to fall back to the deal's field), and the government's people by name:
+ * contracting_officer, cor, gov_tech_lead.
  * Status, overview, dates, phase, labels and owner are the Pipedrive project's and are synced.
  */
 r.put('/:id', (req, res) => {
@@ -221,16 +235,20 @@ r.put('/:id', (req, res) => {
     next[field] = b[field] || null;
     if (next[field] && !/^\d{4}-\d{2}-\d{2}$/.test(next[field])) return res.status(400).json({ error: `${field === 'start_date' ? 'Start' : 'End'} date must be a date` });
   }
+  if ('pop_end' in b) {
+    next.pop_end = b.pop_end || null;
+    if (next.pop_end && !isIsoDate(next.pop_end)) return res.status(400).json({ error: 'Period of performance end must be a date' });
+  }
   if ('phase_id' in b) {
     next.phase_id = Number(b.phase_id) || null;
     if (next.phase_id && !db.prepare('SELECT 1 FROM delivery_phases WHERE id = ?').get(next.phase_id)) return res.status(400).json({ error: 'Unknown phase' });
   }
   if ('labels' in b) next.labels = json.str([...new Set((Array.isArray(b.labels) ? b.labels : []).map((x) => String(x).trim()).filter(Boolean))]);
   db.prepare(`UPDATE delivery_programs SET program_manager_id = ?, technical_lead_id = ?, owner_id = ?, status = ?, project_status = COALESCE(?, project_status), notes = ?, value = ?,
-    start_date = ?, end_date = ?, phase_id = ?, labels = ?, contracting_officer = ?, cor = ?, gov_tech_lead = ?, updated_at = datetime('now'),
+    start_date = ?, end_date = ?, phase_id = ?, labels = ?, pop_end = ?, contracting_officer = ?, cor = ?, gov_tech_lead = ?, updated_at = datetime('now'),
     completed_at = CASE WHEN ? = 'Active' THEN NULL WHEN status = 'Active' THEN datetime('now') ELSE completed_at END WHERE id = ?`)
     .run(next.program_manager_id, next.technical_lead_id, next.owner_id, next.status, next.project_status ?? null, next.notes, next.value,
-      next.start_date, next.end_date, next.phase_id, next.labels, next.contracting_officer, next.cor, next.gov_tech_lead, next.status, p.id);
+      next.start_date, next.end_date, next.phase_id, next.labels, next.pop_end, next.contracting_officer, next.cor, next.gov_tech_lead, next.status, p.id);
   if (['status', 'notes', 'start_date', 'end_date', 'phase_id', 'labels', 'owner_id'].some((k) => k in b)) markPending(p.id);
   if (next.program_manager_id && next.program_manager_id !== p.program_manager_id) alertAssigned(next.program_manager_id, req.user, p.id, 'delivery_pm');
   if (next.technical_lead_id && next.technical_lead_id !== p.technical_lead_id) alertAssigned(next.technical_lead_id, req.user, p.id, 'delivery_tl');

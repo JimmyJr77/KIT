@@ -34,7 +34,6 @@ const eventKey = (e) => `${e.type}-${e.activity?.id ?? e.comment?.id ?? e.file?.
 export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, onClose, onChanged }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
-  const [filter, setFilter] = useState('all');
   const [tool, setTool] = useState(activityId !== undefined ? 'activities' : initialTool); // a pane off the left edge
   const [openActivity, setOpenActivity] = useState(activityId ?? null); // the activity the Activity pane opens on
   const [processOpen, setProcessOpen] = useState(false);
@@ -63,14 +62,12 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   }, [data, focus]);
 
   const t = data?.ticket;
-  const test = FILTERS.find(([k]) => k === filter)[2];
-  const events = (data?.events || []).filter(test);
 
   return (
     <>
     <SidePanel wide onClose={close} title={t ? t.opportunity_title : 'Loading…'}
       onEscape={processOpen ? () => setProcessOpen(false) : tool ? () => switchTool(null) : close}
-      rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} skip={t.ticket_type === 'account' ? ['strategy'] : []} />}
+      rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} skip={t.ticket_type === 'account' ? ['strategy', 'tickets'] : []} />}
       drawer={t && tool && <PlanDrawer key={`${tool}-${openActivity}`} tool={tool} ticket={t} activityId={openActivity} onClose={() => switchTool(null)} onChanged={refresh} onDirty={setToolDirty} />}
       subtitle={t && (
         <span className="flex flex-wrap items-center gap-1.5">
@@ -105,22 +102,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
           {t.ticket_type === 'bid' && <AssignmentBar ticket={t} onChanged={refresh} />}
           {t.ticket_type === 'bid' && <OutcomeBar ticket={t} onChanged={refresh} />}
           <Composer ticketId={t.id} onPosted={refresh} />
-
-          <div className="flex flex-wrap gap-1.5">
-            {FILTERS.map(([k, l, f]) => {
-              const n = data.events.filter(f).length;
-              return (
-                <button key={k} type="button" onClick={() => setFilter(k)} disabled={k !== 'all' && !n}
-                  className={`rounded-full px-2.5 py-1 text-xs transition disabled:opacity-40 ${filter === k ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                  {l} <span className="opacity-70">{n}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          <ol className="relative space-y-4 before:absolute before:top-2 before:bottom-2 before:left-[15px] before:w-px before:bg-slate-200">
-            {events.map((e) => <Event key={eventKey(e)} event={e} ticket={t} onChanged={refresh} onOpenActivity={showActivity} />)}
-          </ol>
+          <Feed data={data} onChanged={refresh} onOpenActivity={showActivity} />
         </div>
       )}
     </SidePanel>
@@ -137,6 +119,53 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
       </div>
     )}
     </>
+  );
+}
+
+/** The filter chips and the events under them, newest first. */
+function Feed({ data, onChanged, onOpenActivity }) {
+  const [filter, setFilter] = useState('all');
+  const test = FILTERS.find(([k]) => k === filter)[2];
+  return (
+    <>
+      <div className="flex flex-wrap gap-1.5">
+        {FILTERS.map(([k, l, f]) => {
+          const n = data.events.filter(f).length;
+          return (
+            <button key={k} type="button" onClick={() => setFilter(k)} disabled={k !== 'all' && !n}
+              className={`rounded-full px-2.5 py-1 text-xs transition disabled:opacity-40 ${filter === k ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+              {l} <span className="opacity-70">{n}</span>
+            </button>
+          );
+        })}
+      </div>
+      <ol className="relative space-y-4 before:absolute before:top-2 before:bottom-2 before:left-[15px] before:w-px before:bg-slate-200">
+        {data.events.filter(test).map((e) => <Event key={eventKey(e)} event={e} ticket={data.ticket} onChanged={onChanged} onOpenActivity={onOpenActivity} />)}
+      </ol>
+    </>
+  );
+}
+
+/**
+ * A ticket's timeline on its own, without the pane around it: the composer for notes and documents, then everything that has
+ * happened, newest first. The priority account pane shows its hidden ticket this way. `reloadKey` changing reloads it.
+ */
+export function AccountTimeline({ ticketId, reloadKey = 0, onOpenActivity }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const load = () => api.get(`/tickets/${ticketId}/timeline`).then(setData).catch((e) => setError(e.message));
+  useEffect(() => { load(); }, [ticketId, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="space-y-4">
+      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {!data && !error && <p className="text-sm text-slate-400">Loading…</p>}
+      {data && (
+        <>
+          <Composer ticketId={ticketId} onPosted={load} />
+          <Feed data={data} onChanged={load} onOpenActivity={onOpenActivity} />
+        </>
+      )}
+    </div>
   );
 }
 
@@ -241,9 +270,11 @@ function Event({ event: e, ticket, onChanged, onOpenActivity }) {
   // else they're attached to the item.
   const replyTo = e.type === 'comment' ? { parentId: e.comment.id }
     : { target: { type: e.type, id: e.activity?.id ?? e.file?.id ?? e.email?.id ?? ticket.id } };
-  const isNote = e.type === 'comment' && e.comment.kind === 'note';
-  const pin = async () => { await api.put(`/tickets/comments/${e.comment.id}/pin`, { pinned: !e.comment.pinned }); onChanged(); };
   const isOwner = e.author?.id === ticket.owner_id;
+  // A Pipedrive note from anyone but the ticket owner reads as a plain comment here; it keeps its pin only while pinned, so it can be unpinned.
+  const isNote = e.type === 'comment' && e.comment.kind === 'note' && isOwner;
+  const canPin = e.type === 'comment' && e.comment.kind === 'note' && (isOwner || e.comment.pinned);
+  const pin = async () => { await api.put(`/tickets/comments/${e.comment.id}/pin`, { pinned: !e.comment.pinned }); onChanged(); };
 
   return (
     <li className="flex gap-3">
@@ -280,7 +311,7 @@ function Event({ event: e, ticket, onChanged, onOpenActivity }) {
                   : isOwner || isNote ? 'added a note' : 'commented'}
                 {!about && e.comment.card_title && <> on <span className="font-medium text-slate-700">{e.comment.card_title}</span></>}
                 {about && <span className="ml-1 rounded bg-violet-100 px-1.5 text-[10px] font-semibold tracking-wide text-violet-800 uppercase">Activity comment</span>}
-                {isNote && (
+                {canPin && (
                   <button type="button" onClick={pin} title={e.comment.pinned ? 'Unpin this note' : 'Pin this note to the top'}
                     className={`ml-1 inline-flex items-center gap-0.5 rounded px-1 text-[11px] ${e.comment.pinned ? 'bg-amber-100 font-medium text-amber-800' : 'text-slate-400 hover:text-slate-700'}`}>
                     <Pin size={11} /> {e.comment.pinned ? 'Pinned' : 'Pin'}

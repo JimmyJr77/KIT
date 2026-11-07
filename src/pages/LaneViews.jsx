@@ -1,4 +1,4 @@
-import { Package, CheckSquare, Plus, MessageSquare, StickyNote, FileText, CheckCircle2, Footprints, Workflow, Handshake, Ticket } from 'lucide-react';
+import { Package, CheckSquare, Plus, MessageSquare, StickyNote, FileText, CheckCircle2, Footprints, Workflow, Handshake, Ticket, Pencil } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
 import { MentionText } from '../components/MentionTextarea.jsx';
 import { ago, fullName, fullStamp } from '../lib/format.js';
@@ -232,6 +232,7 @@ export const WORK_KINDS = {
   task: { label: 'Task completed', icon: <CheckSquare size={12} /> },
   completed: { label: 'Priority completed', icon: <CheckCircle2 size={12} /> },
   ticket: { label: 'New ticket', icon: <Package size={12} /> },
+  update: { label: 'Ticket updated', icon: <Pencil size={12} /> },
   step: { label: 'Next step', icon: <Footprints size={12} /> },
   process: { label: 'Process step', icon: <Workflow size={12} /> },
 };

@@ -22,6 +22,19 @@ export function notifyMentions(actor, body, ref, previous = '') {
     .forEach((u) => ins.run(u.id, actor.id, ref.ticket_id ?? null, ref.card_id ?? null, ref.comment_id ?? null, ref.note_id ?? null, String(body).slice(0, 400)));
 }
 
+/**
+ * Alert a ticket's owner that someone posted on it (a comment, question or reply). The owner's own posts don't alert them,
+ * and one who is @mentioned in the post gets the mention alert instead of two.
+ * `ref`: { ticket_id, card_id?, comment_id }.
+ */
+export function notifyTicketOwner(actor, ticket, body, ref) {
+  const owner = ticket?.created_by;
+  if (!owner || owner === actor?.id) return;
+  if (mentionedUsers(body).some((u) => u.id === owner)) return;
+  db.prepare(`INSERT INTO alerts (user_id, actor_id, kind, ticket_id, card_id, comment_id, excerpt) VALUES (?, ?, 'comment', ?, ?, ?, ?)`)
+    .run(owner, actor?.id ?? null, ref.ticket_id ?? null, ref.card_id ?? null, ref.comment_id ?? null, String(body).slice(0, 400));
+}
+
 /** Teams mentioned in `text` as "@Team Name" (case-insensitive, not followed by more of a word). */
 export function mentionedTeams(text) {
   const t = String(text || '').toLowerCase();

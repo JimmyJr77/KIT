@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, ArrowRight, CheckCheck, StickyNote, Megaphone, Ticket, CalendarDays, Loader2, Handshake } from 'lucide-react';
+import { Bell, ArrowRight, CheckCheck, StickyNote, Megaphone, Ticket, CalendarDays, Loader2, Handshake, Receipt, Plane } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { ago, fullName, fullStamp, ticketKind, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import { MentionText } from '../components/MentionTextarea.jsx';
+import { EstimateLockPanel } from '../components/EstimateLock.jsx';
 import CommentPanel, { TicketSummary } from './CommentPanel.jsx';
 import SupportPanel from './SupportPanel.jsx';
 
@@ -23,6 +24,8 @@ const isTravel = (a) => a.kind === 'travel_request' || a.kind === 'travel_decisi
 /** What a travel request is for: its event, or where it goes. */
 const tripSubject = (a) => (!a.trip_id ? 'a deleted trip' : a.trip_event_name || [a.trip_destination?.city, a.trip_destination?.state].filter(Boolean).join(', ') || 'a trip');
 const DECISION = { approved: 'approved', declined: 'declined', pending: 'is reviewing' };
+/** An approved travel request: clicking it opens the trip's actual costs to enter, right here. */
+const isApproved = (a) => a.kind === 'travel_decision' && a.trip_approval === 'approved' && !!a.trip_id;
 
 /** Where an alert's "Go to comment" lands: the ticket timeline, scrolled to the item. */
 const goToUrl = (a) => `/tickets?open=${a.ticket_id}&focus=${a.comment_id ? `c-${a.comment_id}` : `n-${a.note_id}`}`;
@@ -31,6 +34,8 @@ export default function Alerts() {
   const navigate = useNavigate();
   const [alerts, setAlerts] = useState(null);
   const [open, setOpen] = useState(null);
+  const [lockTrip, setLockTrip] = useState(null); // the approved trip whose actual costs are open in the side pane
+  const [locked, setLocked] = useState(null); // the trip id whose actual costs were just saved, for a word of confirmation
 
   const load = () => api.get('/alerts').then((d) => setAlerts(d.alerts));
   useEffect(() => { load(); }, []);
@@ -41,14 +46,17 @@ export default function Alerts() {
     await api.put(`/alerts/${a.id}/read`);
     alertsChanged();
   };
-  // Delivery alerts go straight to the contract; the rest open in the side pane.
+  // Delivery alerts go straight to the contract, travel alerts to the request (an approved one opens its actual costs
+  // here instead); the rest open in the side pane.
   const select = (a) => {
     markRead(a);
     if (isDelivery(a)) return a.program_id && navigate(`/delivery?open=${a.program_id}`);
     if (a.kind === 'pipedrive_file_hold') return navigate('/admin');
+    if (isApproved(a)) return api.get(`/travel/${a.trip_id}`).then((d) => setLockTrip(d.trip)).catch(() => navigate(`/travel?open=${a.trip_id}`));
     if (isTravel(a)) return a.trip_id && navigate(`/travel?open=${a.trip_id}`);
     setOpen(a);
   };
+  const go = (a, url) => { markRead(a); navigate(url); };
   const goTo = (a) => { markRead(a); navigate(goToUrl(a)); };
   const readAll = async () => {
     await api.put('/alerts/read-all');
@@ -60,14 +68,14 @@ export default function Alerts() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Alerts" subtitle="@mentions, requests for your support, marketing support requests, travel requests, and contracts you’re put on in Delivery. Alerts about a priority come first, then the rest, newest first.">
+      <PageHeader title="Alerts" subtitle="@mentions, comments on your tickets, requests for your support, marketing support requests, travel requests, and contracts you’re put on in Delivery. Alerts about a priority come first, then the rest, newest first.">
         {unread > 0 && <button className="btn" onClick={readAll}><CheckCheck size={15} /> Mark all as read</button>}
       </PageHeader>
 
       {alerts && !alerts.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <Bell size={28} className="mx-auto mb-2 text-slate-300" />
-          No alerts yet. You’ll see one here when someone @mentions you, asks Marketing for support, or puts you on a contract in Delivery.
+          No alerts yet. You’ll see one here when someone @mentions you, comments on a ticket you own, asks Marketing for support, or puts you on a contract in Delivery.
         </div>
       )}
 
@@ -100,6 +108,7 @@ export default function Alerts() {
                           : a.kind === 'delivery_team' ? <>added you to the delivery team for <span className="font-semibold">{a.program_name || 'a deleted contract'}</span></>
                           : a.kind === 'travel_request' ? <>submitted a travel request for <span className="font-semibold">{tripSubject(a)}</span></>
                           : a.kind === 'travel_decision' ? <>{DECISION[a.trip_approval] || 'decided'} your travel request for <span className="font-semibold">{tripSubject(a)}</span></>
+                        : a.kind === 'comment' ? <>{a.thread_id !== a.comment_id ? 'replied' : 'commented'} on your {a.ticket_type === 'work' ? 'work ticket' : 'pipeline ticket'} <span className="font-semibold">{a.ticket_title || 'a deleted ticket'}</span></>
                         : <>mentioned you in {a.note_id ? 'a note' : 'a comment'} on <span className="font-semibold">{a.ticket_title || 'a deleted ticket'}</span></>}
                   </span>
                   <span className="text-[11px] text-slate-400" title={fullStamp(a.created_at)}>{ago(a.created_at)}</span>
@@ -109,7 +118,8 @@ export default function Alerts() {
                   <p className="mt-1 text-xs text-slate-500">
                     {[a.trip_date_from && shortDate(a.trip_date_from, { month: 'short', day: 'numeric', year: 'numeric' }),
                       a.kind === 'travel_request' && a.trip_approval && a.trip_approval !== 'pending' ? `Already ${a.trip_approval}` : null,
-                      a.excerpt ? `Note: ${a.excerpt}` : null].filter(Boolean).join(' · ')}
+                      a.excerpt ? `Note: ${a.excerpt}` : null,
+                      isApproved(a) ? (locked === a.trip_id ? 'Actual costs entered' : 'When the trip is done, enter what it actually cost; that locks the estimate without another approval') : null].filter(Boolean).join(' · ')}
                   </p>
                 ) : isDelivery(a) ? (
                   <p className="mt-1 text-xs text-slate-500">{[a.program_organization, a.kind === 'delivery_team' && a.excerpt ? `Your role: ${a.excerpt}` : null].filter(Boolean).join(' · ')}</p>
@@ -132,7 +142,22 @@ export default function Alerts() {
                     )}
                   </div>
                 )}
-                {isTravel(a) && a.trip_id && (
+                {isApproved(a) ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <button type="button" onClick={(e) => { e.stopPropagation(); select(a); }}
+                      className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
+                      <Receipt size={12} /> Enter actual costs <ArrowRight size={12} />
+                    </button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); go(a, `/travel?lock=${a.trip_id}`); }}
+                      className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
+                      <Plane size={12} /> Do it on the Travel page <ArrowRight size={12} />
+                    </button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); go(a, `/travel?open=${a.trip_id}`); }}
+                      className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:underline">
+                      Open travel request <ArrowRight size={12} />
+                    </button>
+                  </div>
+                ) : isTravel(a) && a.trip_id && (
                   <button type="button" onClick={(e) => { e.stopPropagation(); select(a); }}
                     className="mt-2 flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline">
                     Open travel request <ArrowRight size={12} />
@@ -156,6 +181,7 @@ export default function Alerts() {
         ))}
       </ul>
 
+      {lockTrip && <EstimateLockPanel key={lockTrip.id} trip={lockTrip} onClose={() => setLockTrip(null)} onSaved={(t) => { setLockTrip(null); setLocked(t.id); }} />}
       {open && isSupport(open) && <SupportPane key={open.id} alert={open} onClose={() => setOpen(null)} onDone={load} markRead={markRead} />}
       {open && isAsk(open) && open.support_id && (
         <SupportPanel key={open.id} id={open.support_id} onClose={() => setOpen(null)} onChanged={load} />

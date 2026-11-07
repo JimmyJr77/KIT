@@ -515,7 +515,7 @@ function ShapingItem({ event: e, ticket }) {
   if (e.type === 'comment') {
     const c = e.comment;
     const owner = c.author?.id && c.author.id === ticket.owner_id;
-    const kind = c.kind === 'note' ? 'left a note' : c.kind === 'question' ? 'asked' : 'commented';
+    const kind = c.kind === 'note' && owner ? 'left a note' : c.kind === 'question' ? 'asked' : 'commented'; // a note from anyone else reads as a comment
     return (
       <div>
         {meta(<>{kind}{c.about?.subject ? <> on <span className="font-medium text-slate-700">{c.about.subject}</span></> : ''}{c.pinned ? ' · pinned' : ''}</>)}

@@ -4,7 +4,7 @@
 // cards on the Weekly Priorities board are activities placed in someone's week (see server/activities.js).
 import { Router } from 'express';
 import { db } from '../db.js';
-import { recordWork } from '../worklog.js';
+import { recordWork, recordTicketUpdate } from '../worklog.js';
 import { awardTokens } from '../race.js';
 import {
   ACTIVITY_TYPES, ACTIVITY_PRIORITIES, nextPosition, openOrder, setOrder, subtasksOf, mirrorCards, syncMilestone,
@@ -112,6 +112,7 @@ r.post('/', (req, res) => {
     syncMilestone(data.ticket_id);
     return newId;
   })();
+  recordTicketUpdate(req.user, db.prepare('SELECT id, created_by FROM tickets WHERE id = ?').get(data.ticket_id), `Activity added: ${data.text}`);
   res.json({ activity: one(id) });
 });
 
@@ -147,6 +148,10 @@ r.put('/:id', (req, res) => {
     mirrorCards(k.id);
     [...new Set([k.ticket_id, data.ticket_id].filter(Boolean))].forEach((t) => { touch(t); syncMilestone(t); });
   })();
+  // Finishing it is logged above as a completed task; any other edit counts as an update to the ticket.
+  if (!(typeof b.done === 'boolean' && b.done !== !!k.done && b.done)) {
+    recordTicketUpdate(req.user, db.prepare('SELECT id, created_by FROM tickets WHERE id = ?').get(data.ticket_id || k.ticket_id), `Activity edited: ${data.text || k.text}`);
+  }
   res.json({ activity: one(k.id) });
 });
 

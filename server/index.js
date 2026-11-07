@@ -44,6 +44,8 @@ import retroRoutes from './routes/retros.js';
 import feedbackRoutes from './routes/feedback.js';
 import raceRoutes from './routes/race.js';
 import aiRoutes from './routes/ai.js';
+import playbookRoutes from './routes/playbook.js';
+import { seedBdPlaybook } from './services/playbook.js';
 
 ensureGsaRates();
 scheduleForecastSnapshots();
@@ -95,6 +97,7 @@ app.use('/api/retros', requireAuth, retroRoutes);
 app.use('/api/feedback', requireAuth, feedbackRoutes);
 app.use('/api/race', requireAuth, raceRoutes);
 app.use('/api/ai', requireAuth, aiRoutes);
+app.use('/api/playbook', requireAuth, playbookRoutes);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // In production, serve the built React app.
@@ -119,6 +122,9 @@ try {
 } catch (e) {
   console.error(`Sample data: ${e.message}`);
 }
+
+// The BD playbook comes with KIT; it loads the first time the BD team has no playbook sections.
+try { if (seedBdPlaybook()) console.log('Loaded the BD playbook'); } catch (e) { console.error(`Playbook: ${e.message}`); }
 
 schedulePipedriveSync();
 scheduleProjectRefresh();

@@ -69,6 +69,21 @@ function loadCard(id) {
 
 r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES, pipelines: listPipelines(), teams: db.prepare('SELECT id, name FROM teams ORDER BY name').all(), pipelineTicketsClosed: pipelineTicketsClosed() }));
 
+/** The weeks an activity can be placed in for a team: this week and the next few, each with whether its planning has closed. */
+r.get('/weeks', (req, res) => {
+  const t = team(req.query.team);
+  if (!t) return res.status(400).json({ error: 'Unknown team' });
+  const currentWeekStart = weekStartFor(localToday(), t.checkin_dow);
+  const n = Math.min(Math.max(Number(req.query.count) || 6, 1), 26);
+  const weeks = Array.from({ length: n }, (_, i) => {
+    const d = new Date(`${currentWeekStart}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + i * 7);
+    const week_start = d.toISOString().slice(0, 10);
+    return { week_start, closed: planningClosed(t.id, week_start) };
+  });
+  res.json({ currentWeekStart, weeks });
+});
+
 /**
  * Every active user across all teams. The strip runs on Monday weeks; each team's cards
  * come from its own check-in week, shifted by the same number of weeks from "this week".

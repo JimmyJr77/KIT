@@ -7,14 +7,17 @@ const r = Router();
 export const OBJECTIVE_STATUSES = ['Not started', 'In progress', 'Achieved', 'Missed'];
 const DONE = ['Achieved', 'Missed'];
 
-const SELECT = `SELECT o.*, u.first_name AS owner_first, u.last_name AS owner_last, t.name AS territory_name
+export const OBJECTIVE_SQL = `SELECT o.*, u.first_name AS owner_first, u.last_name AS owner_last, t.name AS territory_name
   FROM account_objectives o LEFT JOIN users u ON u.id = o.owner_id LEFT JOIN territories t ON t.id = o.territory_id`;
-const out = (o) => ({
+/** SQL for "this name is on the objective as whole words": its customer, objective, notes, status, BD director or territory. */
+export const objectiveHasWord = (param) => `has_word(o.organization || ' ' || o.objective || ' ' || COALESCE(o.notes, '') || ' ' || o.status || ' ' ||
+  COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '') || ' ' || COALESCE(t.name, ''), ${param})`;
+export const objectiveOut = (o) => ({
   ...o, owner: o.owner_first ? { id: o.owner_id, first_name: o.owner_first, last_name: o.owner_last } : null,
   owner_first: undefined, owner_last: undefined,
 });
 
-/** ?owner=<user id>&territory=<id>&status=open|done. Open ones first, soonest target date first. */
+/** ?owner=<user id>&territory=<id>&status=open|done&filter=<whole words in any field>. Open ones first, soonest target date first. */
 r.get('/', (req, res) => {
   const where = [];
   const p = {};
@@ -22,13 +25,15 @@ r.get('/', (req, res) => {
   if (Number(req.query.territory)) { where.push('o.territory_id = @territory'); p.territory = Number(req.query.territory); }
   if (req.query.status === 'open') where.push("o.status NOT IN ('Achieved', 'Missed')");
   if (req.query.status === 'done') where.push("o.status IN ('Achieved', 'Missed')");
-  const rows = db.prepare(`${SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+  const filter = String(req.query.filter || '').trim();
+  if (filter) { where.push(objectiveHasWord('@filter')); p.filter = filter; }
+  const rows = db.prepare(`${OBJECTIVE_SQL} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY o.status IN ('Achieved', 'Missed'), o.target_date IS NULL, o.target_date, o.organization`).all(p);
   // Organizations already known from contacts and tickets, to pick from.
   const organizations = db.prepare(`SELECT organization FROM contacts WHERE organization IS NOT NULL AND organization != ''
     UNION SELECT organization FROM tickets WHERE organization IS NOT NULL AND organization != ''
     UNION SELECT organization FROM account_objectives ORDER BY 1`).all().map((x) => x.organization);
-  res.json({ objectives: rows.map(out), statuses: OBJECTIVE_STATUSES, organizations });
+  res.json({ objectives: rows.map(objectiveOut), statuses: OBJECTIVE_STATUSES, organizations });
 });
 
 function fields(b = {}) {
@@ -50,7 +55,7 @@ r.post('/', (req, res) => {
   const id = db.prepare(`INSERT INTO account_objectives (organization, objective, notes, owner_id, territory_id, target_date, status, created_by, completed_at)
     VALUES (@organization, @objective, @notes, @owner_id, @territory_id, @target_date, @status, @created_by, CASE WHEN @done THEN datetime('now') END)`)
     .run({ ...f, created_by: req.user.id, done: DONE.includes(f.status) ? 1 : 0 }).lastInsertRowid;
-  res.json({ objective: out(db.prepare(`${SELECT} WHERE o.id = ?`).get(id)) });
+  res.json({ objective: objectiveOut(db.prepare(`${OBJECTIVE_SQL} WHERE o.id = ?`).get(id)) });
 });
 
 r.put('/:id', (req, res) => {
@@ -63,7 +68,7 @@ r.put('/:id', (req, res) => {
   db.prepare(`UPDATE account_objectives SET organization = @organization, objective = @objective, notes = @notes, owner_id = @owner_id,
     territory_id = @territory_id, target_date = @target_date, status = @status, completed_at = @completed, updated_at = datetime('now') WHERE id = @id`)
     .run({ ...f, completed, id: o.id });
-  res.json({ objective: out(db.prepare(`${SELECT} WHERE o.id = ?`).get(o.id)) });
+  res.json({ objective: objectiveOut(db.prepare(`${OBJECTIVE_SQL} WHERE o.id = ?`).get(o.id)) });
 });
 
 r.delete('/:id', (req, res) => {

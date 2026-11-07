@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, Lightbulb, MessagesSquare, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, Lightbulb, BookOpenText, MessagesSquare, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, initials } from '../lib/format.js';
@@ -11,6 +11,7 @@ import FeedbackWidget from './FeedbackWidget.jsx';
 const NAV = [
   { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/playbook', label: 'Playbook', icon: BookOpenText },
   { to: '/reports', label: 'Reports', icon: FileChartColumn },
   { to: '/events', label: 'Events', icon: CalendarDays },
   { to: '/travel', label: 'Travel', icon: Plane },

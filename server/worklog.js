@@ -16,19 +16,43 @@ function currentWeek(dow) {
  */
 export function recordWork(user, entry) {
   try {
-    // Someone on several teams logs it to the first of their teams whose planning is closed.
-    const teams = user?.id ? db.prepare(`SELECT t.* FROM user_teams ut JOIN teams t ON t.id = ut.team_id
-      WHERE ut.user_id = ? ORDER BY t.id`).all(user.id) : [];
-    const closed = db.prepare('SELECT 1 FROM week_planning WHERE team_id = ? AND week_start = ?');
-    const team = teams.find((t) => closed.get(t.id, currentWeek(t.checkin_dow)));
-    if (!team) return;
-    const week = currentWeek(team.checkin_dow);
+    const tw = closedTeamWeek(user);
+    if (!tw) return;
     db.prepare(`INSERT INTO work_log (team_id, week_start, user_id, kind, ticket_id, card_id, ref_id, summary)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(team.id, week, user.id, entry.kind, entry.ticket_id ?? null, entry.card_id ?? null,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(tw.team.id, tw.week, user.id, entry.kind, entry.ticket_id ?? null, entry.card_id ?? null,
       entry.ref_id ?? null, entry.summary ? String(entry.summary).slice(0, 280) : null);
   } catch (e) {
     console.error('work log:', e.message);
   }
+}
+
+/**
+ * An update someone made to a ticket they own (`what` names the part changed: "Win strategy", "Labels"…). It lands in
+ * their lane as "Ticket updated"; saving the same part of the same ticket again in the week moves that entry up rather
+ * than adding another. Updates to other people's tickets aren't logged here.
+ */
+export function recordTicketUpdate(user, ticket, what) {
+  try {
+    if (!user?.id || !ticket || ticket.created_by !== user.id) return;
+    const tw = closedTeamWeek(user);
+    if (!tw) return;
+    const summary = String(what || 'Updated').slice(0, 280);
+    const prior = db.prepare(`SELECT id FROM work_log WHERE team_id = ? AND week_start = ? AND user_id = ? AND kind = 'update' AND ticket_id = ? AND summary = ?`)
+      .get(tw.team.id, tw.week, user.id, ticket.id, summary);
+    if (prior) db.prepare("UPDATE work_log SET created_at = datetime('now') WHERE id = ?").run(prior.id);
+    else db.prepare('INSERT INTO work_log (team_id, week_start, user_id, kind, ticket_id, summary) VALUES (?, ?, ?, ?, ?, ?)').run(tw.team.id, tw.week, user.id, 'update', ticket.id, summary);
+  } catch (e) {
+    console.error('work log:', e.message);
+  }
+}
+
+/** The first of the user's teams whose planning is closed this week, with that week; null when none is. */
+function closedTeamWeek(user) {
+  const teams = user?.id ? db.prepare(`SELECT t.* FROM user_teams ut JOIN teams t ON t.id = ut.team_id
+    WHERE ut.user_id = ? ORDER BY t.id`).all(user.id) : [];
+  const closed = db.prepare('SELECT 1 FROM week_planning WHERE team_id = ? AND week_start = ?');
+  const team = teams.find((t) => closed.get(t.id, currentWeek(t.checkin_dow)));
+  return team ? { team, week: currentWeek(team.checkin_dow) } : null;
 }
 
 /** Additional work for one team-week, newest first, with the ticket and priority it was about. Work on an archived ticket isn't shown. */

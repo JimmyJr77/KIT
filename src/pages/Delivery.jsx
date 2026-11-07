@@ -20,6 +20,11 @@ const wonOn = (utc) => (utc ? shortDate(parseUtc(utc).toLocaleDateString('en-CA'
 
 const STATUS_STYLE = { Active: 'bg-emerald-50 text-emerald-700', Complete: 'bg-slate-100 text-slate-600', Canceled: 'bg-red-50 text-red-700' };
 const PROJECT_STATUS = { open: 'Open', completed: 'Completed', canceled: 'Canceled', deleted: 'Deleted in Pipedrive' };
+const popDate = (iso) => shortDate(iso, { month: 'short', day: 'numeric', year: 'numeric' });
+/** The small amber mark on an Active contract whose period of performance has ended. */
+const PastPop = ({ program: p, className = '' }) => (p.past_pop
+  ? <span className={`shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap text-amber-900 ${className}`} title={`Period of performance ended ${popDate(p.pop_end)}. Likely delivered.`}>Past PoP end</span>
+  : null);
 
 /** Contracts we've won. A pipeline ticket is copied here when it's marked won, to get a Program Manager, a delivery team and its Pipedrive project. */
 export default function Delivery() {
@@ -115,7 +120,8 @@ export default function Delivery() {
               </div>
               {p.held_at ? <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">On hold · {p.deal_status === 'won' ? p.ticket_stage : 'not won'}</span>
                 : p.status !== 'Active' ? <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[p.status]}`}>{p.status}</span>
-                  : p.project.phase && <span className="shrink-0 rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700" title="Pipedrive project phase">{p.project.phase}</span>}
+                  : p.past_pop ? <PastPop program={p} />
+                    : p.project.phase && <span className="shrink-0 rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700" title="Pipedrive project phase">{p.project.phase}</span>}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
               {p.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-700">{money(p.value)}</span>}
@@ -232,12 +238,22 @@ function ProgramPanel({ program: p, users, teams, meta, onChange, onClose, onDec
               <option>Canceled</option>
             </select>
           </label>
+          <label className="flex items-center gap-2 text-sm" title={p.pop_end_source === 'deal' ? 'From the deal’s Period of Performance End field in Pipedrive. Set a date here to override it.' : 'When the period of performance ends. Leave blank to use the deal’s Period of Performance End field, if it has one.'}>
+            <span className="text-slate-500">PoP end</span>
+            <input type="date" className={`input h-8 w-40 py-0 text-sm ${p.pop_end_source === 'deal' ? 'text-slate-500' : ''}`} value={p.pop_end || ''} onChange={(e) => update({ pop_end: e.target.value || null })} />
+          </label>
           {p.status === 'Active' ? (
             <button type="button" className="btn-primary h-8 px-3 py-0 text-xs" title="Delivery is finished. The Pipedrive project is completed too."
               onClick={() => confirm(`Mark “${p.name}” complete? Delivery is finished${pr.pipedrive_id ? ', and its Pipedrive project is completed too' : ''}.`) && update({ status: 'Complete' })}>
               <CheckCircle2 size={14} /> Complete
             </button>
           ) : <span className="text-xs text-slate-500">{p.status === 'Complete' ? `Completed ${wonOn(p.completed_at)}` : 'Canceled'}</span>}
+          {p.past_pop && (
+            <p className="flex w-full items-start gap-1.5 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+              <span>The period of performance ended {popDate(p.pop_end)}{p.pop_end_source === 'deal' ? ' (from the deal in Pipedrive)' : ''}, but the contract is still Active. If delivery is finished, mark it Complete.</span>
+            </p>
+          )}
         </section>
 
         {/* A glance at the Pipedrive project; the Project pane has all of it. */}
@@ -821,7 +837,7 @@ const SORTS = {
   name: (p) => p.name.toLowerCase(), customer: (p) => (p.organization || '~').toLowerCase(), value: (p) => p.value ?? -1,
   funded: (p) => (p.value ? p.funded / p.value : -1), billed: (p) => p.billed, won: (p) => p.awarded_at || '',
   pm: (p) => (p.program_manager ? `${p.program_manager.last_name} ${p.program_manager.first_name}` : '~').toLowerCase(), team: (p) => p.team.length,
-  status: (p) => p.status, phase: (p) => p.project?.phase || '~',
+  status: (p) => p.status, phase: (p) => p.project?.phase || '~', pop: (p) => p.pop_end || '~',
 };
 
 /** The contracts as a sortable table. Selecting a row opens it in the side pane, as a card does. */
@@ -845,7 +861,7 @@ function ProgramTable({ programs, openId, onOpen }) {
         <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
           <tr>
             {header('name', 'Contract')}{header('customer', 'Customer')}{header('value', 'Value', 'text-right')}{header('funded', 'Funded', 'text-right')}
-            {header('billed', 'Billed', 'text-right')}{header('won', 'Won')}{header('pm', 'Program Manager')}{header('team', 'Team', 'text-right')}{header('phase', 'Phase')}{header('status', 'Status')}
+            {header('billed', 'Billed', 'text-right')}{header('won', 'Won')}{header('pm', 'Program Manager')}{header('team', 'Team', 'text-right')}{header('phase', 'Phase')}{header('pop', 'PoP end')}{header('status', 'Status')}
           </tr>
         </thead>
         <tbody>
@@ -867,7 +883,11 @@ function ProgramTable({ programs, openId, onOpen }) {
               </td>
               <td className="px-4 py-3 text-right text-slate-600 tabular-nums">{p.team.length}</td>
               <td className="px-4 py-3 text-slate-600">{p.project.phase || '—'}</td>
-              <td className="px-4 py-3"><span className={`rounded px-1.5 py-0.5 text-xs font-medium ${p.held_at ? 'bg-amber-100 text-amber-900' : STATUS_STYLE[p.status]}`}>{p.held_at ? 'On hold' : p.status}</span></td>
+              <td className={`px-4 py-3 whitespace-nowrap ${p.past_pop ? 'font-medium text-amber-800' : 'text-slate-500'}`} title={p.pop_end_source === 'deal' ? 'From the deal in Pipedrive' : undefined}>{p.pop_end ? popDate(p.pop_end) : '—'}</td>
+              <td className="px-4 py-3">
+                <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${p.held_at ? 'bg-amber-100 text-amber-900' : STATUS_STYLE[p.status]}`}>{p.held_at ? 'On hold' : p.status}</span>
+                <PastPop program={p} className="ml-1.5" />
+              </td>
             </tr>
           ))}
         </tbody>

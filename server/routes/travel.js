@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { db, json, withTeams } from '../db.js';
 import { estimateFlight, estimateCar, mcpStatus, VEHICLE_CLASSES, placeLabel } from '../services/estimators.js';
 import { mileageRate } from '../services/gsa.js';
-import { quarterFor, tripCosts, upcomingQuarters, lockTotal, LOCK_FIELDS, PURPOSES, flightPrefs } from '../../src/lib/travelCalc.js';
+import { quarterFor, tripCosts, upcomingQuarters, lockTotal, LOCK_FIELDS, PURPOSES, flightPrefs, isQuarter, quarterStart, quarterMonths } from '../../src/lib/travelCalc.js';
 
 const r = Router();
 
@@ -42,6 +42,28 @@ function submitted(trip, actorId) {
   alertTrip(approversFor(trip.traveler_id).filter((id) => id !== actorId), actorId, 'travel_request', trip.id);
 }
 
+/** What a trip is for, as a note on its actual cost entry: its event, or where it goes. */
+function tripLabel(trip) {
+  const event = trip.event_id && db.prepare('SELECT name FROM events WHERE id = ?').get(trip.event_id)?.name;
+  return `Trip: ${event || [trip.location_to?.city, trip.location_to?.state].filter(Boolean).join(', ') || 'trip'}`;
+}
+
+/**
+ * Locking a trip's estimate is how its actual costs are entered, so a locked trip has one actual cost entry for its
+ * locked total, dated when the trip starts. Unlocking removes it.
+ */
+function syncActual(trip, byId) {
+  if (!trip.locked_estimate || !(trip.total_estimate > 0)) return db.prepare('DELETE FROM travel_actuals WHERE trip_id = ?').run(trip.id);
+  const row = db.prepare('SELECT id FROM travel_actuals WHERE trip_id = ?').get(trip.id);
+  if (row) {
+    db.prepare("UPDATE travel_actuals SET traveler_id = ?, spent_on = ?, amount = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(trip.traveler_id, trip.date_from, trip.total_estimate, row.id);
+  } else {
+    db.prepare('INSERT INTO travel_actuals (traveler_id, spent_on, amount, note, created_by, trip_id) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(trip.traveler_id, trip.date_from, trip.total_estimate, tripLabel(trip), byId, trip.id);
+  }
+}
+
 function validate(b = {}) {
   if (!b.traveler_id) return 'Traveler is required';
   if (!b.date_from || !b.date_to) return 'Travel dates are required';
@@ -78,15 +100,30 @@ function withTravelerTeams(trips) {
 
 // A team filter matches trips by anyone on that team.
 const ON_TEAM = 'traveler_id IN (SELECT user_id FROM user_teams WHERE team_id = @team)';
+// The calendar quarter an actual cost falls in, from its date: "2026 Q4".
+const ACTUAL_QUARTER = "substr(a.spent_on, 1, 4) || ' Q' || ((CAST(substr(a.spent_on, 6, 2) AS INTEGER) + 2) / 3)";
 
+/**
+ * Trips, with each quarter's totals for the same traveler or team (whatever the Quarter filter): what its trips are
+ * estimated at, and what was actually spent in it.
+ */
 r.get('/', (req, res) => {
-  const where = [];
+  const scope = [];
   const params = {};
-  if (req.query.traveler) { where.push('t.traveler_id = @traveler'); params.traveler = Number(req.query.traveler); }
-  if (req.query.team) { where.push(`t.${ON_TEAM}`); params.team = Number(req.query.team); }
+  if (req.query.traveler) { scope.push('t.traveler_id = @traveler'); params.traveler = Number(req.query.traveler); }
+  if (req.query.team) { scope.push(`t.${ON_TEAM}`); params.team = Number(req.query.team); }
+  const where = [...scope];
   if (req.query.quarter) { where.push('t.quarter = @quarter'); params.quarter = req.query.quarter; }
   const rows = db.prepare(`${SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY t.date_from DESC`).all(params);
-  res.json({ trips: withTravelerTeams(rows.map(hydrate)).map(withApproval(req.user)) });
+  const quarters = {};
+  const scoped = (alias) => (scope.length ? `WHERE ${scope.map((s) => s.replace('t.', `${alias}.`)).join(' AND ')}` : '');
+  for (const q of db.prepare(`SELECT t.quarter, COALESCE(SUM(t.total_estimate), 0) AS total FROM trips t ${scoped('t')} GROUP BY t.quarter`).all(params)) {
+    quarters[q.quarter] = { estimated: q.total, actual: 0 };
+  }
+  for (const q of db.prepare(`SELECT ${ACTUAL_QUARTER} AS quarter, COALESCE(SUM(a.amount), 0) AS total FROM travel_actuals a ${scoped('a')} GROUP BY 1`).all(params)) {
+    quarters[q.quarter] = { estimated: 0, ...quarters[q.quarter], actual: q.total };
+  }
+  res.json({ trips: withTravelerTeams(rows.map(hydrate)).map(withApproval(req.user)), quarters });
 });
 
 /** Requests waiting on the signed-in user's decision, whatever the filters. */
@@ -95,9 +132,9 @@ r.get('/awaiting', (req, res) => {
   res.json({ trips: withTravelerTeams(rows).map(withApproval(req.user)) });
 });
 
-/** Estimated spend for this quarter and the next three, optionally for one traveler or team. */
+/** Estimated spend for four quarters from ?start (default this quarter), optionally for one traveler or team. */
 r.get('/outlook', (req, res) => {
-  const quarters = upcomingQuarters(4);
+  const quarters = upcomingQuarters(4, isQuarter(req.query.start) ? quarterStart(req.query.start) : undefined);
   const traveler = Number(req.query.traveler) || null;
   const team = Number(req.query.team) || null;
   const rows = db.prepare(`SELECT quarter, COUNT(*) AS trips, COALESCE(SUM(total_estimate), 0) AS total FROM trips
@@ -109,11 +146,11 @@ r.get('/outlook', (req, res) => {
 
 // ---- Actual spend: what travel really cost, entered as one total per traveler
 
-const actualFilter = (q) => {
+const actualFilter = (q, alias = 'a') => {
   const where = [];
   const params = {};
-  if (q.traveler) { where.push('a.traveler_id = @traveler'); params.traveler = Number(q.traveler); }
-  if (q.team) { where.push('a.traveler_id IN (SELECT user_id FROM user_teams WHERE team_id = @team)'); params.team = Number(q.team); }
+  if (q.traveler) { where.push(`${alias}.traveler_id = @traveler`); params.traveler = Number(q.traveler); }
+  if (q.team) { where.push(`${alias}.traveler_id IN (SELECT user_id FROM user_teams WHERE team_id = @team)`); params.team = Number(q.team); }
   return { where, params };
 };
 const ACTUAL_SQL = `SELECT a.*, u.first_name || ' ' || u.last_name AS traveler_name FROM travel_actuals a JOIN users u ON u.id = a.traveler_id`;
@@ -132,18 +169,28 @@ r.get('/actuals', (req, res) => {
   res.json({ actuals: withTravelerTeams(rows).map((a) => ({ ...a, quarter: quarterFor(a.spent_on) })) });
 });
 
-/** This quarter's actual spend by month, and in all. ?traveler, ?team. */
+/**
+ * A quarter's actual spend by month and in all, beside what its trips are estimated at (a trip counts in the month it
+ * starts). ?quarter ("2026 Q4", default this quarter), ?traveler, ?team.
+ */
 r.get('/actuals/summary', (req, res) => {
-  const [quarter] = upcomingQuarters(1);
-  const [y, q] = quarter.split(' Q').map(Number);
-  const months = [0, 1, 2].map((i) => `${y}-${String((q - 1) * 3 + 1 + i).padStart(2, '0')}`);
+  const quarter = isQuarter(req.query.quarter) ? req.query.quarter : upcomingQuarters(1)[0];
+  const months = quarterMonths(quarter);
   const { where, params } = actualFilter(req.query);
   const rows = db.prepare(`SELECT substr(a.spent_on, 1, 7) AS month, COUNT(*) AS entries, SUM(a.amount) AS total FROM travel_actuals a
     WHERE substr(a.spent_on, 1, 7) IN (SELECT value FROM json_each(@months)) ${where.length ? `AND ${where.join(' AND ')}` : ''}
     GROUP BY month`).all({ ...params, months: JSON.stringify(months) });
-  const byMonth = months.map((month) => ({ month, entries: 0, total: 0, ...rows.find((r) => r.month === month) }));
-  res.json({ quarter, months: byMonth, total: byMonth.reduce((s, m) => s + m.total, 0), entries: byMonth.reduce((s, m) => s + m.entries, 0) });
+  const est = actualFilter(req.query, 't');
+  const trips = db.prepare(`SELECT substr(t.date_from, 1, 7) AS month, COUNT(*) AS trips, COALESCE(SUM(t.total_estimate), 0) AS estimated FROM trips t
+    WHERE substr(t.date_from, 1, 7) IN (SELECT value FROM json_each(@months)) ${est.where.length ? `AND ${est.where.join(' AND ')}` : ''}
+    GROUP BY month`).all({ ...est.params, months: JSON.stringify(months) });
+  const byMonth = months.map((month) => ({ month, entries: 0, total: 0, trips: 0, estimated: 0, ...rows.find((r) => r.month === month), ...trips.find((r) => r.month === month) }));
+  const sum = (k) => byMonth.reduce((s, m) => s + m[k], 0);
+  res.json({ quarter, months: byMonth, total: sum('total'), entries: sum('entries'), estimated: sum('estimated'), trips: sum('trips') });
 });
+
+/** An actual cost entry that comes from a locked trip changes with the trip, not here. */
+const fromTrip = (id) => db.prepare('SELECT trip_id FROM travel_actuals WHERE id = ?').get(id)?.trip_id;
 
 function actualFields(b = {}) {
   const amount = Number(String(b.amount ?? '').replace(/[$,]/g, ''));
@@ -162,6 +209,7 @@ r.post('/actuals', (req, res) => {
 });
 
 r.put('/actuals/:id', (req, res) => {
+  if (fromTrip(req.params.id)) return res.status(400).json({ error: 'This cost comes from a locked trip. Change it on the trip.' });
   const { data, error } = actualFields(req.body);
   if (error) return res.status(400).json({ error });
   const info = db.prepare(`UPDATE travel_actuals SET traveler_id = @traveler_id, spent_on = @spent_on, amount = @amount, note = @note, updated_at = datetime('now')
@@ -171,6 +219,7 @@ r.put('/actuals/:id', (req, res) => {
 });
 
 r.delete('/actuals/:id', (req, res) => {
+  if (fromTrip(req.params.id)) return res.status(400).json({ error: 'This cost comes from a locked trip. Unlock the trip to remove it.' });
   db.prepare('DELETE FROM travel_actuals WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
@@ -206,25 +255,26 @@ r.put('/:id', (req, res) => {
     ${resubmit ? ", approval = 'pending', approved_by = NULL, approved_at = NULL, approval_note = NULL" : ''} WHERE id = @id`)
     .run({ ...row, id: Number(req.params.id) });
   const trip = hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(req.params.id));
+  if (trip.locked_estimate) syncActual(trip, req.user.id);
   if (resubmit || (before.approval === 'pending' && row.traveler_id !== before.traveler_id)) submitted(trip, req.user.id);
   res.json({ trip: withApproval(req.user)(trip) });
 });
 
-/** Set or clear a trip's locked estimate. A decided request goes back for approval when that changes what it costs. */
+/**
+ * Set or clear a trip's locked estimate: its actual costs. Entering them doesn't send an approved request back for
+ * approval; the locked total is recorded as actual travel spend.
+ */
 function setLock(req, res, lock) {
   const before = hydrate(db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id));
   if (!before) return res.status(404).json({ error: 'Not found' });
   const total = lock ? lock.total : tripCosts(before).total;
-  const resubmit = before.approval && before.approval !== 'pending' && Math.abs(total - before.total_estimate) >= 0.005;
-  db.prepare(`UPDATE trips SET locked_estimate = ?, total_estimate = ?, updated_at = datetime('now')
-    ${resubmit ? ", approval = 'pending', approved_by = NULL, approved_at = NULL, approval_note = NULL" : ''} WHERE id = ?`)
-    .run(lock ? json.str(lock) : null, total, before.id);
+  db.prepare("UPDATE trips SET locked_estimate = ?, total_estimate = ?, updated_at = datetime('now') WHERE id = ?").run(lock ? json.str(lock) : null, total, before.id);
   const trip = hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(before.id));
-  if (resubmit) submitted(trip, req.user.id);
+  syncActual(trip, req.user.id);
   res.json({ trip: withApproval(req.user)(trip) });
 }
 
-/** Lock the estimate. Body: { costs: { airfare, train, pov, car, lodging, mie, events }, override }; a blank override means none. */
+/** Lock the estimate at the trip's actual costs. Body: { costs: { airfare, train, pov, car, lodging, mie, events }, override }; a blank override means none. */
 r.put('/:id/lock', (req, res) => {
   const { costs: given = {}, override: rawOverride } = req.body || {};
   const blank = (v) => v === '' || v == null;
@@ -237,7 +287,7 @@ r.put('/:id/lock', (req, res) => {
 /** Unlock the estimate: the trip goes back to its calculated total. */
 r.delete('/:id/lock', (req, res) => setLock(req, res, null));
 
-/** Approve or decline a travel request. Body: { decision: 'approved' | 'declined', note }. The traveler gets an alert. */
+/** Approve or decline a travel request. Body: { decision: 'approved' | 'declined', note }. The traveler (and whoever made the request) gets an alert. */
 r.post('/:id/approval', (req, res) => {
   const trip = hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(req.params.id));
   if (!trip) return res.status(404).json({ error: 'Not found' });
@@ -248,7 +298,7 @@ r.post('/:id/approval', (req, res) => {
   db.prepare("UPDATE trips SET approval = ?, approved_by = ?, approved_at = datetime('now'), approval_note = ? WHERE id = ?")
     .run(decision, req.user.id, note, trip.id);
   db.prepare("UPDATE alerts SET read_at = COALESCE(read_at, datetime('now')) WHERE trip_id = ? AND kind = 'travel_request'").run(trip.id);
-  alertTrip([trip.traveler_id], req.user.id, 'travel_decision', trip.id, note);
+  alertTrip([...new Set([trip.traveler_id, trip.created_by])].filter((id) => id && id !== req.user.id), req.user.id, 'travel_decision', trip.id, note);
   res.json({ trip: withApproval(req.user)(hydrate(db.prepare(`${SELECT} WHERE t.id = ?`).get(trip.id))) });
 });
 

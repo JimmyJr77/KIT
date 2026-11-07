@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, RefreshCw, Upload, Settings, Settings2, ChevronUp, ChevronDown, ChevronsUpDown, Receipt, Trash2, Loader2 } from 'lucide-react';
+import { Plus, RefreshCw, Upload, Settings, Settings2, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, Receipt, Trash2, Loader2, Lock } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
-import { usd } from '../lib/travelCalc.js';
+import { usd, upcomingQuarters, shiftQuarter } from '../lib/travelCalc.js';
 import { fullName, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
@@ -22,17 +22,29 @@ export default function Travel() {
   const [traveler, setTraveler] = useState(null);
   const [team, setTeam] = useState('');
   const [quarter, setQuarter] = useState('');
+  const [month, setMonth] = useState(''); // an actual spend month card's month, "2026-11": the actual costs list shows only that month
   const [sort, setSort] = useState({ key: 'date', dir: 'desc' });
   const [trips, setTrips] = useState([]);
+  const [quarterTotals, setQuarterTotals] = useState({}); // each quarter's estimated and actual totals, for the Quarter column
   const [refreshing, setRefreshing] = useState(false);
   const [refreshed, setRefreshed] = useState(0);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [editing, setEditing] = useState(null);
   const [locking, setLocking] = useState(null); // the trip whose estimate is open in the side panel
+  const thisQuarter = useMemo(() => upcomingQuarters(1)[0], []);
   const [outlook, setOutlook] = useState(null);
+  const [outlookStart, setOutlookStart] = useState(thisQuarter); // the first of the four quarters the outlook shows
   const [mode, setMode] = useState('estimated'); // estimated | actual: what the list below the filters shows
+  // The cards above pick what the list shows, one card at a time: a card replaces whichever was picked before, and
+  // clicking the picked card again shows everything. A card is picked when the list is in its mode with its filters.
+  const estimatePicked = (q) => mode === 'estimated' && quarter === q;
+  const actualPicked = (q, m = '') => mode === 'actual' && quarter === q && month === m;
+  const pickEstimate = (q) => { const again = estimatePicked(q); setMode('estimated'); setMonth(''); setQuarter(again ? '' : q); };
+  const pickActual = (q, m = '') => { const again = actualPicked(q, m); setMode('actual'); setQuarter(again ? '' : q); setMonth(again ? '' : m); };
+  const showMode = (k) => { setMode(k); setMonth(''); };
   const [actuals, setActuals] = useState([]);
   const [actualSummary, setActualSummary] = useState(null);
+  const [actualQuarter, setActualQuarter] = useState(thisQuarter); // the quarter the actual spend cards show
   const [editingActual, setEditingActual] = useState(null);
   const [awaiting, setAwaiting] = useState([]); // requests waiting on my approval
   const [onlyAwaiting, setOnlyAwaiting] = useState(false);
@@ -49,27 +61,35 @@ export default function Travel() {
   }, [location.state, meta.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Open one travel request: from an event you already have one for (state.openTrip), or an alert (?open=<trip id>).
+  // An approval alert's "do it on the Travel page" link opens the trip's actual costs instead (?lock=<trip id>).
   const [params, setParams] = useSearchParams();
   useEffect(() => {
     const id = Number(location.state?.openTrip || params.get('open'));
-    if (!id) return;
-    api.get(`/travel/${id}`).then((d) => setEditing(d.trip)).catch(() => {});
-    if (params.get('open')) setParams({}, { replace: true });
+    const lockId = Number(params.get('lock'));
+    if (!id && !lockId) return;
+    if (id) api.get(`/travel/${id}`).then((d) => setEditing(d.trip)).catch(() => {});
+    else api.get(`/travel/${lockId}`).then((d) => setLocking(d.trip)).catch(() => {});
+    if (params.get('open') || params.get('lock')) setParams({}, { replace: true });
     else navigate(location.pathname, { replace: true, state: null });
   }, [location.state, params]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const load = () => {
+  const scopeQs = () => {
     const qs = new URLSearchParams();
     if (traveler) qs.set('traveler', traveler);
     if (team) qs.set('team', team);
-    // The quarterly outlook ignores the Quarter filter so it's always visible, but follows Traveler and Team.
-    api.get(`/travel/outlook?${qs}`).then((d) => setOutlook(d.quarters));
-    api.get(`/travel/actuals/summary?${qs}`).then(setActualSummary);
+    return qs;
+  };
+  const load = () => {
+    const qs = scopeQs();
     if (quarter) qs.set('quarter', quarter);
     api.get(`/travel/actuals?${qs}`).then((d) => setActuals(d.actuals));
     api.get('/travel/awaiting').then((d) => setAwaiting(d.trips));
-    return api.get(`/travel?${qs}`).then((d) => setTrips(d.trips));
+    return api.get(`/travel?${qs}`).then((d) => { setTrips(d.trips); setQuarterTotals(d.quarters); });
   };
+  // The quarterly outlook and the actual spend cards ignore the Quarter filter so they're always visible, but follow
+  // Traveler and Team; their arrows pick which quarters they show.
+  const loadOutlook = () => { const qs = scopeQs(); qs.set('start', outlookStart); return api.get(`/travel/outlook?${qs}`).then((d) => setOutlook(d.quarters)); };
+  const loadSummary = () => { const qs = scopeQs(); qs.set('quarter', actualQuarter); return api.get(`/travel/actuals/summary?${qs}`).then(setActualSummary); };
 
   // Re-price all estimated airfare and rental cars on every manual (page) refresh.
   const refresh = async () => {
@@ -86,6 +106,10 @@ export default function Travel() {
 
   useEffect(() => { refresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [traveler, team, quarter, refreshed]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadOutlook(); }, [traveler, team, outlookStart, refreshed]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadSummary(); }, [traveler, team, actualQuarter, refreshed]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Entering or changing actual costs changes the actual spend cards and the Quarter column's totals too.
+  const reloadAll = () => { load(); loadOutlook(); loadSummary(); };
 
   const quarters = useMemo(() => {
     const y = new Date().getFullYear();
@@ -93,10 +117,13 @@ export default function Travel() {
   }, []);
 
   const total = trips.reduce((s, t) => s + (t.total_estimate || 0), 0);
-  const actualTotal = actuals.reduce((s, a) => s + a.amount, 0);
+  const shownActuals = useMemo(() => (month ? actuals.filter((a) => a.spent_on.startsWith(month)) : actuals), [actuals, month]);
+  const actualTotal = shownActuals.reduce((s, a) => s + a.amount, 0);
   const who = traveler ? fullName(users.data?.users.find((u) => u.id === traveler))
     : team ? teams.data?.teams.find((t) => t.id === Number(team))?.name : 'All travelers';
   const newActual = () => setEditingActual({ traveler_id: traveler || user.id, spent_on: new Date().toLocaleDateString('en-CA'), amount: '', note: '' });
+  // An actual cost that comes from a locked trip is changed on the trip.
+  const openActual = (a) => (a.trip_id ? api.get(`/travel/${a.trip_id}`).then((d) => setLocking(d.trip)).catch(() => {}) : setEditingActual(a));
 
   // Text columns sort A–Z with blanks last; ties fall back to the newest trip first.
   const SORTS = {
@@ -135,10 +162,10 @@ export default function Travel() {
         users={users.data?.users || []}
         teams={teams.data?.teams || []}
         meta={meta.data}
-        onClose={() => { setEditing(null); load(); }}
+        onClose={() => { setEditing(null); reloadAll(); }}
         onSaved={(t) => {
           setEditing(null);
-          load();
+          reloadAll();
           // Your first trip: offer to keep where you left from as your default.
           if (t && t.traveler_id === user.id && !user.travel_from_asked && !from && (t.location_from?.city || t.airfare?.origin)) setAskDefault(t);
         }}
@@ -166,21 +193,21 @@ export default function Travel() {
 
       {outlook && (
         <section aria-label="Estimated travel spend by quarter">
-          <div className="mb-2 flex items-baseline justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-800">Estimated travel spend · next four quarters</h2>
-            <span className="text-xs text-slate-500">
-              {traveler ? fullName(users.data?.users.find((u) => u.id === traveler))
-                : team ? teams.data?.teams.find((t) => t.id === Number(team))?.name : 'All travelers'} · {usd(outlook.reduce((s, q) => s + q.total, 0)).replace('.00', '')} total
-            </span>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="flex items-center gap-1 text-sm font-semibold text-slate-800">
+              Estimated travel spend · {outlookStart === thisQuarter ? 'next four quarters' : `${outlook[0].quarter} – ${outlook[3].quarter}`}
+              <QuarterArrows onShift={(n) => setOutlookStart((q) => shiftQuarter(q, n))} onReset={outlookStart !== thisQuarter ? () => setOutlookStart(thisQuarter) : null} />
+            </h2>
+            <span className="text-xs text-slate-500">{who} · {noCents(outlook.reduce((s, q) => s + q.total, 0))} total</span>
           </div>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {outlook.map((q, i) => (
-              <button key={q.quarter} type="button" onClick={() => setQuarter(quarter === q.quarter ? '' : q.quarter)}
-                title={quarter === q.quarter ? 'Show all quarters' : `Show only ${q.quarter} trips`}
-                className={`rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-brand-500 ${quarter === q.quarter ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
+              <button key={q.quarter} type="button" onClick={() => pickEstimate(q.quarter)}
+                title={estimatePicked(q.quarter) ? 'Show all trips' : `Show only ${q.quarter} trips`}
+                className={`rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-brand-500 ${estimatePicked(q.quarter) ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
                 <div className="flex items-center justify-between text-xs font-medium text-slate-500">
                   <span>{q.quarter}</span>
-                  {i === 0 && <span className="rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700">This quarter</span>}
+                  {q.quarter === thisQuarter && <span className="rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700">This quarter</span>}
                 </div>
                 <div className="mt-1 text-2xl font-bold text-slate-900 tabular-nums">{usd(q.total).replace('.00', '')}</div>
                 <div className="mt-0.5 text-[11px] text-slate-400">{q.trips} trip{q.trips === 1 ? '' : 's'}</div>
@@ -190,14 +217,17 @@ export default function Travel() {
         </section>
       )}
 
-      {actualSummary && <ActualSpend summary={actualSummary} who={who} onAdd={newActual} onShow={() => setMode('actual')} />}
+      {actualSummary && (
+        <ActualSpend summary={actualSummary} who={who} thisQuarter={thisQuarter} onAdd={newActual} onShow={pickActual} picked={actualPicked}
+          onShift={(n) => setActualQuarter((q) => shiftQuarter(q, n))} onReset={actualQuarter !== thisQuarter ? () => setActualQuarter(thisQuarter) : null} />
+      )}
 
       <div className="panel flex flex-wrap items-end gap-4">
         <div>
           <label className="label">Show</label>
           <div className="flex h-[38px] rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="radiogroup" aria-label="Estimated or actual">
             {[['estimated', 'Estimated'], ['actual', 'Actual']].map(([k, l]) => (
-              <button key={k} type="button" role="radio" aria-checked={mode === k} onClick={() => setMode(k)}
+              <button key={k} type="button" role="radio" aria-checked={mode === k} onClick={() => showMode(k)}
                 className={`rounded px-3 ${mode === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
             ))}
           </div>
@@ -217,7 +247,7 @@ export default function Travel() {
         </div>
         <div className="w-40">
           <label className="label">Quarter</label>
-          <select className="input" value={quarter} onChange={(e) => setQuarter(e.target.value)}>
+          <select className="input" value={quarter} onChange={(e) => { setQuarter(e.target.value); setMonth(''); }}>
             <option value="">All quarters</option>
             {quarters.map((q) => <option key={q}>{q}</option>)}
           </select>
@@ -230,7 +260,7 @@ export default function Travel() {
           </div>
         ) : (
           <div className="ml-auto text-right">
-            <div className="text-xs uppercase text-slate-500">{actuals.length} entr{actuals.length === 1 ? 'y' : 'ies'} · actual total</div>
+            <div className="text-xs uppercase text-slate-500">{shownActuals.length} entr{shownActuals.length === 1 ? 'y' : 'ies'} · actual total</div>
             <div className="text-xl font-bold text-emerald-700">{usd(actualTotal)}</div>
           </div>
         )}
@@ -251,17 +281,20 @@ export default function Travel() {
               <tr><th className="px-4 py-3">Traveler</th><th className="px-4 py-3">Team</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Quarter</th><th className="px-4 py-3">Note</th><th className="px-4 py-3 text-right">Actual</th></tr>
             </thead>
             <tbody>
-              {actuals.map((a) => (
-                <tr key={a.id} className="cursor-pointer border-t border-slate-100 hover:bg-brand-50/40" onClick={() => setEditingActual(a)}>
+              {shownActuals.map((a) => (
+                <tr key={a.id} className="cursor-pointer border-t border-slate-100 hover:bg-brand-50/40" onClick={() => openActual(a)}
+                  title={a.trip_id ? 'From a locked trip: change it on the trip' : undefined}>
                   <td className="px-4 py-3 font-medium">{a.traveler_name}</td>
                   <td className="px-4 py-3 text-slate-600">{a.team_name || '—'}</td>
                   <td className="px-4 py-3 whitespace-nowrap">{shortDate(a.spent_on, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
                   <td className="px-4 py-3">{a.quarter}</td>
-                  <td className="px-4 py-3 text-slate-600">{a.note || '—'}</td>
+                  <td className="px-4 py-3 text-slate-600">
+                    <span className="inline-flex items-center gap-1.5">{a.trip_id && <Lock size={12} className="shrink-0 text-slate-400" aria-label="Locked trip" />}{a.note || '—'}</span>
+                  </td>
                   <td className="px-4 py-3 text-right font-semibold">{usd(a.amount)}</td>
                 </tr>
               ))}
-              {!actuals.length && <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-400">No actual travel costs yet. Use “Add actual cost” above to enter one.</td></tr>}
+              {!shownActuals.length && <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-400">No actual travel costs yet. Enter a trip's actual costs with its lock button, or use “Add actual cost” above.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -281,11 +314,22 @@ export default function Travel() {
                 <td className="px-4 py-3 text-slate-600">{t.team_name || '—'}</td>
                 <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{t.purposes.map((p) => <span key={p} className="chip">{p}</span>)}</div></td>
                 <td className="px-4 py-3">{locationLabel(t.location_from) || '—'} → {locationLabel(t.location_to) || '—'}</td>
-                <td className="px-4 py-3 whitespace-nowrap">{shortDate(t.date_from)} – {shortDate(t.date_to, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
-                <td className="px-4 py-3">{t.quarter}</td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <div>{shortDate(t.date_from, { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                  <div className="text-slate-500">to {shortDate(t.date_to, { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <div>{t.quarter}</div>
+                  <div className="text-[11px] text-slate-500 tabular-nums" title={`All travel in ${t.quarter} for ${who}: estimated, and actually spent`}>
+                    {noCents(quarterTotals[t.quarter]?.estimated || 0)} est · {noCents(quarterTotals[t.quarter]?.actual || 0)} actual
+                  </div>
+                </td>
                 <td className="px-4 py-3 capitalize text-slate-500">{t.airfare?.mode === 'none' ? 'No air' : t.airfare?.mode}</td>
                 <td className="px-4 py-3 font-semibold">
-                  <div className="flex items-center justify-end gap-2">{usd(t.total_estimate)}<LockButton locked={!!t.locked_estimate} onClick={() => setLocking(t)} /></div>
+                  <div className="flex items-center justify-end gap-2">
+                    <span title={t.locked_estimate ? 'Actual costs, entered by locking the trip' : 'Estimated'}>{usd(t.total_estimate)}</span>
+                    <LockButton locked={!!t.locked_estimate} onClick={() => setLocking(t)} />
+                  </div>
                 </td>
                 <td className="px-4 py-3" title={t.approver_name ? `${t.approval === 'declined' ? 'Declined' : 'Approved'} by ${t.approver_name}` : undefined}>
                   {t.approval ? <ApprovalBadge approval={t.approval} /> : <span className="text-slate-300">—</span>}
@@ -298,11 +342,11 @@ export default function Travel() {
       </div>
       )}
 
-      {locking && <EstimateLockPanel trip={locking} onClose={() => setLocking(null)} onSaved={() => { setLocking(null); load(); }} />}
+      {locking && <EstimateLockPanel trip={locking} onClose={() => setLocking(null)} onSaved={() => { setLocking(null); reloadAll(); }} />}
 
       {editingActual && (
         <ActualForm initial={editingActual} users={users.data?.users || []} onClose={() => setEditingActual(null)}
-          onSaved={() => { setEditingActual(null); load(); }} />
+          onSaved={() => { setEditingActual(null); reloadAll(); }} />
       )}
 
       <GsaPanel isAdmin={user.role === 'admin'} />
@@ -394,15 +438,49 @@ function GsaPanel({ isAdmin }) {
 }
 
 const monthName = (ym) => new Date(`${ym}-15T12:00:00`).toLocaleDateString('en-US', { month: 'long' });
+const noCents = (n) => usd(n).replace('.00', '');
 
-/** This quarter's actual travel spend: each month, with the running total so far, and the quarter in all. */
-function ActualSpend({ summary, who, onAdd, onShow }) {
+/** Step a section back or forward a quarter, and back to this quarter when it has moved. */
+function QuarterArrows({ onShift, onReset }) {
+  return (
+    <span className="ml-1 inline-flex items-center">
+      <button type="button" className="btn-ghost p-0.5" onClick={() => onShift(-1)} title="Earlier quarter" aria-label="Earlier quarter"><ChevronLeft size={16} /></button>
+      <button type="button" className="btn-ghost p-0.5" onClick={() => onShift(1)} title="Later quarter" aria-label="Later quarter"><ChevronRight size={16} /></button>
+      {onReset && <button type="button" className="ml-1 text-xs font-normal text-brand-700 hover:underline" onClick={onReset}>This quarter</button>}
+    </span>
+  );
+}
+
+/** Actual against estimated: "$300 under estimate", "$120 over estimate", or on it. */
+function Variance({ actual, estimated, className = '' }) {
+  const d = Math.round(actual - estimated);
+  if (!actual && !estimated) return <span className={className}>No travel</span>;
+  if (!actual) return <span className={className}>No actual costs yet</span>;
+  if (!d) return <span className={className}>On estimate</span>;
+  return <span className={`${className} ${d > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>{noCents(Math.abs(d))} {d > 0 ? 'over' : 'under'} estimate</span>;
+}
+
+/**
+ * A quarter's travel spend, actual / estimated: each month's actual spend beside what its trips are estimated at, with
+ * the running actual total so far, and the quarter in all. Arrows move to other quarters. Clicking a card shows its
+ * actual costs in the list below (onShow(quarter, month)); picked(quarter, month) says whether a card is showing.
+ */
+function ActualSpend({ summary, who, thisQuarter, onAdd, onShow, picked, onShift, onReset }) {
   const thisMonth = new Date().toLocaleDateString('en-CA').slice(0, 7);
   let running = 0;
+  const pair = (actual, estimated, tone = 'text-slate-900') => (
+    <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 tabular-nums">
+      <span className={`text-2xl font-bold ${tone}`}>{noCents(actual)}</span>
+      <span className="text-sm text-slate-400">/ {noCents(estimated)}</span>
+    </div>
+  );
   return (
-    <section aria-label="Actual travel spend this quarter">
-      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold text-slate-800">Actual travel spend · this quarter</h2>
+    <section aria-label="Actual travel spend by quarter">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="flex items-center gap-1 text-sm font-semibold text-slate-800">
+          Actual / estimated travel spend · {summary.quarter === thisQuarter ? 'this quarter' : summary.quarter}
+          <QuarterArrows onShift={onShift} onReset={onReset} />
+        </h2>
         <span className="flex items-center gap-3 text-xs text-slate-500">
           {who} · {summary.quarter}
           <button type="button" className="btn h-8 py-0 text-xs" onClick={onAdd}><Receipt size={14} /> Add actual cost</button>
@@ -412,24 +490,29 @@ function ActualSpend({ summary, who, onAdd, onShow }) {
         {summary.months.map((m) => {
           running += m.total;
           return (
-            <button key={m.month} type="button" onClick={onShow} title="Show actual costs"
-              className={`rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-emerald-500 ${m.month === thisMonth ? 'border-emerald-300' : 'border-slate-200'}`}>
+            <button key={m.month} type="button" onClick={() => onShow(summary.quarter, m.month)}
+              title={picked(summary.quarter, m.month) ? 'Show all actual costs' : `Show only ${monthName(m.month)} actual costs`}
+              className={`rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-emerald-500 ${picked(summary.quarter, m.month) ? 'border-emerald-500 ring-2 ring-emerald-100' : m.month === thisMonth ? 'border-emerald-300' : 'border-slate-200'}`}>
               <div className="flex items-center justify-between text-xs font-medium text-slate-500">
                 <span>{monthName(m.month)}</span>
                 {m.month === thisMonth && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">This month</span>}
               </div>
-              <div className="mt-1 text-2xl font-bold text-slate-900 tabular-nums">{usd(m.total).replace('.00', '')}</div>
+              {pair(m.total, m.estimated)}
               <div className="mt-0.5 text-[11px] text-slate-400">
-                {m.entries} entr{m.entries === 1 ? 'y' : 'ies'} · {usd(running).replace('.00', '')} so far this quarter
+                <Variance actual={m.total} estimated={m.estimated} /> · {m.entries} entr{m.entries === 1 ? 'y' : 'ies'}, {m.trips} trip{m.trips === 1 ? '' : 's'}
               </div>
+              <div className="text-[11px] text-slate-400">{noCents(running)} actual so far this quarter</div>
             </button>
           );
         })}
-        <button type="button" onClick={onShow} title="Show actual costs"
-          className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-left shadow-sm transition hover:border-emerald-500">
-          <div className="text-xs font-medium text-emerald-800">{summary.quarter} total</div>
-          <div className="mt-1 text-2xl font-bold text-emerald-900 tabular-nums">{usd(summary.total).replace('.00', '')}</div>
-          <div className="mt-0.5 text-[11px] text-emerald-800/70">{summary.entries} entr{summary.entries === 1 ? 'y' : 'ies'} this quarter</div>
+        <button type="button" onClick={() => onShow(summary.quarter)}
+          title={picked(summary.quarter) ? 'Show all actual costs' : `Show only ${summary.quarter} actual costs`}
+          className={`rounded-xl border bg-emerald-50/60 p-4 text-left shadow-sm transition hover:border-emerald-500 ${picked(summary.quarter) ? 'border-emerald-500 ring-2 ring-emerald-100' : 'border-emerald-200'}`}>
+          <div className="text-xs font-medium text-emerald-800">{summary.quarter} · actual / estimated</div>
+          {pair(summary.total, summary.estimated, 'text-emerald-900')}
+          <div className="mt-0.5 text-[11px] text-emerald-800/70">
+            <Variance actual={summary.total} estimated={summary.estimated} /> · {summary.entries} entr{summary.entries === 1 ? 'y' : 'ies'}, {summary.trips} trip{summary.trips === 1 ? '' : 's'}
+          </div>
         </button>
       </div>
     </section>

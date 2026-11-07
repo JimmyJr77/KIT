@@ -220,6 +220,7 @@ function TopMetrics({ top, people, territory }) {
             <Row label="Expenses ÷ revenue" value={xp.year.ratio == null ? 'No revenue' : share(xp.year.ratio)} strong />
           </div>
         </StatTile>
+        <TravelVariance months={top.travelVariance} />
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
@@ -252,6 +253,25 @@ function TopMetrics({ top, people, territory }) {
       </div>
       <SpendWatch watch={top.spendWatch} />
     </section>
+  );
+}
+
+/** "+$1.2K" over the estimate, "−$800" under it, "$0" on it. */
+const signed = (n) => (Math.abs(n) < 0.5 ? '$0' : `${n > 0 ? '+' : '−'}${compact(Math.abs(n))}`);
+
+/** Travel actual against estimated, month by month: last month's variance up top, then each of the last six months. */
+function TravelVariance({ months }) {
+  if (!months?.length) return null;
+  const last = months[months.length - 2] || months[0];
+  return (
+    <StatTile label="Travel: actual vs estimated" value={<span className={last.variance > 0.5 ? 'text-amber-700' : last.variance < -0.5 ? 'text-emerald-700' : ''}>{signed(last.variance)}</span>}
+      sub={`${last.label} · ${compact(last.actual)} actual vs ${compact(last.estimated)} estimated`}>
+      <div className="mt-2 space-y-0.5 border-t border-slate-100 pt-2 text-xs text-slate-600" title="Each month's actual travel spend less the estimate for trips starting that month; over the estimate is positive">
+        {months.map((m) => (
+          <Row key={m.key} label={`${m.label}${m.current ? ' (so far)' : ''}`} value={`${signed(m.variance)} · ${compact(m.actual)} / ${compact(m.estimated)}`} warn={m.variance > 0.5} />
+        ))}
+      </div>
+    </StatTile>
   );
 }
 

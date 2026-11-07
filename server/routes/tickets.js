@@ -9,8 +9,8 @@ import { db, json, getSetting, setSetting, withTeams, defaultAssignment, pipelin
 import { requireAdmin } from '../auth.js';
 import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../src/lib/assessment.js';
 import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
-import { recordWork } from '../worklog.js';
-import { notifyMentions } from '../mentions.js';
+import { recordWork, recordTicketUpdate } from '../worklog.js';
+import { notifyMentions, notifyTicketOwner } from '../mentions.js';
 import { ticketFields } from './priorities.js';
 import { statusesFor, listPipelines } from '../pipelines.js';
 import { queueDelete } from '../services/pipedrive.js';
@@ -245,7 +245,10 @@ r.put('/:id/assignment', (req, res) => {
     sets.push('win_date_undetermined = @wu');
     if (vals.wu) sets.push('projected_win_date = NULL');
   }
-  if (sets.length) db.prepare(`UPDATE tickets SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = @id`).run(vals);
+  if (sets.length) {
+    db.prepare(`UPDATE tickets SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = @id`).run(vals);
+    recordTicketUpdate(req.user, t, 'BD director, territory or win date');
+  }
   res.json({ ticket: ticketRow(t.id) });
 });
 
@@ -272,6 +275,7 @@ r.put('/:id/strategy', (req, res) => {
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   db.prepare("UPDATE tickets SET strategy = ?, strategy_updated_at = datetime('now'), strategy_updated_by = ?, updated_at = datetime('now') WHERE id = ?")
     .run(String(req.body?.strategy ?? ''), req.user.id, t.id);
+  recordTicketUpdate(req.user, t, 'Win strategy');
   res.json({ ok: true, strategy_updated_at: ticketRow(t.id).strategy_updated_at, strategy_updated_by: nameOf(req.user.id) });
 });
 
@@ -291,6 +295,7 @@ r.put('/:id/assessment', (req, res) => {
   }
   db.prepare("UPDATE tickets SET assessment = ?, assessment_updated_at = datetime('now'), assessment_updated_by = ?, updated_at = datetime('now') WHERE id = ?")
     .run(json.str(clean), req.user.id, t.id);
+  recordTicketUpdate(req.user, t, 'Win assessment');
   res.json({ ok: true, assessment_updated_at: ticketRow(t.id).assessment_updated_at, assessment_updated_by: nameOf(req.user.id) });
 });
 
@@ -334,6 +339,9 @@ r.put('/:id/lane', (req, res) => {
       set("archived_at = NULL, archive_set_id = NULL, done_at = CASE WHEN done_at IS NOT NULL AND ticket_type = 'work' THEN datetime('now') ELSE done_at END");
     }
   }
+  if (lane || typeof b.locked === 'boolean' || typeof b.archived === 'boolean') {
+    recordTicketUpdate(req.user, t, lane ? `Moved to ${LANES.find((l) => l.key === lane)?.label || lane}` : typeof b.archived === 'boolean' ? (b.archived ? 'Archived' : 'Restored') : (b.locked ? 'Locked in lane' : 'Unlocked'));
+  }
   res.json({ ok: true });
 });
 
@@ -350,6 +358,7 @@ r.put('/:id/stage', (req, res) => {
     if (stage === 'Lost' && t.deal_status !== 'lost') setOutcome(t.id, 'lost', req.body?.lost_reason ?? t.lost_reason);
     else if (stage !== 'Lost' && t.deal_status === 'lost') setOutcome(t.id, 'open');
   })();
+  recordTicketUpdate(req.user, t, stage ? `Stage: ${stage}` : 'Stage cleared');
   res.json({ ticket: ticketRow(t.id) });
 });
 
@@ -507,6 +516,7 @@ r.post('/:id/comments', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(t.id, cardId, parentId, kind, body, req.user.id, target?.type ?? null, target?.id ?? null).lastInsertRowid;
   recordWork(req.user, { kind, ticket_id: t.id, card_id: cardId, ref_id: id, summary: body });
   notifyMentions(req.user, body, { ticket_id: t.id, card_id: cardId, comment_id: id });
+  notifyTicketOwner(req.user, t, body, { ticket_id: t.id, card_id: cardId, comment_id: id });
   res.json({ comment: commentOut(db.prepare(`${COMMENT_SQL} WHERE m.id = ?`).get(id)) });
 });
 
@@ -617,6 +627,7 @@ r.put('/process/:pid', (req, res) => {
     req.user.id, p.id,
   );
   touch(p.ticket_id);
+  recordTicketUpdate(req.user, ticketRow(p.ticket_id), `Process step: ${b.step_type ?? p.step_type}`);
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
@@ -628,6 +639,7 @@ r.delete('/process/:pid', (req, res) => {
   db.prepare('DELETE FROM ticket_process_steps WHERE id = ?').run(p.id);
   db.prepare("DELETE FROM work_log WHERE kind = 'process' AND ref_id = ?").run(p.id);
   touch(p.ticket_id);
+  recordTicketUpdate(req.user, ticketRow(p.ticket_id), `Process step removed: ${p.step_type}`);
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
@@ -690,7 +702,8 @@ r.get('/:id/process-view', (req, res) => {
   lead.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 
   // ---- Strategy: tiers, priority lists, the ticket's own strategy and its assessment
-  const tiers = db.prepare(`SELECT tr.user_id, tr.name AS tier, a.name AS account, a.strategy AS account_strategy, pt.position,
+  const tiers = db.prepare(`SELECT tr.user_id, tr.name AS tier, a.name AS account, pt.position,
+      (SELECT group_concat(body, char(10)) FROM (SELECT body FROM account_strategies s WHERE s.account_id = a.id ORDER BY s.position, s.id)) AS account_strategy,
       (SELECT COUNT(*) FROM priority_account_tickets x WHERE x.account_id = a.id) AS account_tickets
     FROM priority_account_tickets pt JOIN priority_accounts a ON a.id = pt.account_id JOIN priority_tiers tr ON tr.id = a.tier_id
     WHERE pt.ticket_id = ? ORDER BY tr.position, a.position`).all(t.id)
@@ -733,6 +746,7 @@ r.delete('/files/:id', (req, res) => {
   const deal = db.prepare('SELECT pipedrive_id FROM tickets WHERE id = ?').get(f.ticket_id)?.pipedrive_id;
   db.prepare("DELETE FROM work_log WHERE kind = 'file' AND ref_id = ?").run(f.id);
   db.prepare('DELETE FROM ticket_files WHERE id = ?').run(f.id);
+  recordTicketUpdate(req.user, ticketRow(f.ticket_id), 'Document removed');
   queueDelete('file', f.pipedrive_id, deal);
   queueDelete('note', f.pipedrive_note_id, deal); // a linked document went as a note with its link
   if (f.stored_name && !f.url) fs.rmSync(path.join(uploadDir, f.stored_name), { force: true });
@@ -814,6 +828,7 @@ r.put('/:id/details', (req, res) => {
     }
   })();
   touch(t.id);
+  recordTicketUpdate(req.user, t, 'Details');
   res.json(detailsOf(ticketRow(t.id)));
 });
 
@@ -832,6 +847,7 @@ r.put('/:id/labels', (req, res) => {
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   db.prepare('UPDATE tickets SET labels = ?, labels_pending = ? WHERE id = ?').run(cleanLabels(req.body?.labels), t.pipedrive_id ? 1 : 0, t.id);
   touch(t.id);
+  recordTicketUpdate(req.user, t, 'Labels');
   res.json({ labels: json.parse(ticketRow(t.id).labels, []) });
 });
 
@@ -861,6 +877,7 @@ r.post('/:id/products', (req, res) => {
   db.prepare(`INSERT INTO ticket_products (ticket_id, name, quantity, item_price, discount, comments, position)
     VALUES (?, ?, ?, ?, ?, ?, ?)`).run(t.id, out.name, out.quantity, out.item_price, out.discount, out.comments, pos);
   touch(t.id);
+  recordTicketUpdate(req.user, t, 'Products');
   res.json(detailsOf(t));
 });
 
@@ -872,6 +889,7 @@ r.put('/products/:pid', (req, res) => {
   Object.entries(out).forEach(([k, v]) => db.prepare(`UPDATE ticket_products SET ${k} = ? WHERE id = ?`).run(v, p.id));
   db.prepare('UPDATE ticket_products SET pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?').run(p.id);
   touch(p.ticket_id);
+  recordTicketUpdate(req.user, ticketRow(p.ticket_id), 'Products');
   res.json(detailsOf(ticketRow(p.ticket_id)));
 });
 
@@ -881,6 +899,7 @@ r.delete('/products/:pid', (req, res) => {
   db.prepare('DELETE FROM ticket_products WHERE id = ?').run(p.id);
   queueDelete('product', p.pipedrive_id, ticketRow(p.ticket_id)?.pipedrive_id);
   touch(p.ticket_id);
+  recordTicketUpdate(req.user, ticketRow(p.ticket_id), 'Products');
   res.json(detailsOf(ticketRow(p.ticket_id)));
 });
 
@@ -900,6 +919,7 @@ r.post('/:id/installments', (req, res) => {
   if (error) return res.status(400).json({ error });
   db.prepare('INSERT INTO ticket_installments (ticket_id, description, amount, billing_date) VALUES (?, ?, ?, ?)').run(t.id, out.description, out.amount, out.billing_date);
   touch(t.id);
+  recordTicketUpdate(req.user, t, 'Funding');
   res.json(detailsOf(t));
 });
 
@@ -911,6 +931,7 @@ r.put('/installments/:iid', (req, res) => {
   db.prepare('UPDATE ticket_installments SET description = ?, amount = ?, billing_date = ?, pipedrive_pending = (pipedrive_id IS NOT NULL) WHERE id = ?')
     .run(out.description, out.amount, out.billing_date, i.id);
   touch(i.ticket_id);
+  recordTicketUpdate(req.user, ticketRow(i.ticket_id), 'Funding');
   res.json(detailsOf(ticketRow(i.ticket_id)));
 });
 
@@ -920,6 +941,7 @@ r.delete('/installments/:iid', (req, res) => {
   db.prepare('DELETE FROM ticket_installments WHERE id = ?').run(i.id);
   queueDelete('installment', i.pipedrive_id, ticketRow(i.ticket_id)?.pipedrive_id);
   touch(i.ticket_id);
+  recordTicketUpdate(req.user, ticketRow(i.ticket_id), 'Funding');
   res.json(detailsOf(ticketRow(i.ticket_id)));
 });
 
@@ -948,6 +970,7 @@ r.put('/:id/organization', (req, res) => {
       annual_revenue = @annual_revenue, employee_count = @employee_count, pipedrive_pending = 1, updated_at = datetime('now') WHERE id = @id`).run({ ...fields, id: orgId });
     db.prepare("UPDATE tickets SET organization_id = ?, organization = ?, updated_at = datetime('now') WHERE id = ?").run(orgId, name, t.id);
   })();
+  recordTicketUpdate(req.user, t, 'Organization');
   res.json(detailsOf(ticketRow(t.id)));
 });
 
