@@ -1,9 +1,10 @@
 // Compensation: the BD Director bonus plan (3/2/1) applied to each director's won deals. Admins see every director and
 // set the plan's inputs (defaults, each director's salary, rates and goals, and what the plan knows about each contract).
-// Everyone else sees their own compensation only. The math is in ../compensation.js.
+// Everyone else sees their own compensation only, and can put their own projections on the months to come. The math is
+// in ../compensation.js.
 import { Router } from 'express';
 import { requireAdmin } from '../auth.js';
-import { compensation, bdMembers, savePlanSettings, savePlan, deletePlan, saveContract } from '../compensation.js';
+import { compensation, bdMembers, savePlanSettings, savePlan, deletePlan, saveContract, saveProjection, resetProjections } from '../compensation.js';
 
 const r = Router();
 
@@ -47,6 +48,25 @@ r.put('/contracts/:ticketId', requireAdmin, (req, res) => {
     saveContract(Number(req.params.ticketId), req.body || {}, req.user.id);
     res.json(compensation(yearOf(req.query.year)));
   } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+/** Body: { user_id, month (YYYY-MM), amount }. A blank amount goes back to the system's projection. Admins for anyone; others for themselves. */
+r.put('/projections', (req, res) => {
+  const { user_id, month, amount } = req.body || {};
+  const userId = Number(user_id);
+  if (!isAdmin(req.user) && userId !== req.user.id) return res.status(403).json({ error: 'You can set your own projections only' });
+  try {
+    saveProjection(userId, month, amount, req.user.id);
+    res.json(compensation(yearOf(String(month).slice(0, 4)), isAdmin(req.user) ? null : [req.user.id]));
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+/** Back to the system's projections for a director's year. */
+r.delete('/projections/:userId/:year', (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!isAdmin(req.user) && userId !== req.user.id) return res.status(403).json({ error: 'You can reset your own projections only' });
+  resetProjections(userId, Number(req.params.year));
+  res.json(compensation(yearOf(req.params.year), isAdmin(req.user) ? null : [req.user.id]));
 });
 
 export default r;

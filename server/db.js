@@ -1656,6 +1656,16 @@ CREATE TABLE IF NOT EXISTS comp_contracts (
   updated_by INTEGER REFERENCES users(id),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- A director's own projection of what they'll close in a future month, in place of the system's (their open pipeline
+-- tickets dated that month, weighted by PWIN). Deleting the row goes back to the system's projection.
+CREATE TABLE IF NOT EXISTS comp_projections (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  month TEXT NOT NULL,   -- YYYY-MM
+  amount REAL NOT NULL,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, month)
+);
 `);
 
 /** Whether an admin has stopped people creating pipeline tickets in KIT. Deals pulled from Pipedrive still come in. */

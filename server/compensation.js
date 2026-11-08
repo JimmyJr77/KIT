@@ -7,8 +7,8 @@
 //   Renewals (§4.2): a new agreement, re-compete or renewal is its own won deal, so its clock starts at year 1 on its own.
 //   Pre-bid approval (§3.2): a bid without the CEO's and VP of Finance's sign-off earns nothing. An admin records the
 //     approval on each contract; one not recorded yet still counts, flagged, so a missing record doesn't hide money.
-//   Payouts (§5): the first half (Jan–Jun) is paid in Q3 as an advance; the second half is paid in Q1 of the next year as a
-//     true-up, the full year's bonus less the advance.
+//   Payouts (§5): paid in June (an advance on the first half of the year) and in December, when the whole year is trued
+//     up: the December payout is the year's bonus less what June paid, and those are the year's final numbers.
 //   Eligibility (§6.1): a director who isn't an active full-time employee on payday forfeits the payout.
 //
 // Revenue. KIT's revenue is what's billed on a contract (Delivery › billing entries), the same figure the BD dashboard
@@ -16,8 +16,14 @@
 // evenly over its term (straight-line): a contract's expected revenue in a month is what was billed when the month is
 // past and had billings, else the straight-line share. Per contract, `revenue_basis` can insist on one or the other.
 // Nothing is paid on months before the plan's effective date.
+//
+// Projections. Beyond the deals already won, a director's open pipeline tickets dated in a coming month, weighted by
+// PWIN, are the system's projection of what they'll close that month (an open ticket dated earlier rolls into this
+// month). A director can put their own number on a month instead, or go back to the system's. A projected win is
+// treated as a contract starting that month, spread over the deal's expected term (twelve months when unknown), and
+// earns at the plan's rates like any other, so the page can show what those wins would pay.
 import { db, json, getSetting, setSetting } from './db.js';
-import { inBooks, localToday } from './financials.js';
+import { inBooks, localToday, bids, isOpen } from './financials.js';
 
 export const SETTINGS_KEY = 'comp_plan';
 export const DEFAULTS = { rate_y1: 3, rate_y2: 2, rate_y3: 1, effective_date: '2026-07-01' };
@@ -61,6 +67,7 @@ function monthsBetween(a, b) {
 }
 const lastDay = (ym) => { const [y, m] = ym.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
 export const monthLabel = (ym) => new Date(`${ym}-01T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+const yearMonths = (year) => Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
 
 // ---- Contract term, read from the deal.
 const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
@@ -84,19 +91,24 @@ export function parseTerm(text) {
   return total > 0 ? total : null;
 }
 
+/** The deal's term field, parsed, from its custom fields JSON. */
+const termFromFields = (customFields) => {
+  const f = json.parse(customFields, []).find((x) => TERM_FIELD.test(x.name || '') && !POP_END_FIELD.test(x.name || '') && x.value);
+  return { months: f ? parseTerm(f.value) : null, text: f?.value || null };
+};
+
 /** A won deal's start date and term from what's on it, with where each came from. */
 function termOf(row, override) {
   const fields = json.parse(row.custom_fields, []);
   const start = override?.start_date || row.start_date || (row.won_at ? row.won_at.slice(0, 10) : null) || row.awarded_at.slice(0, 10);
   const startSource = override?.start_date ? 'set' : row.start_date ? 'contract' : 'won';
   if (override?.term_months) return { start, startSource, months: override.term_months, termSource: 'set', termText: null };
-  const f = fields.find((x) => TERM_FIELD.test(x.name || '') && !POP_END_FIELD.test(x.name || '') && x.value);
-  const parsed = f ? parseTerm(f.value) : null;
-  if (parsed) return { start, startSource, months: parsed, termSource: 'deal', termText: f.value };
+  const parsed = termFromFields(row.custom_fields);
+  if (parsed.months) return { start, startSource, months: parsed.months, termSource: 'deal', termText: parsed.text };
   const popEnd = row.pop_end || fields.find((x) => POP_END_FIELD.test(x.name || '') && /^\d{4}-\d{2}-\d{2}/.test(x.value || ''))?.value;
   const end = row.end_date || popEnd;
   if (end && end > start) return { start, startSource, months: Math.max(1, monthsBetween(ym(start), ym(end)) + 1), termSource: 'dates', termText: `${start} to ${end}` };
-  return { start, startSource, months: 12, termSource: 'assumed', termText: f?.value || null };
+  return { start, startSource, months: 12, termSource: 'assumed', termText: parsed.text };
 }
 
 // ---- The won deals, as the plan sees them.
@@ -110,6 +122,13 @@ const contractRows = () => db.prepare(`SELECT p.id AS program_id, p.ticket_id, p
 const billingRows = () => db.prepare("SELECT program_id, amount, entry_date FROM program_entries WHERE kind = 'billing'").all();
 
 const rateFor = (rates, contractYear) => (contractYear === 1 ? rates.rate_y1 : contractYear === 2 ? rates.rate_y2 : contractYear === 3 ? rates.rate_y3 : 0) / 100;
+
+/** The rate that applies to month `k` of a contract starting `startYm`, in the calendar year it falls in. */
+const monthRate = (k, startYm, ratesFor, effectiveYm) => {
+  const idx = monthsBetween(startYm, k);
+  const contractYear = idx < 0 ? 1 : Math.floor(idx / 12) + 1;
+  return { contractYear, rate: !effectiveYm || k >= effectiveYm ? rateFor(ratesFor(Number(k.slice(0, 4))), contractYear) : 0 };
+};
 
 /**
  * One contract's revenue and bonus, month by month over its term (and any billings outside it), given the rates to apply
@@ -134,18 +153,27 @@ function contractMonths(row, billings, ratesFor, effectiveYm, todayYm) {
   const keys = new Set([...Array.from({ length: term.months }, (_, i) => addMonths(startYm, i)), ...byMonth.keys()]);
   const months = [...keys].sort().map((k) => {
     const idx = monthsBetween(startYm, k);
-    const contractYear = idx < 0 ? 1 : Math.floor(idx / 12) + 1;
     const inTerm = idx >= 0 && idx < term.months;
     const recognized = byMonth.get(k) || 0;
     let expected;
     if (basis === 'billed') expected = recognized;
     else if (basis === 'straight') expected = inTerm ? straight : 0;
     else expected = hasBillings && k <= todayYm ? recognized : inTerm ? straight : 0;
-    const year = Number(k.slice(0, 4));
-    const rate = pays && (!effectiveYm || k >= effectiveYm) ? rateFor(ratesFor(year), contractYear) : 0;
-    return { month: k, year, half: Number(k.slice(5, 7)) <= 6 ? 1 : 2, contractYear, rate, recognized, expected, bonusRecognized: recognized * rate, bonusExpected: expected * rate };
+    const { contractYear, rate: r } = monthRate(k, startYm, ratesFor, effectiveYm);
+    const rate = pays ? r : 0;
+    return { month: k, year: Number(k.slice(0, 4)), half: Number(k.slice(5, 7)) <= 6 ? 1 : 2, contractYear, rate, recognized, expected, bonusRecognized: recognized * rate, bonusExpected: expected * rate };
   });
   return { term, basis, months };
+}
+
+/** The bonus a projected win of `amount`, starting `startYm` and spread over `termMonths`, pays month by month. */
+function projectedMonths(amount, startYm, termMonths, ratesFor, effectiveYm) {
+  const straight = amount / termMonths;
+  return Array.from({ length: termMonths }, (_, i) => {
+    const k = addMonths(startYm, i);
+    const { rate } = monthRate(k, startYm, ratesFor, effectiveYm);
+    return { month: k, year: Number(k.slice(0, 4)), half: Number(k.slice(5, 7)) <= 6 ? 1 : 2, revenue: straight, bonus: straight * rate };
+  });
 }
 
 const sum = (xs, f) => xs.reduce((s, x) => s + (f(x) || 0), 0);
@@ -153,6 +181,7 @@ const roll = (months) => ({
   recognized: sum(months, (m) => m.recognized), expected: sum(months, (m) => m.expected),
   bonusRecognized: sum(months, (m) => m.bonusRecognized), bonusExpected: sum(months, (m) => m.bonusExpected),
 });
+const rollProjected = (months) => ({ revenue: sum(months, (m) => m.revenue), bonus: sum(months, (m) => m.bonus) });
 
 /** Everyone on the BD team (active), A–Z by last name. */
 export const bdMembers = () => db.prepare(`SELECT u.id, u.first_name, u.last_name, u.title FROM users u
@@ -168,9 +197,27 @@ function ratesIn(plansByYear, userId, year, defaults) {
 }
 
 /**
+ * The months of `year` still to come (this month included), and the open pipeline tickets that project into each: the
+ * ones dated in the month, PWIN-weighted, plus (in this month) any dated earlier that are still open.
+ */
+function pipelineByMonth(year, todayYm, open) {
+  const months = yearMonths(year).filter((k) => k >= todayYm);
+  return months.map((k) => {
+    const deals = open.filter((t) => (ym(t.projected_win_date) > todayYm ? ym(t.projected_win_date) : todayYm) === k)
+      .map((t) => ({ id: t.id, title: t.opportunity_title, organization: t.organization, value: t.value || 0, pwin: t.pwin, weighted: (t.value || 0) * (t.pwin ?? 1),
+        term_months: t.term_months, projected_win_date: t.projected_win_date, stage: t.pipeline_status }));
+    const amount = sum(deals, (d) => d.weighted);
+    // The month's term, for a projection of the director's own: the pipeline's weighted-average term, else a year.
+    const term = amount ? Math.max(1, Math.round(sum(deals, (d) => d.weighted * d.term_months) / amount)) : 12;
+    return { month: k, label: monthLabel(k), deals, amount, count: deals.length, term };
+  });
+}
+
+/**
  * The compensation picture for a plan year: each director's wins, the bonus they've earned (on billed revenue) and can
  * expect (on the contract values), its two payouts, their base salary and goals, the three-year outlook from the
- * contracts they've won so far, and the team's totals. `scope` is a list of user ids to include, or null for everyone.
+ * contracts they've won so far, closings by month, projected wins for the months to come and what those would pay, and
+ * the team's totals. `scope` is a list of user ids to include, or null for everyone.
  */
 export function compensation(year, scope = null) {
   const today = localToday();
@@ -182,6 +229,11 @@ export function compensation(year, scope = null) {
   const billings = billingRows();
   const members = bdMembers();
   const names = new Map(db.prepare('SELECT id, first_name, last_name, title, active FROM users').all().map((u) => [u.id, u]));
+  // Open, dated pipeline tickets, with each deal's expected term (twelve months when the deal doesn't say).
+  const terms = new Map(db.prepare("SELECT id, custom_fields FROM tickets WHERE ticket_type = 'bid' AND deal_status = 'open'").all().map((t) => [t.id, termFromFields(t.custom_fields).months || 12]));
+  const open = bids().filter((t) => isOpen(t) && t.projected_win_date && !t.win_date_undetermined && Number(t.projected_win_date.slice(0, 4)) <= year)
+    .map((t) => ({ ...t, term_months: terms.get(t.id) || 12 }));
+  const overrides = db.prepare('SELECT user_id, month, amount FROM comp_projections WHERE month LIKE ?').all(`${year}-%`);
 
   // Who's on the page: BD members with a plan row for the year or a won deal, plus anyone with a won deal (whoever's team).
   const ids = new Set([...(plans.get(year) || []).map((p) => p.user_id), ...rows.map((r) => r.bd_director_id).filter(Boolean)]);
@@ -216,12 +268,33 @@ export function compensation(year, scope = null) {
     const h1 = roll(inYear.filter((m) => m.half === 1));
     const h2 = roll(inYear.filter((m) => m.half === 2));
     const yr = roll(inYear);
-    // Month by month across the year, split by contract-year tier, for the chart.
-    const series = Array.from({ length: 12 }, (_, i) => {
-      const k = `${year}-${String(i + 1).padStart(2, '0')}`;
-      const ms = inYear.filter((m) => m.month === k);
-      return { month: k, label: monthLabel(k), tiers: [1, 2, 3].map((cy) => sum(ms.filter((m) => m.contractYear === cy), (m) => m.bonusExpected)), recognized: sum(ms, (m) => m.bonusRecognized) };
+    // Closings: the deals won in each month of the year.
+    const closings = yearMonths(year).map((k) => {
+      const won = contracts.filter((c) => ym(c.won_on) === k);
+      return { month: k, label: monthLabel(k), value: sum(won, (c) => c.value), count: won.length };
     });
+    // Projections: the months to come, the pipeline that projects into each, the director's own number if they set one,
+    // and what the month's projected wins would pay (this year and the two after).
+    const pipeline = pipelineByMonth(year, todayYm, open.filter((t) => t.bd_director_id === id));
+    const projections = pipeline.map((p) => {
+      const own = overrides.find((o) => o.user_id === id && o.month === p.month);
+      const amount = own ? own.amount : p.amount;
+      const pays = own ? projectedMonths(amount, p.month, p.term, ratesFor, effectiveYm)
+        : p.deals.flatMap((d) => projectedMonths(d.weighted, p.month, d.term_months, ratesFor, effectiveYm));
+      return {
+        ...p, system: p.amount, user: own ? own.amount : null, amount,
+        bonus: { year: sum(pays.filter((m) => m.year === year), (m) => m.bonus), h1: sum(pays.filter((m) => m.year === year && m.half === 1), (m) => m.bonus), h2: sum(pays.filter((m) => m.year === year && m.half === 2), (m) => m.bonus) },
+        pays,
+      };
+    });
+    const projectedPays = projections.flatMap((p) => p.pays);
+    const projected = {
+      months: projections.map(({ pays, ...p }) => p),
+      amount: sum(projections, (p) => p.amount), system: sum(projections, (p) => p.system), count: sum(projections, (p) => p.count),
+      overridden: projections.filter((p) => p.user != null).length,
+      bonus: { h1: sum(projections, (p) => p.bonus.h1), h2: sum(projections, (p) => p.bonus.h2), year: sum(projections, (p) => p.bonus.year) },
+      outlook: [year, year + 1, year + 2].map((y) => ({ year: y, ...rollProjected(projectedPays.filter((m) => m.year === y)) })),
+    };
     const eligible = plan ? !!plan.eligible : true;
     const base = plan?.base_salary ?? null;
     const outlook = [year, year + 1, year + 2].map((y) => ({ year: y, ...roll(months.filter((m) => m.year === y)) }));
@@ -235,19 +308,21 @@ export function compensation(year, scope = null) {
       wins: { count: wins.length, value: sum(wins, (c) => c.value) },
       contracts,
       periods: { h1, h2, year: yr },
+      // June pays the first half's bonus as an advance; December pays the year's bonus less June: the final numbers.
       payouts: {
-        h1: { label: `1H ${year} advance`, paidIn: `Q3 ${year}`, expected: h1.bonusExpected, recognized: h1.bonusRecognized },
-        h2: { label: `2H ${year} true-up`, paidIn: `Q1 ${year + 1}`, expected: yr.bonusExpected - h1.bonusExpected, recognized: yr.bonusRecognized - h1.bonusRecognized },
+        june: { label: `June ${year} payout`, note: 'Advance on the first half of the year', expected: h1.bonusExpected, recognized: h1.bonusRecognized, projected: projected.bonus.h1 },
+        december: { label: `December ${year} payout`, note: 'The year trued up: the full year less what June paid. Final for the year.', expected: yr.bonusExpected - h1.bonusExpected, recognized: yr.bonusRecognized - h1.bonusRecognized, projected: projected.bonus.year - projected.bonus.h1 },
       },
       total: { expected: base != null ? base + (eligible ? yr.bonusExpected : 0) : null, recognized: base != null ? base + (eligible ? yr.bonusRecognized : 0) : null },
       goals: {
-        revenue: plan?.revenue_goal ? { goal: plan.revenue_goal, recognized: yr.recognized, expected: yr.expected } : null,
-        bonus: plan?.bonus_goal ? { goal: plan.bonus_goal, recognized: yr.bonusRecognized, expected: yr.bonusExpected } : null,
+        revenue: plan?.revenue_goal ? { goal: plan.revenue_goal, recognized: yr.recognized, expected: yr.expected, projected: sum(projectedPays.filter((m) => m.year === year), (m) => m.revenue) } : null,
+        bonus: plan?.bonus_goal ? { goal: plan.bonus_goal, recognized: yr.bonusRecognized, expected: yr.bonusExpected, projected: projected.bonus.year } : null,
       },
-      outlook, series,
+      outlook, closings, projected,
     };
   }).sort((a, b) => b.periods.year.bonusExpected - a.periods.year.bonusExpected || `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`));
 
+  const futureMonths = yearMonths(year).filter((k) => k >= todayYm);
   const team = {
     directors: directors.length,
     contracts: sum(directors, (d) => d.contracts.length),
@@ -257,13 +332,15 @@ export function compensation(year, scope = null) {
     },
     salaries: sum(directors, (d) => d.plan.base_salary), withSalary: directors.filter((d) => d.plan.base_salary != null).length,
     goals: { revenue: sum(directors, (d) => d.goals.revenue?.goal), bonus: sum(directors, (d) => d.goals.bonus?.goal) },
-    outlook: [year, year + 1, year + 2].map((y, i) => ({ year: y, ...roll(directors.map((d) => d.outlook[i])) })),
-    series: Array.from({ length: 12 }, (_, i) => ({
-      month: directors[0]?.series[i]?.month || `${year}-${String(i + 1).padStart(2, '0')}`,
-      label: monthLabel(`${year}-${String(i + 1).padStart(2, '0')}`),
-      tiers: [0, 1, 2].map((t) => sum(directors, (d) => d.series[i].tiers[t])),
-      recognized: sum(directors, (d) => d.series[i].recognized),
-    })),
+    outlook: [year, year + 1, year + 2].map((y, i) => ({ year: y, ...roll(directors.map((d) => d.outlook[i])), projectedBonus: sum(directors, (d) => d.projected.outlook[i].bonus) })),
+    closings: yearMonths(year).map((k, i) => ({ month: k, label: monthLabel(k), value: sum(directors, (d) => d.closings[i].value), count: sum(directors, (d) => d.closings[i].count) })),
+    projected: {
+      months: futureMonths.map((k, i) => ({ month: k, label: monthLabel(k), amount: sum(directors, (d) => d.projected.months[i]?.amount), system: sum(directors, (d) => d.projected.months[i]?.system),
+        count: sum(directors, (d) => d.projected.months[i]?.count), bonusYear: sum(directors, (d) => d.projected.months[i]?.bonus.year) })),
+      amount: sum(directors, (d) => d.projected.amount), system: sum(directors, (d) => d.projected.system), count: sum(directors, (d) => d.projected.count),
+      overridden: sum(directors, (d) => d.projected.overridden),
+      bonus: { h1: sum(directors, (d) => d.projected.bonus.h1), h2: sum(directors, (d) => d.projected.bonus.h2), year: sum(directors, (d) => d.projected.bonus.year) },
+    },
     unapproved: sum(directors, (d) => d.contracts.filter((c) => !c.approval && !c.excluded).length),
     assumedTerms: sum(directors, (d) => d.contracts.filter((c) => c.term_source === 'assumed' && !c.excluded).length),
   };
@@ -334,3 +411,17 @@ export function saveContract(ticketId, body, by) {
       revenue_basis = excluded.revenue_basis, excluded = excluded.excluded, notes = excluded.notes, updated_by = excluded.updated_by, updated_at = datetime('now')`)
     .run(ticketId, next.start_date ?? null, next.term_months ?? null, next.approval ?? null, next.revenue_basis ?? null, next.excluded ?? 0, next.notes ?? null, by);
 }
+
+/** A director's own projection for a month (YYYY-MM): set it, or clear it (null amount) to go back to the system's. */
+export function saveProjection(userId, month, amount, by) {
+  if (!/^\d{4}-\d{2}$/.test(month || '')) throw Object.assign(new Error('The month is YYYY-MM'), { status: 400 });
+  if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(userId)) throw Object.assign(new Error('Person not found'), { status: 404 });
+  const n = num(amount);
+  if (n == null) { db.prepare('DELETE FROM comp_projections WHERE user_id = ? AND month = ?').run(userId, month); return; }
+  if (!(n >= 0)) throw Object.assign(new Error('A projection is a positive amount'), { status: 400 });
+  db.prepare(`INSERT INTO comp_projections (user_id, month, amount, updated_by) VALUES (?, ?, ?, ?)
+    ON CONFLICT (user_id, month) DO UPDATE SET amount = excluded.amount, updated_by = excluded.updated_by, updated_at = datetime('now')`).run(userId, month, n, by);
+}
+
+/** Back to the system's projections for every month of a year. */
+export const resetProjections = (userId, year) => db.prepare('DELETE FROM comp_projections WHERE user_id = ? AND month LIKE ?').run(userId, `${year}-%`).changes;

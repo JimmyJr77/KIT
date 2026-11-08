@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, BadgeDollarSign, ChevronDown, ChevronUp, Settings2, Trash2, X } from 'lucide-react';
+import { AlertTriangle, BadgeDollarSign, ChevronDown, ChevronUp, RotateCcw, Settings2, Trash2, TrendingUp, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -10,14 +10,21 @@ import { StackedColumns, SERIES, compact, fullMoney, pct } from '../components/C
 const money = (n) => fullMoney(n == null ? null : Math.round(n));
 const rate = (n) => (n == null ? '—' : `${Number(n) % 1 ? Number(n).toFixed(1) : Number(n)}%`);
 const longDate = (iso) => (iso ? shortDate(iso, { month: 'long', day: 'numeric', year: 'numeric' }) : '—');
-const TIERS = [['y1', 'Year 1', SERIES[0]], ['y2', 'Year 2', SERIES[2]], ['y3', 'Year 3', SERIES[3]]];
+const TIERS = [['y1', 'Year 1'], ['y2', 'Year 2'], ['y3', 'Year 3']];
+const WON_COLOR = SERIES[0];
+const PROJECTED_COLOR = SERIES[3];
 const TERM_SOURCE = { set: 'set here', deal: 'from the deal', contract: 'from the contract', dates: 'from its dates', assumed: 'assumed' };
 const START_SOURCE = { set: 'set here', contract: 'the contract start', won: 'the day it was won' };
 
+const PROJECTED_KEY = 'kit.compensation.projected';
+const readProjected = () => { try { return localStorage.getItem(PROJECTED_KEY) === '1'; } catch { return false; } };
+const writeProjected = (on) => { try { localStorage.setItem(PROJECTED_KEY, on ? '1' : '0'); } catch { /* ignore */ } };
+
 /**
  * Compensation: the BD Director bonus plan (3/2/1) applied to each director's won deals. Bonus earned on revenue billed,
- * bonus to expect from the contracts' values, the two payouts, each director's salary and goals, and the team's totals.
- * Admins see everyone and set the inputs; everyone else sees their own.
+ * bonus to expect from the contracts' values, the June and December payouts, each director's salary and goals, closings
+ * by month, and the team's totals. With projected wins on, the months to come show the PWIN-weighted pipeline (or a
+ * director's own number) and what those wins would pay. Admins see everyone and set the inputs; everyone else sees their own.
  */
 export default function Compensation() {
   const { user } = useAuth();
@@ -25,9 +32,11 @@ export default function Compensation() {
   const [year, setYear] = useState(thisYear);
   const { data, reload, error } = useApi(`/compensation?year=${year}`);
   const [showSettings, setShowSettings] = useState(false);
+  const [projected, setProjected] = useState(readProjected);
   const [adding, setAdding] = useState('');
   const [err, setErr] = useState('');
   const canEdit = !!data?.canEdit;
+  const toggleProjected = () => setProjected((p) => { writeProjected(!p); return !p; });
 
   const addDirector = async (id) => {
     if (!id) return;
@@ -41,6 +50,9 @@ export default function Compensation() {
         <select className="input h-9 w-28 py-0 text-sm" value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="Plan year">
           {[-1, 0, 1, 2].map((d) => thisYear + d).map((y) => <option key={y} value={y}>{y}</option>)}
         </select>
+        <button type="button" className={projected ? 'btn-primary' : 'btn'} onClick={toggleProjected} aria-pressed={projected} title="Add the months to come: open pipeline tickets dated in each, weighted by PWIN, and what winning them would pay">
+          <TrendingUp size={15} /> Projected wins
+        </button>
         {canEdit && (
           <button type="button" className={showSettings ? 'btn-primary' : 'btn'} onClick={() => setShowSettings((s) => !s)}>
             <Settings2 size={15} /> Plan settings
@@ -51,10 +63,10 @@ export default function Compensation() {
       {(error || err) && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error?.message || err}</p>}
       {!data ? <p className="text-sm text-slate-400">Loading…</p> : (
         <>
-          <PlanSummary settings={data.settings} year={year} />
+          <PlanSummary settings={data.settings} />
           {showSettings && canEdit && <PlanSettings settings={data.settings} onSaved={() => reload({ quiet: true })} onClose={() => setShowSettings(false)} />}
 
-          {(canEdit || data.directors.length > 1) && <TeamSummary team={data.team} year={year} />}
+          {(canEdit || data.directors.length > 1) && <TeamSummary team={data.team} year={year} projected={projected} />}
 
           <section className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -73,7 +85,7 @@ export default function Compensation() {
               </p>
             )}
             {data.directors.map((d) => (
-              <DirectorCard key={d.id} d={d} year={year} today={data.today} settings={data.settings} canEdit={canEdit} me={d.id === user.id}
+              <DirectorCard key={d.id} d={d} year={year} today={data.today} settings={data.settings} canEdit={canEdit} me={d.id === user.id} projected={projected}
                 onChange={() => reload({ quiet: true })} />
             ))}
           </section>
@@ -84,18 +96,18 @@ export default function Compensation() {
 }
 
 /** The plan in one line: the tiers, when it took effect, and how it pays. */
-function PlanSummary({ settings, year }) {
+function PlanSummary({ settings }) {
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-brand-100 bg-brand-50/60 px-5 py-3 text-sm text-slate-700">
       <span className="flex items-center gap-2">
-        {TIERS.map(([k, label, color], i) => (
-          <span key={k} className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: color }} /> <b className="tabular-nums">{rate(settings[`rate_${k}`])}</b> <span className="text-slate-500">of revenue in contract {label.toLowerCase()}</span>{i < 2 && <span className="text-slate-300">·</span>}</span>
+        {TIERS.map(([k, label], i) => (
+          <span key={k} className="flex items-center gap-1.5"><b className="tabular-nums">{rate(settings[`rate_${k}`])}</b> <span className="text-slate-500">of revenue in contract {label.toLowerCase()}</span>{i < 2 && <span className="text-slate-300">·</span>}</span>
         ))}
         <span className="text-slate-500">· nothing after</span>
       </span>
       <span className="text-slate-500">Uncapped and additive: every contract runs its own clock.</span>
       <span className="text-slate-500">{settings.effective_date ? `In effect from ${longDate(settings.effective_date)}.` : 'No effective date.'}</span>
-      <span className="text-slate-500">Paid twice: 1H {year} in Q3 {year} as an advance, 2H in Q1 {year + 1} with the year's true-up.</span>
+      <span className="text-slate-500">Paid in June and December; December trues up the whole year, and those are the year's final numbers.</span>
     </div>
   );
 }
@@ -150,19 +162,20 @@ function Figure({ label, value, note, tone = '' }) {
   );
 }
 
-/** Bonus month by month, split by the contract-year tier it's paid at. */
-function BonusChart({ series }) {
-  const any = series.some((m) => m.tiers.some(Boolean));
-  if (!any) return <p className="py-6 text-center text-sm text-slate-400">No bonus expected in these months.</p>;
-  return (
-    <StackedColumns categories={series.map((m) => m.label)} height={140}
-      series={TIERS.map(([k, label, color], i) => ({ key: k, label: `Contract ${label.toLowerCase()}`, color, values: series.map((m) => m.tiers[i]) }))} />
-  );
+/** Deals won in each month of the year, by value; with projections on, the months to come show the projected wins too. */
+function ClosingsChart({ closings, projectedMonths, projected }) {
+  const byMonth = new Map((projectedMonths || []).map((m) => [m.month, m.amount]));
+  const series = [{ key: 'won', label: 'Won', color: WON_COLOR, values: closings.map((m) => m.value) }];
+  if (projected) series.push({ key: 'projected', label: 'Projected (PWIN-weighted, or your own)', color: PROJECTED_COLOR, values: closings.map((m) => byMonth.get(m.month) || 0) });
+  const any = series.some((s) => s.values.some(Boolean));
+  if (!any) return <p className="py-6 text-center text-sm text-slate-400">{projected ? 'Nothing won or projected in these months.' : 'Nothing won in these months.'}</p>;
+  return <StackedColumns categories={closings.map((m) => m.label)} series={series} height={140} />;
 }
 
-/** The team: wins, expected and earned bonus, salaries and total compensation, the outlook, and the month-by-month chart. */
-function TeamSummary({ team, year }) {
+/** The team: wins, expected and earned bonus, salaries and total compensation, the outlook, and closings by month. */
+function TeamSummary({ team, year, projected }) {
   const yr = team.periods.year;
+  const pj = team.projected;
   return (
     <section className="panel space-y-4">
       <div className="flex flex-wrap items-baseline gap-2">
@@ -171,11 +184,15 @@ function TeamSummary({ team, year }) {
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Figure label={`Won in ${year}`} value={compact(team.wins.value)} note={`${team.wins.count} deal${team.wins.count === 1 ? '' : 's'}`} />
-        <Figure label={`Expected revenue, ${year}`} value={compact(yr.expected)} note={`${compact(yr.recognized)} billed so far`} />
-        <Figure label={`Expected bonus, ${year}`} value={compact(yr.bonusExpected)} tone="text-brand-700" note={`1H ${compact(team.periods.h1.bonusExpected)} · 2H ${compact(team.periods.h2.bonusExpected)}`} />
+        {projected
+          ? <Figure label="Projected to close" value={compact(pj.amount)} tone="text-amber-700" note={`${pj.count} open deal${pj.count === 1 ? '' : 's'}${pj.overridden ? ` · ${pj.overridden} month${pj.overridden === 1 ? '' : 's'} set by hand` : ''}`} />
+          : <Figure label={`Expected revenue, ${year}`} value={compact(yr.expected)} note={`${compact(yr.recognized)} billed so far`} />}
+        <Figure label={`Expected bonus, ${year}`} value={compact(yr.bonusExpected + (projected ? pj.bonus.year : 0))} tone="text-brand-700"
+          note={projected ? `${compact(yr.bonusExpected)} from wins + ${compact(pj.bonus.year)} projected` : `June ${compact(team.periods.h1.bonusExpected)} · December ${compact(team.periods.h2.bonusExpected)}`} />
         <Figure label="Bonus earned to date" value={compact(yr.bonusRecognized)} note="on revenue billed" />
         <Figure label="Salaries" value={team.withSalary ? compact(team.salaries) : '—'} note={team.withSalary ? `${team.withSalary} of ${team.directors} set` : 'none set'} />
-        <Figure label={`Expected compensation`} value={team.withSalary ? compact(team.salaries + yr.bonusExpected) : compact(yr.bonusExpected)} note={team.withSalary ? 'salaries + expected bonus' : 'bonus only; no salaries set'} />
+        <Figure label="Expected compensation" value={compact((team.withSalary ? team.salaries : 0) + yr.bonusExpected + (projected ? pj.bonus.year : 0))}
+          note={team.withSalary ? `salaries + expected bonus${projected ? ', projected wins in' : ''}` : 'bonus only; no salaries set'} />
       </div>
       {(team.unapproved > 0 || team.assumedTerms > 0) && (
         <p className="flex items-start gap-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -188,54 +205,58 @@ function TeamSummary({ team, year }) {
       )}
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <h3 className="mb-2 text-xs font-semibold text-slate-600">Expected bonus by month</h3>
-          <BonusChart series={team.series} />
+          <h3 className="mb-2 text-xs font-semibold text-slate-600">Closings by month{projected ? ', with projected wins' : ''}</h3>
+          <ClosingsChart closings={team.closings} projectedMonths={pj.months} projected={projected} />
         </div>
         <div>
-          <h3 className="mb-2 text-xs font-semibold text-slate-600">Outlook from contracts won so far</h3>
+          <h3 className="mb-2 text-xs font-semibold text-slate-600">Bonus outlook</h3>
           <table className="w-full text-sm">
-            <thead className="text-left text-xs text-slate-500 uppercase"><tr><th className="py-1">Year</th><th className="py-1 text-right">Revenue</th><th className="py-1 text-right">Bonus</th></tr></thead>
+            <thead className="text-left text-xs text-slate-500 uppercase"><tr><th className="py-1">Year</th><th className="py-1 text-right">From wins</th>{projected && <th className="py-1 text-right">Projected</th>}{projected && <th className="py-1 text-right">Total</th>}</tr></thead>
             <tbody>
               {team.outlook.map((o) => (
                 <tr key={o.year} className="border-t border-slate-100">
                   <td className="py-1.5">{o.year}</td>
-                  <td className="py-1.5 text-right tabular-nums">{compact(o.expected)}</td>
-                  <td className="py-1.5 text-right font-semibold tabular-nums">{compact(o.bonusExpected)}</td>
+                  <td className={`py-1.5 text-right tabular-nums ${projected ? '' : 'font-semibold'}`}>{compact(o.bonusExpected)}</td>
+                  {projected && <td className="py-1.5 text-right text-amber-700 tabular-nums">{compact(o.projectedBonus)}</td>}
+                  {projected && <td className="py-1.5 text-right font-semibold tabular-nums">{compact(o.bonusExpected + o.projectedBonus)}</td>}
                 </tr>
               ))}
             </tbody>
           </table>
-          <p className="mt-2 text-[11px] text-slate-500">Trailing years are what the contracts already won pay in their second and third years; new wins add to them.</p>
+          <p className="mt-2 text-[11px] text-slate-500">Later years are what the contracts already won pay in their second and third years{projected ? ', and what this year\'s projected wins would go on to pay' : ''}; new wins add to them.</p>
         </div>
       </div>
     </section>
   );
 }
 
-/** How far along a goal is: the bar fills with what's expected, the darker part with what's earned. */
-function Goal({ label, g }) {
+/** How far along a goal is: the bar fills with what's expected (and projected, when on); the darker part is what's earned. */
+function Goal({ label, g, projected }) {
   if (!g) return null;
-  const exp = Math.min(1, g.expected / g.goal);
-  const rec = Math.min(1, g.recognized / g.goal);
+  const exp = g.expected + (projected ? g.projected || 0 : 0);
+  const e = Math.min(1, exp / g.goal);
+  const r = Math.min(1, g.recognized / g.goal);
   return (
     <div className="min-w-48 flex-1">
       <div className="flex items-baseline justify-between text-xs">
         <span className="font-medium text-slate-600">{label}</span>
-        <span className="tabular-nums text-slate-500">{compact(g.expected)} of {compact(g.goal)} · {pct(g.expected / g.goal)}</span>
+        <span className="tabular-nums text-slate-500">{compact(exp)} of {compact(g.goal)} · {pct(exp / g.goal)}{projected && g.projected ? ` (${compact(g.projected)} projected)` : ''}</span>
       </div>
-      <div className="relative mt-1 h-2 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-valuenow={Math.round(exp * 100)} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
-        <div className="absolute inset-y-0 left-0 rounded-full bg-brand-200" style={{ width: `${exp * 100}%` }} />
-        <div className="absolute inset-y-0 left-0 rounded-full bg-brand-600" style={{ width: `${rec * 100}%` }} />
+      <div className="relative mt-1 h-2 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-valuenow={Math.round(e * 100)} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
+        <div className="absolute inset-y-0 left-0 rounded-full bg-brand-200" style={{ width: `${e * 100}%` }} />
+        <div className="absolute inset-y-0 left-0 rounded-full bg-brand-600" style={{ width: `${r * 100}%` }} />
       </div>
     </div>
   );
 }
 
-/** One director: the headline figures, their goals, and (opened) plan inputs, payouts, outlook and contracts. */
-function DirectorCard({ d, year, today, settings, canEdit, me, onChange }) {
+/** One director: the headline figures, their goals, and (opened) payouts, outlook, closings, projections, plan inputs and contracts. */
+function DirectorCard({ d, year, today, settings, canEdit, me, projected, onChange }) {
   const [open, setOpen] = useState(me);
   const yr = d.periods.year;
+  const pj = d.projected;
   const forfeits = !d.plan.eligible;
+  const bonus = yr.bonusExpected + (projected ? pj.bonus.year : 0);
   return (
     <article className={`panel space-y-4 ${forfeits ? 'border-amber-200' : ''}`}>
       <div className="flex flex-wrap items-start gap-4">
@@ -246,18 +267,19 @@ function DirectorCard({ d, year, today, settings, canEdit, me, onChange }) {
             <span className="block text-xs text-slate-500">{d.title || 'BD director'}{!d.onBd && ' · not on the BD team'}{!d.active && ' · inactive'}</span>
           </span>
         </button>
-        <div className="ml-auto grid grid-cols-2 gap-x-6 gap-y-1 text-right sm:grid-cols-4">
+        <div className="ml-auto grid grid-cols-2 gap-x-6 gap-y-1 text-right sm:grid-cols-5">
           <Headline label={`Won in ${year}`} value={compact(d.wins.value)} note={`${d.wins.count} deal${d.wins.count === 1 ? '' : 's'}`} />
-          <Headline label="Expected bonus" value={compact(yr.bonusExpected)} note={`${compact(yr.bonusRecognized)} earned`} tone="text-brand-700" />
+          {projected && <Headline label="Projected" value={compact(pj.amount)} note={`${pj.count} open deal${pj.count === 1 ? '' : 's'}`} tone="text-amber-700" />}
+          <Headline label="Expected bonus" value={compact(bonus)} note={projected ? `${compact(pj.bonus.year)} from projected` : `${compact(yr.bonusRecognized)} earned`} tone="text-brand-700" />
           <Headline label="Base salary" value={d.plan.base_salary != null ? compact(d.plan.base_salary) : '—'} note={d.plan.base_salary == null && canEdit ? 'set below' : ''} />
-          <Headline label="Expected total" value={d.total.expected != null ? compact(d.total.expected) : compact(yr.bonusExpected)} note={d.total.expected != null ? 'salary + bonus' : 'bonus only'} />
+          <Headline label="Expected total" value={compact((d.plan.base_salary || 0) + (forfeits ? 0 : bonus))} note={d.plan.base_salary != null ? 'salary + bonus' : 'bonus only'} />
         </div>
       </div>
       {forfeits && <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">Marked not eligible: the plan pays only an active full-time employee on payday, so these payouts are forfeited and left out of the total.</p>}
       {(d.goals.revenue || d.goals.bonus) && (
         <div className="flex flex-wrap gap-6">
-          <Goal label={`Revenue goal, ${year}`} g={d.goals.revenue} />
-          <Goal label={`Bonus goal, ${year}`} g={d.goals.bonus} />
+          <Goal label={`Revenue goal, ${year}`} g={d.goals.revenue} projected={projected} />
+          <Goal label={`Bonus goal, ${year}`} g={d.goals.bonus} projected={projected} />
         </div>
       )}
       {open && (
@@ -265,38 +287,44 @@ function DirectorCard({ d, year, today, settings, canEdit, me, onChange }) {
           <div className="grid gap-4 lg:grid-cols-3">
             <div className="space-y-3 lg:col-span-1">
               <h3 className="text-xs font-semibold text-slate-600">Payouts</h3>
-              {['h1', 'h2'].map((k) => (
-                <div key={k} className="rounded-lg border border-slate-200 p-3">
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-sm font-medium text-slate-800">{d.payouts[k].label}</span>
-                    <span className="text-xs text-slate-500">paid {d.payouts[k].paidIn}</span>
+              {['june', 'december'].map((k) => {
+                const p = d.payouts[k];
+                return (
+                  <div key={k} className="rounded-lg border border-slate-200 p-3">
+                    <div className="flex items-baseline justify-between">
+                      <span className="text-sm font-medium text-slate-800">{p.label}</span>
+                      {k === 'december' && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 uppercase">Final</span>}
+                    </div>
+                    <div className="mt-1 flex items-baseline gap-3">
+                      <span className="text-lg font-bold tabular-nums text-slate-900">{money(p.expected + (projected ? p.projected : 0))}</span>
+                      <span className="text-xs text-slate-500">expected · {money(p.recognized)} on revenue billed</span>
+                    </div>
+                    {projected && p.projected > 0 && <div className="text-xs text-amber-700 tabular-nums">{money(p.projected)} of that from projected wins</div>}
+                    <p className="mt-1 text-[11px] text-slate-500">{p.note}</p>
                   </div>
-                  <div className="mt-1 flex items-baseline gap-3">
-                    <span className="text-lg font-bold tabular-nums text-slate-900">{money(d.payouts[k].expected)}</span>
-                    <span className="text-xs text-slate-500">expected · {money(d.payouts[k].recognized)} on revenue billed</span>
-                  </div>
-                  <p className="mt-1 text-[11px] text-slate-500">{k === 'h1' ? 'An advance on the year, from revenue recognized January through June.' : 'The full year\'s bonus less the 1H advance, after the annual books close.'}</p>
-                </div>
-              ))}
-              <h3 className="pt-1 text-xs font-semibold text-slate-600">Outlook from contracts won so far</h3>
+                );
+              })}
+              <h3 className="pt-1 text-xs font-semibold text-slate-600">Bonus outlook</h3>
               <table className="w-full text-sm">
                 <tbody>
-                  {d.outlook.map((o) => (
+                  {d.outlook.map((o, i) => (
                     <tr key={o.year} className="border-t border-slate-100">
                       <td className="py-1">{o.year}</td>
                       <td className="py-1 text-right text-slate-500 tabular-nums">{compact(o.expected)} revenue</td>
-                      <td className="py-1 text-right font-semibold tabular-nums">{compact(o.bonusExpected)}</td>
+                      {projected && <td className="py-1 text-right text-amber-700 tabular-nums">+{compact(pj.outlook[i].bonus)}</td>}
+                      <td className="py-1 text-right font-semibold tabular-nums">{compact(o.bonusExpected + (projected ? pj.outlook[i].bonus : 0))}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
             <div className="lg:col-span-2">
-              <h3 className="mb-2 text-xs font-semibold text-slate-600">Expected bonus by month, {year}</h3>
-              <BonusChart series={d.series} />
+              <h3 className="mb-2 text-xs font-semibold text-slate-600">Closings by month, {year}{projected ? ', with projected wins' : ''}</h3>
+              <ClosingsChart closings={d.closings} projectedMonths={pj.months} projected={projected} />
             </div>
           </div>
 
+          {projected && <Projections d={d} year={year} canEdit={canEdit || me} onChange={onChange} />}
           <PlanInputs d={d} year={year} settings={settings} canEdit={canEdit} onChange={onChange} />
           <Contracts d={d} year={year} today={today} canEdit={canEdit} onChange={onChange} />
         </div>
@@ -312,6 +340,113 @@ function Headline({ label, value, note, tone = '' }) {
       <div className={`text-base font-bold tabular-nums ${tone || 'text-slate-900'}`}>{value}</div>
       {note && <div className="text-[10px] text-slate-500">{note}</div>}
     </div>
+  );
+}
+
+/**
+ * The months to come: what the pipeline projects into each (open tickets dated in the month, PWIN-weighted), the
+ * director's own number if they put one on it, and what the month's projected wins would pay this year. The director
+ * (or an admin) types a projection over a month, or resets it to the system's.
+ */
+function Projections({ d, year, canEdit, onChange }) {
+  const pj = d.projected;
+  const [form, setForm] = useState({});
+  const [showDeals, setShowDeals] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => { setForm(Object.fromEntries(pj.months.map((m) => [m.month, m.user ?? '']))); }, [pj.months]);
+  const save = async (month, amount) => {
+    setError('');
+    try { await api.put('/compensation/projections', { user_id: d.id, month, amount }); onChange(); } catch (e) { setError(e.message); }
+  };
+  const reset = async () => {
+    setError('');
+    try { await api.del(`/compensation/projections/${d.id}/${year}`); onChange(); } catch (e) { setError(e.message); }
+  };
+  if (!pj.months.length) return <p className="text-sm text-slate-500">No months of {year} are still to come, so there's nothing to project.</p>;
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-4">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h3 className="text-xs font-semibold text-slate-600">Projected wins, {year}</h3>
+        <span className="text-[11px] text-slate-500">
+          The system's projection is the open pipeline dated in each month, weighted by PWIN (a deal dated earlier that's still open rolls into this month).
+          {canEdit ? ' Type your own over a month, or clear it to go back to the system\'s.' : ''} A projected win is spread over the deal's expected term and paid at the plan's rates.
+        </span>
+        {canEdit && pj.overridden > 0 && <button type="button" className="btn-ghost ml-auto py-1 text-xs" onClick={reset}><RotateCcw size={12} /> Reset all to system</button>}
+      </div>
+      {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
+      <div className="overflow-x-auto rounded-lg border border-amber-100 bg-white">
+        <table className="w-full min-w-[40rem] text-sm">
+          <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
+            <tr>
+              <th className="px-3 py-2">Month</th>
+              <th className="px-3 py-2 text-right">System (PWIN-weighted)</th>
+              <th className="px-3 py-2 text-right">{canEdit ? 'Your projection' : 'Own projection'}</th>
+              <th className="px-3 py-2 text-right">Projected</th>
+              <th className="px-3 py-2 text-right">Bonus in {year}</th>
+              <th className="px-3 py-2" />
+            </tr>
+          </thead>
+          <tbody>
+            {pj.months.map((m) => (
+              <ProjectionRow key={m.month} m={m} canEdit={canEdit} value={form[m.month] ?? ''} onInput={(v) => setForm((f) => ({ ...f, [m.month]: v }))}
+                onCommit={() => { if (String(form[m.month] ?? '') !== String(m.user ?? '')) save(m.month, form[m.month]); }}
+                onReset={() => save(m.month, '')} open={showDeals === m.month} onToggle={() => setShowDeals(showDeals === m.month ? null : m.month)} />
+            ))}
+            <tr className="border-t border-slate-200 bg-slate-50/60 font-semibold">
+              <td className="px-3 py-2">Total</td>
+              <td className="px-3 py-2 text-right tabular-nums">{money(pj.system)}</td>
+              <td className="px-3 py-2" />
+              <td className="px-3 py-2 text-right tabular-nums">{money(pj.amount)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{money(pj.bonus.year)}</td>
+              <td />
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ProjectionRow({ m, canEdit, value, onInput, onCommit, onReset, open, onToggle }) {
+  const own = m.user != null;
+  return (
+    <>
+      <tr className="border-t border-slate-100 align-middle">
+        <td className="px-3 py-1.5 whitespace-nowrap">{m.label}</td>
+        <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">
+          {money(m.system)}
+          {m.count > 0 && <button type="button" className="ml-2 text-xs text-brand-700 hover:underline" onClick={onToggle}>{m.count} deal{m.count === 1 ? '' : 's'}</button>}
+        </td>
+        <td className="px-3 py-1.5 text-right">
+          {canEdit ? (
+            <div className="relative ml-auto w-36">
+              <span className="absolute top-1.5 left-2.5 text-xs text-slate-400">$</span>
+              <input type="number" min="0" step="1000" className="input h-8 py-0 pl-5 text-right text-sm" placeholder={Math.round(m.system).toLocaleString()} value={value}
+                onChange={(e) => onInput(e.target.value)} onBlur={onCommit} aria-label={`Your projection for ${m.label}`} />
+            </div>
+          ) : <span className="tabular-nums">{own ? money(m.user) : '—'}</span>}
+        </td>
+        <td className={`px-3 py-1.5 text-right font-semibold tabular-nums ${own ? 'text-amber-700' : ''}`}>{money(m.amount)}{own && <span className="ml-1 text-[10px] font-normal text-amber-700 uppercase">own</span>}</td>
+        <td className="px-3 py-1.5 text-right tabular-nums">{money(m.bonus.year)}</td>
+        <td className="px-3 py-1.5 text-right whitespace-nowrap">
+          {canEdit && own && <button type="button" className="btn-ghost py-1 text-xs" onClick={onReset} title="Back to the system's projection"><RotateCcw size={12} /> Reset</button>}
+        </td>
+      </tr>
+      {open && (
+        <tr className="bg-slate-50/50">
+          <td colSpan={6} className="px-3 pt-0 pb-2">
+            <ul className="flex flex-wrap gap-2 text-xs">
+              {m.deals.map((x) => (
+                <li key={x.id} className="rounded-md border border-slate-200 bg-white px-2.5 py-1">
+                  <span className="font-medium text-slate-800">{x.title}</span>
+                  <span className="text-slate-500"> · {x.stage || 'no stage'} · {money(x.value)} × {x.pwin == null ? 'no PWIN' : pct(x.pwin)} = <b className="text-slate-700">{money(x.weighted)}</b> · {x.term_months} mo · dated {shortDate(x.projected_win_date, { month: 'short', day: 'numeric' })}</span>
+                </li>
+              ))}
+            </ul>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
