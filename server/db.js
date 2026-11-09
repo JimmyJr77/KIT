@@ -1067,6 +1067,9 @@ CREATE INDEX IF NOT EXISTS ticket_tasks_order ON ticket_tasks(ticket_id, done, p
 `);
 addColumn('priority_cards', 'activity_id', 'INTEGER REFERENCES ticket_tasks(id) ON DELETE SET NULL');
 addColumn('priority_cards', 'locked_rank', 'INTEGER'); // the activity's place on its ticket when the week's planning closed
+// A priority left unfinished when its week ends rolls into the next week (rollUnfinished in routes/priorities.js).
+addColumn('priority_cards', 'rolled_at', 'TEXT');    // on the card left behind: when it rolled. It stays as it stood that week.
+addColumn('priority_cards', 'rolled_since', 'TEXT'); // on the card it rolled into: the week the priority was first set for
 migrateToActivities();
 
 db.exec(`

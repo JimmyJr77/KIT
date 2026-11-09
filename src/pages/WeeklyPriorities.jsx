@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X, Archive, Target, ListChecks } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X, Archive, Target, ListChecks, Redo2 } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, pointerWithin, useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, horizontalListSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -197,7 +197,7 @@ export default function WeeklyPriorities() {
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
         <PageHeader title={strategic ? 'Strategic Priorities' : tasks ? 'Tasks' : 'Weekly Priorities'}
           subtitle={strategic ? 'Priority accounts and priority tickets: the agencies, pipeline tickets and work tickets that matter most, for the team or each member.'
-            : tasks ? 'How the team’s tasks stand. Choose a member for their full list, by this week, due date and strategic priority.' : "Set the week's priorities at check-in. Left-most (or top) card is the top priority."}>
+            : tasks ? 'How the team’s tasks stand. Choose a member for their full list, by this week, due date and strategic priority.' : "Set the week's priorities at check-in. Left-most (or top) card is the top priority. Unfinished priorities roll into the next week."}>
           {weekly && <>
           <button className="btn" onClick={() => { const o = orientation === 'rows' ? 'columns' : 'rows'; setOrientation(o); writePref('kit.priorities.orientation', o); }}>
             <ArrowLeftRight size={15} /> {orientation === 'rows' ? 'Members as columns' : 'Members as rows'}
@@ -242,6 +242,7 @@ export default function WeeklyPriorities() {
         {weekly && <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-brand-600 bg-white ring-1 ring-slate-200" /> Priority (planned)</span>
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-amber-500 bg-amber-50 ring-1 ring-amber-200" /> Work (added after planning closed)</span>
+          <span className="flex items-center gap-1.5"><span className="flex h-3.5 items-center rounded bg-violet-100 px-1 text-violet-800"><Redo2 size={9} strokeWidth={3} /></span> Rolled over (unfinished last week)</span>
           {board && !editable && <span className="flex items-center gap-1 text-slate-600"><Lock size={12} /> Past week — read only</span>}
           {planning && (
             <div className="ml-auto flex items-center gap-2">

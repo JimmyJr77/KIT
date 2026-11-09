@@ -27,7 +27,7 @@ import { dropAgreed } from './services/pipedriveConflicts.js';
 import { scheduleAutoSend } from './services/pipedriveSend.js';
 import travelRoutes from './routes/travel.js';
 import gsaRoutes from './routes/gsa.js';
-import priorityRoutes from './routes/priorities.js';
+import priorityRoutes, { scheduleRollover } from './routes/priorities.js';
 import taskRoutes from './routes/tasks.js';
 import supportRoutes from './routes/support.js';
 import ticketRoutes from './routes/tickets.js';
@@ -132,6 +132,7 @@ schedulePipedriveSync();
 scheduleProjectRefresh();
 scheduleAutoSend();
 scheduleLive();
+scheduleRollover();
 // Conflicts on which both sides hold the same value have nothing to settle (a send once recorded them when a field had no baseline yet).
 try { const n = dropAgreed(); if (n) console.log(`Pipedrive: dropped ${n} conflicts on which KIT and Pipedrive agree`); } catch (e) { console.error('Pipedrive conflicts:', e.message); }
 

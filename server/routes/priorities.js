@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, json, withTeams, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED } from '../db.js';
+import { db, json, withTeams, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED, getSetting, setSetting } from '../db.js';
 import { loadThreads, bidAssignment, NO_ASSIGNMENT } from './tickets.js';
 import { recordWork, loadWorkLog } from '../worklog.js';
 import { awardTokens, TOKENS } from '../race.js';
@@ -161,7 +161,87 @@ r.put('/planning', (req, res) => {
 
 const threadsFor = (cards) => loadThreads([...new Set(cards.map((c) => c.ticket_id))]);
 
+// ---- Rollover: a priority still open when its week ends moves into the team's new week.
+
+const ROLL_FROM = 'priorities_roll_from';
+
+/**
+ * Put every priority left unfinished in an ended week on its team's current week: the same activity, for the same
+ * people in the same order, after anything already planned there. It's a priority in the new week, whatever it was.
+ * The card left behind stays in its week as it stood (see mirrorCards) and rolls only once, so a rolled priority taken
+ * off the new week doesn't come back. Weeks that ended before rollover began are left alone, apart from the last one.
+ * Returns how many rolled.
+ */
+export function rollUnfinished(today = localToday()) {
+  let from = getSetting(ROLL_FROM);
+  if (!from) {
+    const d = new Date(`${today}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 13); // every team's last week started on or after this, and none before it did
+    setSetting(ROLL_FROM, from = d.toISOString().slice(0, 10));
+  }
+  const unfinished = db.prepare(`SELECT c.* FROM priority_cards c JOIN tickets t ON t.id = c.ticket_id LEFT JOIN ticket_tasks k ON k.id = c.activity_id
+    WHERE c.team_id = ? AND c.week_start >= ? AND c.week_start < ? AND c.rolled_at IS NULL AND c.completed = 0 AND COALESCE(k.done, 0) = 0
+      AND c.archived_at IS NULL AND t.archived_at IS NULL ORDER BY c.week_start, c.id`);
+  const assigneesOf = db.prepare('SELECT user_id, position FROM card_assignees WHERE card_id = ?');
+  const placed = db.prepare('SELECT 1 FROM priority_cards WHERE team_id = ? AND week_start = ? AND activity_id = ?');
+  const mark = db.prepare("UPDATE priority_cards SET rolled_at = datetime('now') WHERE id = ?");
+  const add = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, is_planned, locked_rank, rolled_since, created_by)
+    VALUES (?, ?, ?, ?, 1, ?, ?, ?)`);
+  const nextPos = db.prepare(`SELECT COALESCE(MAX(a.position) + 1, 0) AS p FROM card_assignees a
+    JOIN priority_cards c ON c.id = a.card_id WHERE a.user_id = ? AND c.team_id = ? AND c.week_start = ?`);
+  const assign = db.prepare('INSERT INTO card_assignees (card_id, user_id, position) VALUES (?, ?, ?)');
+  let rolled = 0;
+  db.transaction(() => {
+    for (const t of db.prepare('SELECT id, checkin_dow FROM teams').all()) {
+      const week = weekStartFor(today, t.checkin_dow);
+      const closed = planningClosed(t.id, week);
+      const lanes = new Map(); // user id → the cards rolling into their lane
+      const made = new Map(); // activity id → the card made for it in the new week
+      for (const c of unfinished.all(t.id, from, week)) {
+        const assignees = assigneesOf.all(c.id);
+        if (!assignees.length) continue; // not on anyone's board
+        const activityId = activityFor(c, { id: c.created_by });
+        mark.run(c.id);
+        // An activity is on the new week once: cards for it that roll together share one, with everyone from each.
+        let id = made.get(activityId);
+        if (!id) {
+          if (placed.get(t.id, week, activityId)) continue; // already planned for the new week
+          id = add.run(c.ticket_id, t.id, week, activityId, closed ? rankOf(activityId) : null, c.rolled_since || c.week_start, c.created_by).lastInsertRowid;
+          made.set(activityId, id);
+          mirrorCards(activityId);
+          rolled += 1;
+        }
+        assignees.forEach((a) => {
+          const lane = lanes.get(a.user_id) || [];
+          if (!lane.some((x) => x.id === id)) lanes.set(a.user_id, [...lane, { id, week: c.week_start, position: a.position }]);
+        });
+      }
+      lanes.forEach((cards, userId) => {
+        const base = nextPos.get(userId, t.id, week).p;
+        cards.sort((a, b) => a.week.localeCompare(b.week) || a.position - b.position || a.id - b.id)
+          .forEach((c, i) => assign.run(c.id, userId, base + i));
+      });
+    }
+  })();
+  return rolled;
+}
+
+/** Roll now and every few minutes, so a new week starts with what the last one left. The board also rolls as it loads. */
+export function scheduleRollover() {
+  const run = () => {
+    try {
+      const n = rollUnfinished();
+      if (n) console.log(`Weekly Priorities: rolled ${n} unfinished ${n === 1 ? 'priority' : 'priorities'} into this week`);
+    } catch (e) {
+      console.error('Priority rollover:', e.message);
+    }
+  };
+  run();
+  setInterval(run, 10 * 60 * 1000).unref();
+}
+
 r.get('/', (req, res) => {
+  try { rollUnfinished(); } catch (e) { console.error('Priority rollover:', e.message); }
   if (req.query.team === 'all') return res.json(allTeamsBoard(req.query.week || localToday()));
   const t = team(req.query.team);
   if (!t) return res.status(400).json({ error: 'Unknown team' });

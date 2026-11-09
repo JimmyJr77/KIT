@@ -124,6 +124,7 @@ The BD Director bonus plan (the **3/2/1 plan**, effective July 1, 2026) applied 
 - **Swap axes** toggles between members as rows and members as columns.
 - Clicking a card or **Add priority** opens a panel on the right with: Opportunity Title, Organization, Pipeline Status, Value (ticket fields); Priority/next step, Assigned (multi), Due Date, Checklist, Notes (card fields).
 - A card created on or before the check-in day counts as **planned** (blue). A card added after check-in is **new work** (amber).
+- **Unfinished priorities roll into the next week** on their own when a team's week ends: the same activity, for the same people in the same order, after anything already planned there, marked **Rolled over**. A rolled priority is a planned priority in its new week, and keeps rolling until it's finished, archived or deleted. The card left behind stays in its week as it stood (marked **Rolled on**), so finishing it later counts for the week it was finished in. Rollover begins with the week before it was turned on; older weeks are left alone (`rollUnfinished` in `server/routes/priorities.js`).
 - Past weeks are read-only history.
 
 #### Tickets vs. priority cards
@@ -183,6 +184,5 @@ The database is one file, `server/data/kit.db` (gitignored). All SQL is in `serv
 
 ## Roadmap
 - Tickets / qualified pipeline view with sorting by Opportunity Title, Organization, Assigned, Due Date, Pipeline Status, Value
-- Carry unfinished priorities forward to the next week
 - Google sign-in + Workspace grounding
 - Automatic POV mileage via a maps API

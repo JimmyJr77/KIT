@@ -51,12 +51,15 @@ export const subtasksOf = (activityIds) => (activityIds.length
     .map((s) => ({ id: s.id, task_id: s.task_id, text: s.text, done: !!s.done, done_at: s.done_at, position: s.position }))
   : []);
 
-/** Cards placed from this activity take its subject, due date, subtasks and done state. */
+/**
+ * Cards placed from this activity take its subject, due date, subtasks and done state. A card that rolled into a later
+ * week stays as it stood when its week ended, so finishing the priority later doesn't count for the week it was missed.
+ */
 export function mirrorCards(activityId) {
   const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(activityId);
   if (!k) return;
   const checklist = subtasksOf([k.id]).map((s) => ({ text: s.text, done: s.done }));
-  db.prepare("UPDATE priority_cards SET title = ?, due_date = ?, completed = ?, checklist = ?, updated_at = datetime('now') WHERE activity_id = ?")
+  db.prepare("UPDATE priority_cards SET title = ?, due_date = ?, completed = ?, checklist = ?, updated_at = datetime('now') WHERE activity_id = ? AND rolled_at IS NULL")
     .run(k.text, k.due_date, k.done ? 1 : 0, json.str(checklist), k.id);
 }
 

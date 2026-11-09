@@ -152,6 +152,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
             {!isNew && (
               <p className="text-xs text-slate-500">
                 {ticketKind(card)} #{card.ticket_id} · {card.is_planned ? 'Priority (planned)' : 'Work (added after planning closed)'}
+                {card.rolled_at ? ' · Not finished that week: rolled into the next' : card.rolled_since ? ` · Rolled over, unfinished since the week of ${shortDate(card.rolled_since)}` : ''}
               </p>
             )}
           </div>

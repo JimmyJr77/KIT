@@ -1,4 +1,4 @@
-import { CheckSquare, ArrowUp, ArrowDown, Hourglass } from 'lucide-react';
+import { CheckSquare, ArrowUp, ArrowDown, Hourglass, Redo2 } from 'lucide-react';
 import { fullName, initials, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 
@@ -26,6 +26,13 @@ export default function PriorityCard({ card, rank, usersById, overlay }) {
       )}
       <div className="flex h-5 items-center justify-between gap-2">
         <div className={`truncate leading-5 font-semibold ${card.completed ? 'line-through' : ''}`} title={card.opportunity_title}>{card.opportunity_title}</div>
+        {(card.rolled_since || card.rolled_at) && (
+          <span className={`ml-auto flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[10px] font-semibold ${card.rolled_at ? 'bg-slate-100 text-slate-500' : 'bg-violet-100 text-violet-800'}`}
+            title={card.rolled_at ? 'Not finished that week: it rolled into the next one. Shown as it stood when the week ended.'
+              : `Rolled over: unfinished since the week of ${shortDate(card.rolled_since)}`}>
+            <Redo2 size={10} strokeWidth={3} /> Rolled
+          </span>
+        )}
         {rank && <span className={`shrink-0 rounded px-1.5 text-xs font-bold ${planned ? 'bg-brand-50 text-brand-700' : 'bg-amber-100 text-amber-800'}`}>#{rank}</span>}
       </div>
       <div className="mt-0.5 h-10 overflow-hidden">
