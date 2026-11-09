@@ -85,7 +85,7 @@ export function PipedrivePull({ scope, status }) {
             <>
               <div className="mt-0.5 text-xs">{summary(last.result) || 'Nothing changed.'}</div>
               {last.result.accountsCreated?.length > 0 && (
-                <div className="mt-1 text-xs">New accounts, waiting to be activated: {last.result.accountsCreated.join(', ')}</div>
+                <div className="mt-1 text-xs">New accounts, waiting to be activated and on no team yet (set their teams in Admin Access): {last.result.accountsCreated.join(', ')}</div>
               )}
             </>
           ) : <div className="mt-0.5 text-xs">{last.error}</div>}

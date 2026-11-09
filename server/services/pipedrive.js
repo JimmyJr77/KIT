@@ -542,7 +542,6 @@ function write({ users, pipelines, stages, deals, persons, organizations, partic
   const tally = (k, n = 1) => { count[k] = (count[k] || 0) + n; };
 
   // ---- People: Pipedrive users → KIT accounts, by email
-  const bd = db.prepare("SELECT id FROM teams WHERE name = 'BD'").get()?.id;
   const pdUsers = new Map(users.map((u) => [u.id, u]));
   const accounts = new Map(); // Pipedrive user id → KIT user id (or null)
   const matched = [];
@@ -571,8 +570,8 @@ function write({ users, pipelines, stages, deals, persons, organizations, partic
         for (let n = 2; usernameTaken.get(username); n += 1) username = `${base}${n}`;
         kitId = db.prepare(`INSERT INTO users (first_name, last_name, email, username, role, password_hash, pending_activation, pipedrive_id)
           VALUES (?, ?, ?, ?, 'member', ?, 1, ?)`).run(first_name, last_name, email, username, hashPassword(crypto.randomBytes(24).toString('hex')), id).lastInsertRowid;
-        if (bd) db.prepare("INSERT OR IGNORE INTO user_teams (user_id, team_id, role) VALUES (?, ?, 'member')").run(kitId, bd);
-        db.prepare('INSERT OR IGNORE INTO approved_accounts (email, role, team_ids) VALUES (?, ?, ?)').run(email, 'member', json.str(bd ? [bd] : []));
+        // Owning a deal doesn't put someone on a team: the account starts on none, and an admin assigns its teams.
+        db.prepare("INSERT OR IGNORE INTO approved_accounts (email, role, team_ids) VALUES (?, 'member', '[]')").run(email);
         created.push(`${first_name} ${last_name}`.trim());
       }
     }
