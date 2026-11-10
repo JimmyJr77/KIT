@@ -207,7 +207,7 @@ export function SupportView({ requests, rows, onOpen, onNew }) {
             )}
           </div>
           {n.card && <div className="-mt-1 mb-1 truncate text-[11px] text-slate-400" title={n.card.ticket_title}>Priority: {n.card.title}</div>}
-          <p className="line-clamp-3 flex-1 text-slate-700"><MentionText text={n.body} withTeams /></p>
+          <p className="line-clamp-3 flex-1 text-slate-700"><MentionText text={n.body} /></p>
           <div className="mt-2 text-[11px] text-slate-400" title={fullStamp(n.created_at)}>Asked {ago(n.created_at)}</div>
         </button>
       ))}

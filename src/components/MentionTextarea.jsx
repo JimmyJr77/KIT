@@ -17,30 +17,32 @@ function useMentionUsers() {
   return users;
 }
 
-// Teams, for boxes that can mention a whole team ("@Marketing").
+// Teams: "@Marketing" reaches everyone on the team.
 let teamCache = null;
 let teamPending = null;
-function useMentionTeams(on) {
+function useMentionTeams() {
   const [teams, setTeams] = useState(teamCache || []);
   useEffect(() => {
-    if (!on || teamCache) return;
+    if (teamCache) return;
     teamPending ||= api.get('/teams').then((d) => (teamCache = d.teams));
     teamPending.then(setTeams).catch(() => {});
-  }, [on]);
-  return on ? teams : [];
+  }, []);
+  return teams;
 }
 
-// "@" at the start or after a space, then a letter, then up to one more word (for a last name).
+const people = (n) => (n === 1 ? '1 person' : n ? `${n} people` : 'no one on it');
+
+// "@" at the start or after a space, then a letter, then up to one more word (for a last name or a two-word team).
 const QUERY = /(^|\s)@([A-Za-z][\w.'-]*(?: [A-Za-z][\w.'-]*)?)$/;
 
 /**
- * A textarea that suggests people when you type "@" and a letter. Picking one inserts "@First Last". With `withTeams`,
- * teams are suggested too ("@Marketing" reaches everyone on it, where the server supports it).
+ * A textarea that suggests teams and people when you type "@" and a letter. Picking a person inserts "@First Last";
+ * picking a team inserts "@Team Name", which alerts everyone on that team. Teams come first and say how many they reach.
  * Accepts the usual textarea props; `inputRef` reaches the textarea itself.
  */
-export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, withTeams = false, className = '', ...rest }) {
+export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, className = '', ...rest }) {
   const users = useMentionUsers();
-  const teams = useMentionTeams(withTeams);
+  const teams = useMentionTeams();
   const own = useRef(null);
   const ref = inputRef || own;
   const [query, setQuery] = useState(null); // { text, start } where start is the "@" position
@@ -48,7 +50,8 @@ export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, 
 
   const matches = query
     ? [
-      ...teams.filter((t) => t.name.toLowerCase().startsWith(query.text.toLowerCase())).map((t) => ({ ...t, team: true })),
+      ...teams.filter((t) => t.name.toLowerCase().startsWith(query.text.toLowerCase()))
+        .map((t) => ({ ...t, team: true, members: users.filter((u) => u.team_ids?.includes(t.id)).length })),
       ...users.filter((u) => {
         const q = query.text.toLowerCase();
         return fullName(u).toLowerCase().includes(q) || u.username?.toLowerCase().startsWith(q);
@@ -91,7 +94,7 @@ export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, 
         onClick={(e) => readQuery(e.target)}
         onBlur={() => setTimeout(() => setQuery(null), 150)} />
       {matches.length > 0 && (
-        <ul role="listbox" className="absolute left-2 z-[60] mt-1 w-64 overflow-hidden rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-slate-200">
+        <ul role="listbox" className="absolute left-2 z-[60] mt-1 w-80 overflow-hidden rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-slate-200">
           {matches.map((u, i) => (
             <li key={`${u.team ? 't' : 'u'}${u.id}`} role="option" aria-selected={i === active}>
               <button type="button" onMouseDown={(e) => { e.preventDefault(); pick(u); }} onMouseEnter={() => setActive(i)}
@@ -100,7 +103,9 @@ export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, 
                   ? <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-brand-100 text-brand-700"><Users size={11} /></span>
                   : <Avatar user={u} size="xs" />}
                 <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{u.team ? u.name : fullName(u)}</span>
-                <span className="truncate text-[11px] text-slate-400">{u.team ? 'Whole team' : u.team_name || u.title}</span>
+                {u.team
+                  ? <span className="shrink-0 rounded-full bg-brand-50 px-1.5 py-0.5 text-[11px] font-medium text-brand-700">Team · {people(u.members)}</span>
+                  : <span className="truncate text-[11px] text-slate-400">{u.team_name || u.title}</span>}
               </button>
             </li>
           ))}
@@ -110,14 +115,26 @@ export default function MentionTextarea({ value, onChange, onKeyDown, inputRef, 
   );
 }
 
-/** Text with each "@First Last" mention highlighted, and each "@Team" with `withTeams`. */
-export function MentionText({ text, withTeams = false }) {
+const escape = (n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Text with each "@First Last" and "@Team Name" mention highlighted, read the way the server reads them: the longest
+ * name wins, and a team name has to stand alone ("@BDs" and "press@marketing.example" aren't mentions).
+ */
+export function MentionText({ text }) {
   const users = useMentionUsers();
-  const teams = useMentionTeams(withTeams);
-  if (!text || !text.includes('@') || !users.length) return text;
-  const names = [...users.map((u) => fullName(u)), ...teams.map((t) => t.name)].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const parts = text.split(new RegExp(`(@(?:${names.join('|')}))`, 'gi'));
-  return parts.map((p, i) => (i % 2
-    ? <span key={i} className="rounded bg-brand-50 px-0.5 font-medium text-brand-700">{p}</span>
-    : <Fragment key={i}>{p}</Fragment>));
+  const teams = useMentionTeams();
+  if (!text || !text.includes('@') || !(users.length || teams.length)) return text;
+  const persons = new Set(users.map((u) => fullName(u).toLowerCase()));
+  const names = [
+    ...users.map((u) => ({ n: fullName(u), re: escape(fullName(u)) })),
+    ...teams.map((t) => ({ n: t.name, re: `${escape(t.name)}(?!\\w)` })),
+  ].sort((a, b) => b.n.length - a.n.length); // a stable sort: a person comes before a team of the same length
+  const parts = text.split(new RegExp(`(@(?:${names.map((x) => x.re).join('|')}))`, 'gi'));
+  return parts.map((p, i) => {
+    const glued = i % 2 && !persons.has(p.slice(1).toLowerCase()) && /[\w.+-]$/.test(parts[i - 1]);
+    return i % 2 && !glued
+      ? <span key={i} className="rounded bg-brand-50 px-0.5 font-medium text-brand-700">{p}</span>
+      : <Fragment key={i}>{p}</Fragment>;
+  });
 }

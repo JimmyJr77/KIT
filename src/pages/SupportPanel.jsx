@@ -53,7 +53,7 @@ function NewRequestPane({ options = [], member, onClose, onPosted }) {
       <div className="space-y-4">
         <div>
           <label className="label">What support do you need?</label>
-          <MentionTextarea withTeams className="input min-h-36" autoFocus value={text} onChange={(e) => setText(e.target.value)}
+          <MentionTextarea className="input min-h-36" autoFocus value={text} onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.preventDefault(), post())}
             placeholder="e.g. Need @Marketing to turn the capability statement around by Thursday" />
           <p className="mt-1 text-[11px] text-slate-400">@ a person, or a team to reach everyone on it. They’ll get an alert. {SAVE_KEY} to send.</p>
@@ -113,7 +113,7 @@ function RequestPane({ id, onClose, onChanged }) {
                 <span className="text-slate-400" title={fullStamp(n.created_at)}>{ago(n.created_at)}</span>
               </div>
               {n.card && <div className="mt-0.5 truncate text-xs text-slate-500" title={n.card.ticket_title}>Priority: {n.card.title} · {n.card.ticket_title}</div>}
-              <p className="mt-1.5 text-[15px] break-words whitespace-pre-wrap text-slate-800"><MentionText text={n.body} withTeams /></p>
+              <p className="mt-1.5 text-[15px] break-words whitespace-pre-wrap text-slate-800"><MentionText text={n.body} /></p>
             </div>
           </section>
 

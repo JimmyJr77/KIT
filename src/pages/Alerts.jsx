@@ -75,7 +75,7 @@ export default function Alerts() {
       {alerts && !alerts.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <Bell size={28} className="mx-auto mb-2 text-slate-300" />
-          No alerts yet. You’ll see one here when someone @mentions you, comments on a ticket you own, asks Marketing for support, or puts you on a contract in Delivery.
+          No alerts yet. You’ll see one here when someone @mentions you or a team you’re on, comments on a ticket you own, asks Marketing for support, or puts you on a contract in Delivery.
         </div>
       )}
 
@@ -109,7 +109,7 @@ export default function Alerts() {
                           : a.kind === 'travel_request' ? <>submitted a travel request for <span className="font-semibold">{tripSubject(a)}</span></>
                           : a.kind === 'travel_decision' ? <>{DECISION[a.trip_approval] || 'decided'} your travel request for <span className="font-semibold">{tripSubject(a)}</span></>
                         : a.kind === 'comment' ? <>{a.thread_id !== a.comment_id ? 'replied' : 'commented'} on your {a.ticket_type === 'work' ? 'work ticket' : 'pipeline ticket'} <span className="font-semibold">{a.ticket_title || 'a deleted ticket'}</span></>
-                        : <>mentioned you in {a.note_id ? 'a note' : 'a comment'} on <span className="font-semibold">{a.ticket_title || 'a deleted ticket'}</span></>}
+                        : <>mentioned {a.team_name ? <>the <span className="font-semibold">{a.team_name}</span> team</> : 'you'} in {a.note_id ? 'a note' : 'a comment'} on <span className="font-semibold">{a.ticket_title || 'a deleted ticket'}</span></>}
                   </span>
                   <span className="text-[11px] text-slate-400" title={fullStamp(a.created_at)}>{ago(a.created_at)}</span>
                 </div>
@@ -123,7 +123,7 @@ export default function Alerts() {
                   </p>
                 ) : isDelivery(a) ? (
                   <p className="mt-1 text-xs text-slate-500">{[a.program_organization, a.kind === 'delivery_team' && a.excerpt ? `Your role: ${a.excerpt}` : null].filter(Boolean).join(' · ')}</p>
-                ) : <p className="mt-1.5 line-clamp-3 text-sm whitespace-pre-wrap text-slate-700"><MentionText text={a.excerpt} withTeams={isAsk(a)} /></p>}
+                ) : <p className="mt-1.5 line-clamp-3 text-sm whitespace-pre-wrap text-slate-700"><MentionText text={a.excerpt} /></p>}
                 {isSupport(a) && <SupportActions alert={a} onDone={load} markRead={markRead} />}
                 {isAsk(a) && a.support_id && (
                   <div className="mt-2 flex flex-wrap items-center gap-3">

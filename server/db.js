@@ -843,6 +843,8 @@ CREATE TABLE IF NOT EXISTS support_need_tickets (
 `);
 // Support alerts: you were asked for support (support_need), or a work ticket was made from your request (support_ticket).
 addColumn('alerts', 'support_id', 'INTEGER REFERENCES support_needs(id) ON DELETE CASCADE');
+// A mention that reached someone through their team ("@BD") rather than by name keeps the team, so the alert can say so.
+addColumn('alerts', 'team_id', 'INTEGER REFERENCES teams(id) ON DELETE SET NULL');
 
 
 // Move the old single notes field on each card into its first note entry.
