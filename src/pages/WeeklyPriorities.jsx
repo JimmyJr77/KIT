@@ -46,8 +46,19 @@ export default function WeeklyPriorities() {
   const tasks = mode === 'tasks';
   const weekly = !strategic && !tasks;
   const [orientation, setOrientation] = useState(readPref('kit.priorities.orientation', 'rows'));
-  const [showWeeks, setShowWeeksState] = useState(() => readPref('kit.priorities.weeks', 'shown') !== 'hidden');
-  const setShowWeeks = (v) => { setShowWeeksState(v); writePref('kit.priorities.weeks', v ? 'shown' : 'hidden'); };
+  // The page opens on this week with the week strip tucked away; the calendar toggle brings it out for this visit.
+  const [showWeeks, setShowWeeks] = useState(false);
+  // Each person's lane view, as picked here; until then it's the one saved for them (a view that no longer exists,
+  // like the old Support tab, falls back to priority order).
+  const [views, setViews] = useState({});
+  const viewOf = (id) => {
+    const v = views[id] ?? readPref(`kit.priorities.view.${id}`, 'priorities');
+    return LANE_VIEWS.some((l) => l.key === v) ? v : 'priorities';
+  };
+  const setViewsFor = (ids, v) => {
+    ids.forEach((id) => writePref(`kit.priorities.view.${id}`, v));
+    setViews((cur) => ({ ...cur, ...Object.fromEntries(ids.map((id) => [id, v])) }));
+  };
   const [panel, setPanel] = useState(null); // { card } | { newFor: userId }
   const [thread, setThread] = useState(null); // { id } | { options } for a new question or comment
   const [activeId, setActiveId] = useState(null);
@@ -77,6 +88,10 @@ export default function WeeklyPriorities() {
   const cardsById = useMemo(() => Object.fromEntries((board?.cards || []).map((c) => [c.id, c])), [board]);
   // With Focus on the board is just you (the server sends no one else), so there's nobody to filter.
   const members = (board?.members || []).filter((m) => user.focus || !filter.length || filter.includes(m.id));
+  // One person on show (Focus, a filter down to one, or a team of one): their lane's views each get a lane of their own.
+  const solo = members.length === 1;
+  // The view every lane on show shares, if they do: that's the lit toggle. Switch one lane and none is lit.
+  const sharedView = members.length && members.every((m) => viewOf(m.id) === viewOf(members[0].id)) ? viewOf(members[0].id) : null;
   const editable = board && board.weekStart >= board.currentWeekStart;
   const planning = board?.planning;
   // On the All board each team has its own lock; someone's new cards are work once all their teams have closed planning.
@@ -201,7 +216,7 @@ export default function WeeklyPriorities() {
             : tasks ? 'How the team’s tasks stand. Choose a member for their full list, by this week, due date and strategic priority.' : "Set the week's priorities at check-in. Left-most (or top) card is the top priority. Unfinished priorities roll into the next week."}>
           {weekly && <>
           <button className="btn" onClick={() => { const o = orientation === 'rows' ? 'columns' : 'rows'; setOrientation(o); writePref('kit.priorities.orientation', o); }}>
-            <ArrowLeftRight size={15} /> {user.focus ? 'Views' : 'Members'} as {orientation === 'rows' ? 'columns' : 'rows'}
+            <ArrowLeftRight size={15} /> {solo ? 'Views' : 'Members'} as {orientation === 'rows' ? 'columns' : 'rows'}
           </button>
           <button className="btn" onClick={() => navigate('/archive?tab=cards')} title="Archived priority cards"><Archive size={15} /> Archive</button>
           <button className="btn" onClick={() => setSettingsOpen(true)}><Settings size={15} /> Settings</button>
@@ -246,6 +261,18 @@ export default function WeeklyPriorities() {
               {!showWeeks && board && <span className="text-xs">{board.weekStart === board.currentWeekStart ? 'This week' : shortDate(board.weekStart)}</span>}
             </button>
           )}
+          {/* Switch every lane on show to one view. One person on show has a lane per view already. */}
+          {weekly && members.length > 1 && (
+            <div className="flex h-[38px] gap-0.5 rounded-lg bg-white p-0.5 ring-1 ring-slate-200" role="group" aria-label="Switch every lane to one view">
+              {LANE_VIEWS.map((v) => (
+                <button key={v.key} type="button" aria-pressed={sharedView === v.key} aria-label={`Everyone: ${v.label}`} title={`Everyone: ${v.label}`}
+                  onClick={() => setViewsFor(members.map((m) => m.id), v.key)}
+                  className={`grid w-9 place-items-center rounded-md transition ${sharedView === v.key ? 'bg-brand-600 text-white' : 'text-slate-500 hover:bg-slate-50 hover:text-brand-700'}`}>
+                  {v.icon}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {board && weekly && showWeeks && <WeekStrip weekStart={board.weekStart} current={board.currentWeekStart} onPick={setWeekDate} />}
@@ -276,11 +303,21 @@ export default function WeeklyPriorities() {
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
         {strategic ? (board && <StrategicPriorities members={members} me={user.id} />) : tasks ? (board && <TaskView members={members} teamSize={board.members.length} onPick={(id) => setFilter(id ? [id] : [])} />) : <>
         {board && !members.length && <p className="py-16 text-center text-slate-400">{user.focus ? 'You aren’t on this team. Focus is on, so only your own priorities show: pick one of your teams, or All.' : 'No members on this team yet. Assign people to the team from their Profile.'}</p>}
+        {/* The broken-out lanes are headed by view, so name whose they are (in Focus they're always yours). */}
+        {solo && !user.focus && (
+          <div className="mb-3 flex items-center gap-2.5">
+            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700">{initials(members[0])}</div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{fullName(members[0])}</div>
+              <div className="truncate text-xs text-slate-500">{[members[0].title, members[0].team_name].filter(Boolean).join(' · ')}</div>
+            </div>
+          </div>
+        )}
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={({ active }) => setActiveId(active.id)} onDragEnd={onDragEnd} onDragCancel={() => setActiveId(null)}>
           <div className={orientation === 'rows' ? 'inline-flex min-w-full flex-col gap-3' : 'flex items-start gap-4'}>
-            {/* With Focus on there's only your lane, so each of its views gets a lane of its own instead of sharing one. */}
-            {members.flatMap((m) => (user.focus ? LANE_VIEWS.map((v) => v.key) : [null]).map((fixedView) => (
-              <Lane key={`${m.id}-${fixedView}`} fixedView={fixedView} member={m} orientation={orientation} cardIds={lanes[m.id] || []} cardsById={cardsById}
+            {/* With one person on show, each of the lane's views gets a lane of its own instead of sharing one. */}
+            {members.flatMap((m) => (solo ? LANE_VIEWS.map((v) => v.key) : [null]).map((fixedView) => (
+              <Lane key={`${m.id}-${fixedView}`} fixedView={fixedView} pickedView={viewOf(m.id)} onView={(v) => setViewsFor([m.id], v)} member={m} orientation={orientation} cardIds={lanes[m.id] || []} cardsById={cardsById}
                 usersById={usersById} editable={editable && (board.team.id !== 'all' || !!m.team_ids?.length)} draggable={draggable}
                 onOpen={(card) => setPanel({ card })} onNew={() => setPanel({ newFor: m.id })}
                 onToggleTask={toggleTask} threads={threadsFor(m, lanes[m.id] || [])}
@@ -384,16 +421,10 @@ function WeekStrip({ weekStart, current, onPick }) {
 }
 
 /**
- * One person's lane. Its views share the lane, picked with the icon strip, unless `fixedView` pins it to one: then the
- * lane is headed by that view's name instead of the person's (Focus shows a lane per view, all of them yours).
+ * One person's lane. Its views share the lane, picked with the icon strip (or for everyone at once, from the page), unless `fixedView` pins it to one: then the
+ * lane is headed by that view's name instead of the person's (one person on show gets a lane per view).
  */
-function Lane({ fixedView = null, member, work = [], onOpenWork, orientation, cardIds, cardsById, usersById, editable, draggable, onOpen, onNew, onToggleTask, threads, onOpenThread, onNewThread }) {
-  // A saved view that no longer exists (the old Support tab) falls back to priority order.
-  const [pickedView, setViewState] = useState(() => {
-    const v = readPref(`kit.priorities.view.${member.id}`, 'priorities');
-    return LANE_VIEWS.some((l) => l.key === v) ? v : 'priorities';
-  });
-  const setView = (v) => { setViewState(v); writePref(`kit.priorities.view.${member.id}`, v); };
+function Lane({ fixedView = null, pickedView, onView: setView, member, work = [], onOpenWork, orientation, cardIds, cardsById, usersById, editable, draggable, onOpen, onNew, onToggleTask, threads, onOpenThread, onNewThread }) {
   const view = fixedView || pickedView;
   const sortable = draggable && view === 'priorities';
   // Only the priority-order lane takes drops; a pinned lane for another view has its own id so it can't stand in for it.
