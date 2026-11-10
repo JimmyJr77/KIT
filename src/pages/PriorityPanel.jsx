@@ -8,6 +8,7 @@ import MultiSelect from '../components/MultiSelect.jsx';
 import CardNotes from './CardNotes.jsx';
 import { TicketTypeChoice, TeamField } from './NewTicketPanel.jsx';
 import { useApi } from '../lib/data.js';
+import { PANEL_WIDTH, usePanelResize } from '../components/SidePanel.jsx';
 
 const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', work_team_id: '', territory_id: '', pipeline_status: '', value: '' };
 
@@ -18,6 +19,7 @@ const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: 
  */
 export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, teamChoices, readOnly, asWork, onBack: back, onClose: close, onSaved, onNotesChanged }) {
   const { user } = useAuth();
+  const resize = usePanelResize();
   const meta = useApi('/priorities/meta');
   const territories = useApi('/territories').data?.territories || [];
   const isNew = !card;
@@ -138,7 +140,8 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   return (
     <>
       <div className="fixed inset-0 z-40 bg-slate-900/20" onClick={onClose} />
-      <aside className="fixed top-0 right-0 z-50 flex h-full w-full max-w-md flex-col bg-white shadow-2xl animate-[slidein_.2s_ease-out]">
+      <aside ref={resize.ref} style={resize.style} className={`fixed top-0 right-0 z-50 flex h-full ${PANEL_WIDTH} flex-col bg-white shadow-2xl animate-[slidein_.2s_ease-out]`}>
+        {resize.handle}
         <style>{'@keyframes slidein{from{transform:translateX(100%)}to{transform:none}}'}</style>
         {onBack && (
           <button type="button" onClick={onBack} className="flex items-center gap-1.5 border-b border-slate-200 bg-slate-50 px-5 py-2 text-left text-xs font-medium text-brand-700 hover:bg-brand-50">
