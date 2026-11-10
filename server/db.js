@@ -1343,6 +1343,15 @@ CREATE INDEX IF NOT EXISTS retro_notes_board ON retro_notes(board_id);
 // The lead's countdown, in epoch milliseconds so everyone's screen agrees to the second.
 addColumn('retro_boards', 'timer_ends_at', 'INTEGER');
 addColumn('retro_boards', 'timer_length', 'INTEGER'); // how long it was set for, in ms
+// Merging. A merged ticket is a retro_notes row of its own with no author (author_key ''), and each ticket folded into it
+// points at it here. The originals keep their words, lane and thumbs untouched, so unmerging just clears this. Nothing
+// records who merged or when.
+addColumn('retro_notes', 'merged_into', 'INTEGER REFERENCES retro_notes(id) ON DELETE CASCADE');
+// 1 on a merged ticket's thumb that came across from one of its originals, 0 on one given to the merged ticket itself.
+addColumn('retro_votes', 'carried', 'INTEGER NOT NULL DEFAULT 0');
+db.exec('CREATE INDEX IF NOT EXISTS retro_notes_merged ON retro_notes(merged_into)');
+// Where a ticket sits in its lane once someone has arranged it by hand. Null until then: those follow, in the order posted.
+addColumn('retro_notes', 'position', 'INTEGER');
 
 
 // ---- Pipedrive, in full: a home on tickets, contacts and contracts for everything a deal, person, organization, product
