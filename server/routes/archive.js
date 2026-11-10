@@ -8,6 +8,7 @@ import { db, json } from '../db.js';
 import { laneFor, isArchived } from '../../src/lib/lanes.js';
 import { restoreRows, deleteRows, archivedRowCounts } from '../sample/registry.js';
 import { queueDelete } from '../services/pipedrive.js';
+import { ticketEditDenied } from './tickets.js';
 
 const r = Router();
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'server/data/uploads');
@@ -96,6 +97,12 @@ r.delete('/datasets/:id', (req, res) => {
 r.post('/restore', (req, res) => {
   const t = ids(req.body?.tickets);
   const c = ids(req.body?.cards);
+  // Bringing a ticket back is its owner's (or an admin's) call, like archiving it.
+  for (const id of t) {
+    const row = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id);
+    const denied = row && ticketEditDenied(req.user, row);
+    if (denied) return res.status(403).json({ error: denied });
+  }
   db.transaction(() => {
     // A Done work ticket gets a fresh 14 days on the board; a pipeline ticket keeps the date its deal closed.
     const tk = db.prepare("UPDATE tickets SET archived_at = NULL, done_at = CASE WHEN done_at IS NOT NULL AND ticket_type = 'work' THEN datetime('now') ELSE done_at END WHERE id = ?");

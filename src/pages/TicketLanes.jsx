@@ -9,6 +9,8 @@ import { activityTimer, daysSince } from '../lib/activityTimer.js';
 import Avatar from '../components/Avatar.jsx';
 import { LabelList } from '../components/Labels.jsx';
 import NextStepBadge from '../components/NextStepBadge.jsx';
+import { useAuth } from '../lib/auth.jsx';
+import { canEditTicket } from '../lib/ticketAccess.js';
 
 const money = (n) => usd(n).replace('.00', '');
 const HINT = {
@@ -99,12 +101,15 @@ function Lane({ lane, tickets, dragId, now, onOpen, onOpenStep, onArchive }) {
   );
 }
 
-/** Work tickets drag between lanes; pipeline tickets only open. */
-function DraggableCard({ ticket, hidden, ...rest }) {
-  const { attributes, listeners, setNodeRef } = useDraggable({ id: ticket.id, disabled: ticket.ticket_type !== 'work' });
+/** Work tickets drag between lanes, by their owner (or an admin); pipeline tickets only open. */
+function DraggableCard({ ticket, hidden, onArchive, ...rest }) {
+  const { user } = useAuth();
+  const canEdit = canEditTicket(user, ticket);
+  const { attributes, listeners, setNodeRef } = useDraggable({ id: ticket.id, disabled: ticket.ticket_type !== 'work' || !canEdit });
   return (
-    <div ref={setNodeRef} {...attributes} {...listeners} onClick={() => rest.onOpen(ticket.id)} className={hidden ? 'opacity-30' : ''}>
-      <LaneCard ticket={ticket} {...rest} />
+    <div ref={setNodeRef} {...attributes} {...listeners} onClick={() => rest.onOpen(ticket.id)} className={hidden ? 'opacity-30' : ''}
+      title={ticket.ticket_type === 'work' && !canEdit ? 'Only the ticket’s owner can move it' : undefined}>
+      <LaneCard ticket={ticket} {...rest} onArchive={canEdit ? onArchive : undefined} />
     </div>
   );
 }

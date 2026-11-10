@@ -2,6 +2,7 @@
 // ticket are linked to it, and every contact appears on the master CRM page.
 import { Router } from 'express';
 import { db, json } from '../db.js';
+import { ticketEditDenied } from './tickets.js';
 import { OBJECTIVE_SQL, objectiveHasWord, objectiveOut } from './objectives.js';
 
 const r = Router();
@@ -112,6 +113,9 @@ r.get('/:id', (req, res) => {
 r.post('/', (req, res) => {
   const { f, error } = fields(req.body);
   if (error) return res.status(400).json({ error });
+  const onTicket = Number(req.body?.ticket_id) && db.prepare('SELECT * FROM tickets WHERE id = ?').get(Number(req.body.ticket_id));
+  const denied = onTicket && ticketEditDenied(req.user, onTicket);
+  if (denied) return res.status(403).json({ error: denied });
   const id = db.prepare(`INSERT INTO contacts (first_name, last_name, organization, organization_id, role, email, phone, relationship, notes, labels, created_by)
     VALUES (@first_name, @last_name, @organization, @organization_id, @role, @email, @phone, @relationship, @notes, @labels, @created_by)`)
     .run({ ...f, organization_id: organizationFor(f.organization), created_by: req.user.id }).lastInsertRowid;
@@ -166,9 +170,17 @@ r.delete('/interactions/:iid', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Ticket links
+// ---- Ticket links: who's on a ticket is the ticket owner's (or an admin's) to change.
 
-r.put('/:id/tickets/:ticketId', (req, res) => {
+const ticketOwnerOnly = (req, res, next) => {
+  const t = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.ticketId);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  const denied = ticketEditDenied(req.user, t);
+  if (denied) return res.status(403).json({ error: denied });
+  next();
+};
+
+r.put('/:id/tickets/:ticketId', ticketOwnerOnly, (req, res) => {
   if (!db.prepare('SELECT 1 FROM contacts WHERE id = ?').get(req.params.id)) return res.status(404).json({ error: 'Contact not found' });
   if (!db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(req.params.ticketId)) return res.status(404).json({ error: 'Ticket not found' });
   db.prepare('INSERT OR IGNORE INTO ticket_contacts (ticket_id, contact_id, added_by) VALUES (?, ?, ?)').run(req.params.ticketId, req.params.id, req.user.id);
@@ -177,7 +189,7 @@ r.put('/:id/tickets/:ticketId', (req, res) => {
 });
 
 /** Make a linked contact the ticket's primary contact (Pipedrive's deal contact person), or with `{ primary: false }` clear it. */
-r.put('/:id/tickets/:ticketId/primary', (req, res) => {
+r.put('/:id/tickets/:ticketId/primary', ticketOwnerOnly, (req, res) => {
   if (!db.prepare('SELECT 1 FROM ticket_contacts WHERE ticket_id = ? AND contact_id = ?').get(req.params.ticketId, req.params.id)) {
     return res.status(404).json({ error: 'That contact isn’t on this ticket' });
   }
@@ -190,7 +202,7 @@ r.put('/:id/tickets/:ticketId/primary', (req, res) => {
 });
 
 /** Take a contact off a ticket. They stay in the CRM. */
-r.delete('/:id/tickets/:ticketId', (req, res) => {
+r.delete('/:id/tickets/:ticketId', ticketOwnerOnly, (req, res) => {
   db.prepare('DELETE FROM ticket_contacts WHERE ticket_id = ? AND contact_id = ?').run(req.params.ticketId, req.params.id);
   touchTicket(req.params.ticketId);
   res.json({ contact: one(req.params.id) });

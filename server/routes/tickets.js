@@ -17,6 +17,8 @@ import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields } from '../services/pipedriveFields.js';
 import { PROCESS_TYPES, DECISIONS, cleanReviews } from '../../src/lib/process.js';
 import { NEXT_STEP_SQL } from '../activities.js';
+import { canEditTicket, ownerOnlyMessage } from '../../src/lib/ticketAccess.js';
+import { focusTickets } from '../focus.js';
 
 const r = Router();
 
@@ -58,6 +60,31 @@ export function loadThreads(ticketIds) {
 }
 
 const ticketRow = (id) => db.prepare('SELECT * FROM tickets WHERE id = ?').get(id);
+
+/** Why `user` can't change `ticket`, or null when they can (its owner, or an admin). */
+export function ticketEditDenied(user, ticket) {
+  if (canEditTicket(user, ticket)) return null;
+  const o = ticket?.created_by && db.prepare('SELECT first_name, last_name FROM users WHERE id = ?').get(ticket.created_by);
+  return ownerOnlyMessage(o ? `${o.first_name} ${o.last_name}` : null);
+}
+
+/**
+ * Lets the request through only for the ticket's owner or an admin. `ticketIdOf(req)` finds the ticket: by default the
+ * `:id` in the path; for a step, file, product or installment, the ticket it belongs to.
+ */
+const ownerOnly = (ticketIdOf = (req) => req.params.id) => (req, res, next) => {
+  const t = ticketRow(ticketIdOf(req));
+  if (!t) return res.status(404).json({ error: 'Not found' });
+  const denied = ticketEditDenied(req.user, t);
+  if (denied) return res.status(403).json({ error: denied });
+  next();
+};
+const ticketOf = (table, param) => (req) => db.prepare(`SELECT ticket_id FROM ${table} WHERE id = ?`).get(req.params[param])?.ticket_id;
+const ofStep = ticketOf('ticket_process_steps', 'pid');
+const ofFile = ticketOf('ticket_files', 'id');
+const ofProduct = ticketOf('ticket_products', 'pid');
+const ofInstallment = ticketOf('ticket_installments', 'iid');
+const ofComment = ticketOf('ticket_comments', 'id');
 
 // ---- A user's master tickets
 
@@ -120,7 +147,8 @@ r.put('/pipeline-creation', requireAdmin, (req, res) => {
 /**
  * Master tickets. scope: mine (default) | all. Outside "mine", `team` keeps tickets whose owner is
  * on that team. In any scope, `owners` (comma-separated user ids) keeps those owners' tickets and `types`
- * (comma-separated account types) keeps those account types.
+ * (comma-separated account types) keeps those account types. Someone with focus on gets only the tickets they're tied to
+ * or mentioned in (see server/focus.js), unless they ask for tickets by id.
  */
 r.get('/', (req, res) => {
   const scope = req.query.scope === 'all' ? 'all' : 'mine';
@@ -167,7 +195,8 @@ r.get('/', (req, res) => {
     t[k.done ? 'done' : 'open'] += 1;
   });
   const model = pwinModel();
-  res.json({ tickets: rows.map((t) => {
+  const focus = ids.length ? null : focusTickets(req.user);
+  res.json({ tickets: rows.filter((t) => !focus || focus.has(t.id)).map((t) => {
     const lane = laneFor(t);
     return { ...t, labels: json.parse(t.labels, []), next_step: json.parse(t.next_step, null), tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
   }) });
@@ -217,7 +246,7 @@ export function bidAssignment(body = {}, userId, accountType) {
  * Body: { bd_director_id?, territory_id?, projected_win_date?, win_date_undetermined? } (null clears). Who a pipeline ticket
  * belongs to and when it's expected to be won. Marking the date undetermined clears the date, and setting a date clears it.
  */
-r.put('/:id/assignment', (req, res) => {
+r.put('/:id/assignment', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets have a BD director and territory' });
@@ -270,7 +299,7 @@ r.get('/:id/plan', (req, res) => {
   });
 });
 
-r.put('/:id/strategy', (req, res) => {
+r.put('/:id/strategy', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   db.prepare("UPDATE tickets SET strategy = ?, strategy_updated_at = datetime('now'), strategy_updated_by = ?, updated_at = datetime('now') WHERE id = ?")
@@ -280,7 +309,7 @@ r.put('/:id/strategy', (req, res) => {
 });
 
 /** Body: { assessment: { [criterion]: { score: 1–5 | null, answers: { [prompt]: string } } } }. */
-r.put('/:id/assessment', (req, res) => {
+r.put('/:id/assessment', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const input = req.body?.assessment;
@@ -306,7 +335,7 @@ r.put('/:id/assessment', (req, res) => {
  *   archived archive a Done ticket now, or restore an archived one to Done
  * None of this counts as activity, so it doesn't reset the ticket's timer.
  */
-r.put('/:id/lane', (req, res) => {
+r.put('/:id/lane', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const b = req.body || {};
@@ -346,7 +375,7 @@ r.put('/:id/lane', (req, res) => {
 });
 
 /** Move a master ticket to another pipeline stage (null clears it). Used by the BD Pipeline board. */
-r.put('/:id/stage', (req, res) => {
+r.put('/:id/stage', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   if (t.ticket_type === 'work') return res.status(400).json({ error: 'Work tickets have no pipeline stage' });
@@ -387,7 +416,7 @@ function lastOpenStage(t) {
  * Body: { deal_status: 'won' | 'lost' | 'open', lost_reason? }. Won puts the ticket into Delivery as a contract; lost takes a
  * reason (Pipedrive's lost reasons are offered); open reopens a closed deal. On a Pipedrive deal the change is synced.
  */
-r.put('/:id/outcome', (req, res) => {
+r.put('/:id/outcome', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets are won or lost' });
@@ -405,7 +434,7 @@ export function ticketTimeline(id) {
   const t = db.prepare(`SELECT t.*, u.first_name, u.last_name, e.name AS event_name, m.name AS work_team_name FROM tickets t
     LEFT JOIN users u ON u.id = t.created_by LEFT JOIN events e ON e.id = t.event_id LEFT JOIN teams m ON m.id = t.work_team_id WHERE t.id = ?`).get(id);
   if (!t) return null;
-  const ticket = { id: t.id, ticket_type: t.ticket_type, owner_id: t.created_by, opportunity_title: t.opportunity_title, organization: t.organization, pipeline_status: t.pipeline_status, value: t.value, created_at: t.created_at,
+  const ticket = { id: t.id, ticket_type: t.ticket_type, owner_id: t.created_by, created_by: t.created_by, owner_name: t.first_name ? `${t.first_name} ${t.last_name}` : null, opportunity_title: t.opportunity_title, organization: t.organization, pipeline_status: t.pipeline_status, value: t.value, created_at: t.created_at,
     pwin: ticketPwin(t), event_id: t.event_id ?? null, event_name: t.event_name ?? null,
     team_name: t.ticket_type === 'bid' ? 'BD' : t.work_team_name ?? null,
     // Whether it has left the board: archived by hand, or Done long enough (being Done doesn't depend on recent activity).
@@ -550,7 +579,7 @@ r.put('/comments/:id', (req, res) => {
 });
 
 /** Pin or unpin a note (anyone can). Pinned notes sit at the top of the timeline, as in Pipedrive. */
-r.put('/comments/:id/pin', (req, res) => {
+r.put('/comments/:id/pin', ownerOnly(ofComment), (req, res) => {
   const m = db.prepare('SELECT * FROM ticket_comments WHERE id = ?').get(req.params.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
   if (m.kind !== 'note') return res.status(400).json({ error: 'Only notes can be pinned' });
@@ -598,7 +627,7 @@ r.get('/:id/process', (req, res) => {
 });
 
 /** Body: { step_type, step_date? }. Steps can be added in any order, at any time. */
-r.post('/:id/process', (req, res) => {
+r.post('/:id/process', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const type = String(req.body?.step_type || '');
@@ -611,7 +640,7 @@ r.post('/:id/process', (req, res) => {
 });
 
 /** Body may hold step_type, step_date, reviews, notes, decision (Proceed, Revise, No-Bid or none) and pricing. Anyone can update a milestone. */
-r.put('/process/:pid', (req, res) => {
+r.put('/process/:pid', ownerOnly(ofStep), (req, res) => {
   const p = processRow(req.params.pid);
   if (!p) return res.status(404).json({ error: 'Process step not found' });
   const b = req.body || {};
@@ -632,10 +661,9 @@ r.put('/process/:pid', (req, res) => {
 });
 
 /** Its documents stay on the ticket. */
-r.delete('/process/:pid', (req, res) => {
+r.delete('/process/:pid', ownerOnly(ofStep), (req, res) => {
   const p = processRow(req.params.pid);
   if (!p) return res.status(404).json({ error: 'Process step not found' });
-  if (p.author_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only whoever added this step can delete it' });
   db.prepare('DELETE FROM ticket_process_steps WHERE id = ?').run(p.id);
   db.prepare("DELETE FROM work_log WHERE kind = 'process' AND ref_id = ?").run(p.id);
   touch(p.ticket_id);
@@ -643,7 +671,7 @@ r.delete('/process/:pid', (req, res) => {
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
-r.post('/process/:pid/files', upload.single('file'), (req, res) => {
+r.post('/process/:pid/files', ownerOnly(ofStep), upload.single('file'), (req, res) => {
   const p = processRow(req.params.pid);
   if (!req.file) return res.status(400).json({ error: 'Choose a file to upload' });
   if (!p) {
@@ -725,7 +753,7 @@ r.get('/:id/process-view', (req, res) => {
 
 // ---- Documents
 
-r.post('/:id/files', upload.single('file'), (req, res) => {
+r.post('/:id/files', ownerOnly(), upload.single('file'), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!req.file) return res.status(400).json({ error: 'Choose a file to upload' });
   if (!t) {
@@ -739,10 +767,9 @@ r.post('/:id/files', upload.single('file'), (req, res) => {
 });
 
 /** Only here, in KIT. A Pipedrive file isn't imported again, and goes from Pipedrive with an admin's send if that's turned on. */
-r.delete('/files/:id', (req, res) => {
+r.delete('/files/:id', ownerOnly(ofFile), (req, res) => {
   const f = db.prepare('SELECT * FROM ticket_files WHERE id = ?').get(req.params.id);
   if (!f) return res.status(404).json({ error: 'Not found' });
-  if (f.uploaded_by !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only the person who added this file can delete it' });
   const deal = db.prepare('SELECT pipedrive_id FROM tickets WHERE id = ?').get(f.ticket_id)?.pipedrive_id;
   db.prepare("DELETE FROM work_log WHERE kind = 'file' AND ref_id = ?").run(f.id);
   db.prepare('DELETE FROM ticket_files WHERE id = ?').run(f.id);
@@ -793,7 +820,7 @@ r.get('/:id/details', (req, res) => {
  * followers [user ids], pipeline_id (null for KIT's own). Moving to a pipeline without the ticket's stage puts it in
  * that pipeline's first stage.
  */
-r.put('/:id/details', (req, res) => {
+r.put('/:id/details', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const b = req.body || {};
@@ -842,7 +869,7 @@ function cleanLabels(names) {
 }
 
 /** Body: { labels: [names] }. Sets a ticket's tags. On a ticket from Pipedrive the change waits for an admin to send it. */
-r.put('/:id/labels', (req, res) => {
+r.put('/:id/labels', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   db.prepare('UPDATE tickets SET labels = ?, labels_pending = ? WHERE id = ?').run(cleanLabels(req.body?.labels), t.pipedrive_id ? 1 : 0, t.id);
@@ -868,7 +895,7 @@ function productFields(b, partial) {
   return { out };
 }
 
-r.post('/:id/products', (req, res) => {
+r.post('/:id/products', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const { out, error } = productFields(req.body || {});
@@ -881,7 +908,7 @@ r.post('/:id/products', (req, res) => {
   res.json(detailsOf(t));
 });
 
-r.put('/products/:pid', (req, res) => {
+r.put('/products/:pid', ownerOnly(ofProduct), (req, res) => {
   const p = db.prepare('SELECT * FROM ticket_products WHERE id = ?').get(req.params.pid);
   if (!p) return res.status(404).json({ error: 'Product not found' });
   const { out, error } = productFields(req.body || {}, true);
@@ -893,7 +920,7 @@ r.put('/products/:pid', (req, res) => {
   res.json(detailsOf(ticketRow(p.ticket_id)));
 });
 
-r.delete('/products/:pid', (req, res) => {
+r.delete('/products/:pid', ownerOnly(ofProduct), (req, res) => {
   const p = db.prepare('SELECT * FROM ticket_products WHERE id = ?').get(req.params.pid);
   if (!p) return res.status(404).json({ error: 'Product not found' });
   db.prepare('DELETE FROM ticket_products WHERE id = ?').run(p.id);
@@ -912,7 +939,7 @@ function installmentFields(b) {
   return { out: { description: String(b.description ?? '').trim() || null, amount, billing_date: b.billing_date } };
 }
 
-r.post('/:id/installments', (req, res) => {
+r.post('/:id/installments', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const { out, error } = installmentFields(req.body || {});
@@ -923,7 +950,7 @@ r.post('/:id/installments', (req, res) => {
   res.json(detailsOf(t));
 });
 
-r.put('/installments/:iid', (req, res) => {
+r.put('/installments/:iid', ownerOnly(ofInstallment), (req, res) => {
   const i = db.prepare('SELECT * FROM ticket_installments WHERE id = ?').get(req.params.iid);
   if (!i) return res.status(404).json({ error: 'Installment not found' });
   const { out, error } = installmentFields({ ...i, ...(req.body || {}) });
@@ -935,7 +962,7 @@ r.put('/installments/:iid', (req, res) => {
   res.json(detailsOf(ticketRow(i.ticket_id)));
 });
 
-r.delete('/installments/:iid', (req, res) => {
+r.delete('/installments/:iid', ownerOnly(ofInstallment), (req, res) => {
   const i = db.prepare('SELECT * FROM ticket_installments WHERE id = ?').get(req.params.iid);
   if (!i) return res.status(404).json({ error: 'Installment not found' });
   db.prepare('DELETE FROM ticket_installments WHERE id = ?').run(i.id);
@@ -948,7 +975,7 @@ r.delete('/installments/:iid', (req, res) => {
 // ---- The deal's organization: Pipedrive's organization record, edited here and synced.
 
 /** Body: name, address, labels [names], website, linkedin, industry, annual_revenue, employee_count. Makes the organization if the ticket has none. */
-r.put('/:id/organization', (req, res) => {
+r.put('/:id/organization', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const b = req.body || {};

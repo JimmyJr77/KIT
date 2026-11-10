@@ -4,20 +4,27 @@
 // in ../compensation.js.
 import { Router } from 'express';
 import { requireAdmin } from '../auth.js';
+import { focusOn } from '../focus.js';
 import { compensation, bdMembers, savePlanSettings, savePlan, deletePlan, saveContract, saveProjection, resetProjections } from '../compensation.js';
 
 const r = Router();
 
 const yearOf = (v) => Number(v) || new Date().getFullYear();
 const isAdmin = (u) => u.role === 'admin';
+/** Whose compensation `u` gets: everyone's for an admin, their own for anyone else, and for an admin with Focus on. */
+const scopeFor = (u) => (isAdmin(u) && !focusOn(u) ? null : [u.id]);
 
-/** ?year=2026 (default: this year). Admins: everyone, plus the BD members who could be added. Others: themselves. */
+/**
+ * ?year=2026 (default: this year). Admins: everyone, plus the BD members who could be added. Others: themselves.
+ * `own` says the list is just the viewer's: an admin with Focus on still edits, but only sees their own.
+ */
 r.get('/', (req, res) => {
   const year = yearOf(req.query.year);
   const admin = isAdmin(req.user);
-  const data = compensation(year, admin ? null : [req.user.id]);
+  const scope = scopeFor(req.user);
+  const data = compensation(year, scope);
   const listed = new Set(data.directors.map((d) => d.id));
-  res.json({ ...data, canEdit: admin, members: admin ? bdMembers().filter((m) => !listed.has(m.id)) : [] });
+  res.json({ ...data, canEdit: admin, own: !!scope, members: admin && !scope ? bdMembers().filter((m) => !listed.has(m.id)) : [] });
 });
 
 /** Body: any of rate_y1, rate_y2, rate_y3 (percents), effective_date (YYYY-MM-DD or blank). */
@@ -46,7 +53,7 @@ r.delete('/plans/:userId/:year', requireAdmin, (req, res) => {
 r.put('/contracts/:ticketId', requireAdmin, (req, res) => {
   try {
     saveContract(Number(req.params.ticketId), req.body || {}, req.user.id);
-    res.json(compensation(yearOf(req.query.year)));
+    res.json(compensation(yearOf(req.query.year), scopeFor(req.user)));
   } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 
@@ -57,7 +64,7 @@ r.put('/projections', (req, res) => {
   if (!isAdmin(req.user) && userId !== req.user.id) return res.status(403).json({ error: 'You can set your own projections only' });
   try {
     saveProjection(userId, month, amount, req.user.id);
-    res.json(compensation(yearOf(String(month).slice(0, 4)), isAdmin(req.user) ? null : [req.user.id]));
+    res.json(compensation(yearOf(String(month).slice(0, 4)), scopeFor(req.user)));
   } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 
@@ -66,7 +73,7 @@ r.delete('/projections/:userId/:year', (req, res) => {
   const userId = Number(req.params.userId);
   if (!isAdmin(req.user) && userId !== req.user.id) return res.status(403).json({ error: 'You can reset your own projections only' });
   resetProjections(userId, Number(req.params.year));
-  res.json(compensation(yearOf(req.params.year), isAdmin(req.user) ? null : [req.user.id]));
+  res.json(compensation(yearOf(req.params.year), scopeFor(req.user)));
 });
 
 export default r;

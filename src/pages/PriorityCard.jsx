@@ -1,11 +1,11 @@
-import { CheckSquare, ArrowUp, ArrowDown, Hourglass, Redo2 } from 'lucide-react';
+import { CheckSquare, ArrowUp, ArrowDown, Hourglass, Redo2, Handshake } from 'lucide-react';
 import { fullName, initials, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 
 /**
  * A priority or work card. Every card is the same height, laid out on fixed lines:
  * 1 master ticket title · 2–3 the priority text (blank line if short, … if long) ·
- * 4 organization · 5–6 pipeline status, value and due date. Blue or amber edges tell priority from work.
+ * 4 organization · 5–6 pipeline status, value and due date. A blue edge is a planned priority; red is a mid-sprint add (made after planning closed).
  */
 export default function PriorityCard({ card, rank, usersById, overlay }) {
   const planned = !!card.is_planned;
@@ -14,9 +14,10 @@ export default function PriorityCard({ card, rank, usersById, overlay }) {
   // Moved up or down its ticket's activity list since the week's planning closed.
   const moved = card.locked_rank != null && card.rank != null && card.rank !== card.locked_rank;
   const up = moved && card.rank < card.locked_rank;
+  const asks = (card.support || []).filter((n) => !n.closed_at);
   return (
     <div className={`relative h-full cursor-pointer rounded-lg border border-l-4 p-3 text-sm shadow-sm transition hover:shadow-md ${
-      planned ? 'border-slate-200 border-l-brand-600 bg-white' : 'border-amber-200 border-l-amber-500 bg-amber-50'
+      planned ? 'border-slate-200 border-l-brand-600 bg-white' : 'border-red-200 border-l-red-500 bg-red-50'
     } ${moved ? 'ring-2 ring-orange-400 ring-offset-1' : ''} ${card.completed ? 'opacity-60' : ''} ${overlay ? 'w-64 rotate-2 shadow-xl' : ''}`}>
       {moved && (
         <span className="absolute -top-2.5 right-2 z-10 flex items-center gap-0.5 rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-sm"
@@ -33,7 +34,14 @@ export default function PriorityCard({ card, rank, usersById, overlay }) {
             <Redo2 size={10} strokeWidth={3} /> Rolled
           </span>
         )}
-        {rank && <span className={`shrink-0 rounded px-1.5 text-xs font-bold ${planned ? 'bg-brand-50 text-brand-700' : 'bg-amber-100 text-amber-800'}`}>#{rank}</span>}
+        {asks.length > 0 && (
+          <span className={`${card.rolled_since || card.rolled_at ? '' : 'ml-auto'} flex h-5 shrink-0 items-center gap-0.5 rounded bg-sky-100 px-1 text-sky-700`}
+            title={`Support requested:\n${asks.map((n) => `• ${n.body.split('\n')[0]}`).join('\n')}`} aria-label="Support requested">
+            <Handshake size={13} strokeWidth={2.25} />{asks.length > 1 && <span className="text-[10px] font-semibold">{asks.length}</span>}
+          </span>
+        )}
+        {rank && <span className={`shrink-0 rounded px-1.5 text-xs font-bold ${planned ? 'bg-brand-50 text-brand-700' : 'bg-red-100 text-red-800'}`}
+          title={planned ? undefined : 'Mid-sprint add: added after planning closed'}>#{rank}</span>}
       </div>
       <div className="mt-0.5 h-10 overflow-hidden">
         <p className="line-clamp-2 leading-5 break-words text-slate-700" title={card.title || undefined}>{card.title}</p>

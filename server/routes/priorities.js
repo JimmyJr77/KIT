@@ -4,9 +4,11 @@ import { loadThreads, bidAssignment, NO_ASSIGNMENT } from './tickets.js';
 import { recordWork, loadWorkLog } from '../worklog.js';
 import { awardTokens, TOKENS } from '../race.js';
 import { notifyMentions } from '../mentions.js';
-import { loadSupport } from './support.js';
+import { supportForCards } from './support.js';
 import { KIT_STAGES, listPipelines, allStatuses } from '../pipelines.js';
 import { nextPosition, openOrder, rankOf, reorderWithin, mirrorCards, setSubtasksFromChecklist, syncMilestone } from '../activities.js';
+import { canEditTicket } from '../../src/lib/ticketAccess.js';
+import { focusBoard } from '../focus.js';
 
 const r = Router();
 
@@ -30,7 +32,7 @@ const team = (id) => db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
 // A priority leaves the board when it's archived, or when its ticket is (by hand, or by a full reset); restoring the
 // ticket brings it back.
 function loadCards(teamId, weekStart) {
-  const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.work_team_id, t.value, t.ticket_type,
+  const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.work_team_id, t.value, t.ticket_type, t.created_by AS ticket_created_by,
       COALESCE((SELECT k.waiting_client FROM ticket_tasks k WHERE k.id = c.activity_id), 0) AS waiting_client
     FROM priority_cards c JOIN tickets t ON t.id = c.ticket_id
     WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL AND t.archived_at IS NULL ORDER BY c.id`).all(teamId, weekStart);
@@ -40,6 +42,7 @@ function loadCards(teamId, weekStart) {
   const notes = db.prepare(`SELECT m.*, u.first_name, u.last_name FROM ticket_comments m LEFT JOIN users u ON u.id = m.author_id
     WHERE m.parent_id IS NULL AND m.target_type = 'activity' AND m.target_id IN (SELECT value FROM json_each(?))
     ORDER BY m.created_at DESC, m.id DESC`).all(JSON.stringify(cards.map((c) => c.activity_id).filter(Boolean)));
+  const support = supportForCards(cards);
   const ranks = new Map();
   [...new Set(cards.map((c) => c.ticket_id))].forEach((t) => openOrder(t).forEach((id, i) => ranks.set(id, i + 1)));
   return cards.map((c) => ({
@@ -49,6 +52,7 @@ function loadCards(teamId, weekStart) {
     assignees: assignees.filter((a) => a.card_id === c.id).map((a) => ({ user_id: a.user_id, position: a.position })),
     // Its place among the ticket's open activities now, and when the week's planning closed.
     rank: c.activity_id ? ranks.get(c.activity_id) ?? null : null,
+    support: support.get(c.id) || [],
   }));
 }
 
@@ -112,7 +116,7 @@ function allTeamsBoard(date) {
   const weeks = Object.entries(teamWeeks).map(([id, week]) => [Number(id), week]);
   return {
     team: { id: 'all', name: 'All' }, weekStart, currentWeekStart, teamWeeks, members, cards, work, threads: threadsFor(cards),
-    support: loadSupport(members.map((m) => m.id), weekStart), planning: planningFor(weeks),
+    planning: planningFor(weeks),
   };
 }
 
@@ -242,14 +246,14 @@ export function scheduleRollover() {
 
 r.get('/', (req, res) => {
   try { rollUnfinished(); } catch (e) { console.error('Priority rollover:', e.message); }
-  if (req.query.team === 'all') return res.json(allTeamsBoard(req.query.week || localToday()));
+  if (req.query.team === 'all') return res.json(focusBoard(allTeamsBoard(req.query.week || localToday()), req.user));
   const t = team(req.query.team);
   if (!t) return res.status(400).json({ error: 'Unknown team' });
   const weekStart = weekStartFor(req.query.week || localToday(), t.checkin_dow);
   const members = db.prepare(`SELECT u.id, u.first_name, u.last_name, u.username, u.title FROM users u
     JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = ? WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all(t.id);
   const cards = loadCards(t.id, weekStart);
-  res.json({
+  res.json(focusBoard({
     team: t,
     weekStart,
     currentWeekStart: weekStartFor(localToday(), t.checkin_dow),
@@ -257,9 +261,8 @@ r.get('/', (req, res) => {
     cards,
     work: loadWorkLog(t.id, weekStart),
     threads: threadsFor(cards),
-    support: loadSupport(members.map((m) => m.id), weekStart),
     planning: planningFor([[t.id, weekStart]]),
-  });
+  }, req.user));
 });
 
 // ---- Tickets (the larger assignment each priority card rolls up to) ----
@@ -273,15 +276,22 @@ const TICKET_SORTS = {
   updated: 't.updated_at',
 };
 
+/**
+ * Open tickets to pick from, matching `q`. Yours come first and are marked `mine`: you own it, you're its BD director, or
+ * you're on one of its priority cards (as on the Tickets page). `mine=1` lists only yours.
+ */
 r.get('/tickets', (req, res) => {
   const q = `%${req.query.q || ''}%`;
   const sort = TICKET_SORTS[req.query.sort] || TICKET_SORTS.updated;
   const dir = req.query.dir === 'asc' ? 'ASC' : 'DESC';
-  const rows = db.prepare(`SELECT t.*, COUNT(c.id) AS card_count, MIN(c.due_date) AS next_due
+  const rows = db.prepare(`SELECT * FROM (SELECT t.*, COUNT(c.id) AS card_count, MIN(c.due_date) AS next_due,
+      (t.created_by = @me OR t.bd_director_id = @me OR EXISTS (SELECT 1 FROM priority_cards pc JOIN card_assignees a ON a.card_id = pc.id
+        WHERE pc.ticket_id = t.id AND a.user_id = @me)) AS mine
     FROM tickets t LEFT JOIN priority_cards c ON c.ticket_id = t.id
-    WHERE t.archive_set_id IS NULL AND t.archived_at IS NULL AND t.ticket_type != 'account' AND (t.opportunity_title LIKE ? OR t.organization LIKE ?)
-    GROUP BY t.id ORDER BY ${sort} ${dir} LIMIT 200`).all(q, q);
-  res.json({ tickets: rows });
+    WHERE t.archive_set_id IS NULL AND t.archived_at IS NULL AND t.ticket_type != 'account' AND (t.opportunity_title LIKE @q OR t.organization LIKE @q)
+    GROUP BY t.id) t WHERE (@onlyMine = 0 OR t.mine) ORDER BY t.mine DESC, ${sort} ${dir} LIMIT 200`)
+    .all({ q, me: req.user.id, onlyMine: req.query.mine === '1' ? 1 : 0 });
+  res.json({ tickets: rows.map((t) => ({ ...t, mine: !!t.mine })) });
 });
 
 export function ticketFields(t = {}) {
@@ -332,8 +342,10 @@ r.post('/cards', (req, res) => {
   const create = db.transaction(() => {
     let ticketId = Number(b.ticket_id) || null;
     if (ticketId) {
-      if (!db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(ticketId)) throw new Error('Ticket not found');
-      if (b.ticket) {
+      const existing = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+      if (!existing) throw new Error('Ticket not found');
+      // Anyone can put a priority on a ticket; only its owner (or an admin) changes the ticket's own fields.
+      if (b.ticket && canEditTicket(req.user, existing)) {
         const tf = ticketFields(b.ticket);
         if (tf.opportunity_title) db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
           pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type, work_team_id=CASE WHEN ticket_type = 'work' THEN @work_team_id END,
@@ -362,8 +374,8 @@ r.post('/cards', (req, res) => {
       activityId = db.prepare(`INSERT INTO ticket_tasks (ticket_id, text, activity_type, assignee_id, position, created_by) VALUES (?, ?, 'Task', ?, ?, ?)`)
         .run(ticketId, title, Number(assignees[0]) || req.user.id, nextPosition(ticketId), req.user.id).lastInsertRowid;
     }
-    // Cards added while the week's planning is open are priorities; once planning
-    // is closed, new cards are work tickets (accomplishments and new tasks).
+    // Cards added while the week's planning is open are planned priorities; once planning
+    // is closed, new cards are mid-sprint adds (shown in red).
     const isPlanned = planningClosed(t.id, weekStart) ? 0 : 1;
     const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, is_planned, created_by)
       VALUES (?, ?, ?, ?, ?, ?)`).run(ticketId, t.id, weekStart, activityId, isPlanned, req.user.id).lastInsertRowid;
@@ -407,7 +419,8 @@ r.put('/cards/:id', (req, res) => {
   if (b.ticket && !tf.opportunity_title) return res.status(400).json({ error: 'Opportunity Title is required' });
   db.transaction(() => {
     saveToActivity(activityFor(card, req.user), b, req.user);
-    if (b.ticket) {
+    // The card is yours to change; the ticket's own fields only change for its owner (or an admin).
+    if (b.ticket && canEditTicket(req.user, db.prepare('SELECT * FROM tickets WHERE id = ?').get(card.ticket_id))) {
       db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
         pipeline_status=CASE WHEN ticket_type = 'work' THEN NULL ELSE @pipeline_status END, account_type=@account_type, work_team_id=CASE WHEN ticket_type = 'work' THEN @work_team_id END,
         value=CASE WHEN ticket_type = 'work' THEN NULL ELSE @value END, updated_at=datetime('now') WHERE id=@id AND ticket_type != 'account'`).run({ ...tf, id: card.ticket_id });

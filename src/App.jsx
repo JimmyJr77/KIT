@@ -72,6 +72,7 @@ export default function App() {
           <Route path="/retros/:id" element={<RetroBoard />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/admin" element={<AdminAccess />} />
+          <Route path="/admin/:view" element={<AdminAccess />} />
           <Route path="/backups" element={<Backups />} />
           <Route path="/my-team" element={<MyTeam />} />
           <Route path="/member" element={<MemberAccess />} />

@@ -1,5 +1,5 @@
-// Records "additional work": actions taken while the actor's team has closed
-// planning for the current week. Each entry lands on that week's board.
+// Records work: every action someone takes during the sprint (their team's current week), whether or not planning has
+// closed. Each entry lands in the Work column of their lane on that week's board.
 import { db } from './db.js';
 
 const localToday = () => new Date().toLocaleDateString('en-CA');
@@ -11,12 +11,12 @@ function currentWeek(dow) {
 }
 
 /**
- * Log an action if one of the user's teams has closed planning for this week.
+ * Log an action on the user's team's board for this week.
  * `entry`: { kind, ticket_id, card_id?, ref_id?, summary? }. Never throws: logging must not break the action.
  */
 export function recordWork(user, entry) {
   try {
-    const tw = closedTeamWeek(user);
+    const tw = teamWeek(user);
     if (!tw) return;
     db.prepare(`INSERT INTO work_log (team_id, week_start, user_id, kind, ticket_id, card_id, ref_id, summary)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(tw.team.id, tw.week, user.id, entry.kind, entry.ticket_id ?? null, entry.card_id ?? null,
@@ -34,7 +34,7 @@ export function recordWork(user, entry) {
 export function recordTicketUpdate(user, ticket, what) {
   try {
     if (!user?.id || !ticket || ticket.created_by !== user.id) return;
-    const tw = closedTeamWeek(user);
+    const tw = teamWeek(user);
     if (!tw) return;
     const summary = String(what || 'Updated').slice(0, 280);
     const prior = db.prepare(`SELECT id FROM work_log WHERE team_id = ? AND week_start = ? AND user_id = ? AND kind = 'update' AND ticket_id = ? AND summary = ?`)
@@ -46,16 +46,19 @@ export function recordTicketUpdate(user, ticket, what) {
   }
 }
 
-/** The first of the user's teams whose planning is closed this week, with that week; null when none is. */
-function closedTeamWeek(user) {
+/**
+ * The team-week a user's work lands on: their first team whose planning is closed this week (where it landed before
+ * all work was logged), else their first team. Null for someone on no team.
+ */
+function teamWeek(user) {
   const teams = user?.id ? db.prepare(`SELECT t.* FROM user_teams ut JOIN teams t ON t.id = ut.team_id
     WHERE ut.user_id = ? ORDER BY t.id`).all(user.id) : [];
   const closed = db.prepare('SELECT 1 FROM week_planning WHERE team_id = ? AND week_start = ?');
-  const team = teams.find((t) => closed.get(t.id, currentWeek(t.checkin_dow)));
+  const team = teams.find((t) => closed.get(t.id, currentWeek(t.checkin_dow))) || teams[0];
   return team ? { team, week: currentWeek(team.checkin_dow) } : null;
 }
 
-/** Additional work for one team-week, newest first, with the ticket and priority it was about. Work on an archived ticket isn't shown. */
+/** Work for one team-week, newest first, with the ticket and priority it was about. Work on an archived ticket isn't shown. */
 export function loadWorkLog(teamId, weekStart) {
   return db.prepare(`SELECT w.*, t.opportunity_title AS ticket_title, c.title AS card_title
     FROM work_log w LEFT JOIN tickets t ON t.id = w.ticket_id LEFT JOIN priority_cards c ON c.id = w.card_id

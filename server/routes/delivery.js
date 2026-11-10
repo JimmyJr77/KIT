@@ -18,6 +18,7 @@ import { queueDelete, ACTIVITY_TYPES } from '../services/pipedrive.js';
 import { createProject } from '../services/pipedriveSend.js';
 import { PROJECT_STATUS_OF } from '../services/pipedriveProjects.js';
 import { fieldsOf } from '../services/pipedriveFields.js';
+import { focusPrograms, focusTickets } from '../focus.js';
 
 const r = Router();
 const STATUSES = ['Active', 'Complete', 'Canceled'];
@@ -127,14 +128,19 @@ function alertAssigned(userId, actor, programId, kind, role) {
   db.prepare('INSERT INTO alerts (user_id, actor_id, kind, program_id, excerpt) VALUES (?, ?, ?, ?, ?)').run(userId, actor.id, kind, programId, role || null);
 }
 
-/** status: active (default) | complete | canceled | held | all. Newest wins first. Held contracts are only in held and all. */
+/**
+ * status: active (default) | complete | canceled | held | all. Newest wins first. Held contracts are only in held and all.
+ * Someone with focus on gets only the contracts they're tied to or mentioned in (see server/focus.js).
+ */
 r.get('/', (req, res) => {
   const status = { active: 'Active', complete: 'Complete', canceled: 'Canceled' }[req.query.status];
   const held = req.query.status === 'held';
   const rows = db.prepare(`${SELECT} WHERE ${LIVE} ${held ? 'AND p.held_at IS NOT NULL' : ''} ${status ? 'AND p.held_at IS NULL AND p.status = ?' : ''}
     ORDER BY p.awarded_at DESC, p.id DESC`).all(...(status ? [status] : []));
-  const { n } = db.prepare(`SELECT COUNT(*) AS n FROM delivery_programs p LEFT JOIN tickets t ON t.id = p.ticket_id WHERE ${LIVE} AND p.held_at IS NOT NULL`).get();
-  res.json({ programs: programsOut(rows), held: n, phases: db.prepare('SELECT id, name, position FROM delivery_phases ORDER BY position, id').all(),
+  const focus = focusPrograms(req.user);
+  const inFocus = (p) => !focus || focus.has(p.id);
+  const n = db.prepare(`SELECT p.id FROM delivery_programs p LEFT JOIN tickets t ON t.id = p.ticket_id WHERE ${LIVE} AND p.held_at IS NOT NULL`).all().filter(inFocus).length;
+  res.json({ programs: programsOut(rows.filter(inFocus)), held: n, phases: db.prepare('SELECT id, name, position FROM delivery_phases ORDER BY position, id').all(),
     project_labels: (fieldsOf('project').find((f) => f.key === 'labels' || f.name === 'Labels')?.options || []).map((o) => o.label), activity_types: Object.values(ACTIVITY_TYPES) });
 });
 
@@ -166,11 +172,12 @@ r.get('/closed', (req, res) => {
     FROM tickets t LEFT JOIN delivery_programs p ON p.ticket_id = t.id
     LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id
     WHERE t.ticket_type = 'bid' AND t.archive_set_id IS NULL`).all();
+  const focus = focusTickets(req.user);
   const closedOn = { lost: (t) => t.lost_at || t.done_at, execution: (t) => t.won_at || t.awarded_at || t.done_at, executed: (t) => t.completed_at, other: (t) => t.archived_at };
   res.json({
     deals: rows.flatMap((t) => {
       const group = closedGroup(t);
-      if (!group) return [];
+      if (!group || (focus && !focus.has(t.id))) return [];
       const other = group === 'other';
       return [{
         ...t, group, closed_on: closedOn[group](t), amount: t.contract_value ?? t.value, fully_funded: fullyFunded(t),

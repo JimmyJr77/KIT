@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { X, Plus, Trash2, Loader2, Check, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, Ticket } from 'lucide-react';
+import { X, Plus, Trash2, Loader2, Check, Eye, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, Ticket } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { api } from '../lib/api.js';
@@ -49,7 +49,28 @@ export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty, activity
   return null;
 }
 
-export function DrawerShell({ title, subtitle, onClose, footer, children }) {
+/**
+ * Set by the ticket pane: `{ readOnly, ownerName }`. Read-only when you don't own the ticket (and aren't an admin): you can
+ * read everything and comment, but the ticket's own fields, milestones and people are its owner's to change.
+ */
+export const TicketAccess = createContext({ readOnly: false, ownerName: null });
+
+/** "View only" note for someone who doesn't own the ticket. */
+export function ViewOnlyNote({ className = '' }) {
+  const { readOnly, ownerName } = useContext(TicketAccess);
+  if (!readOnly) return null;
+  return (
+    <p className={`flex items-start gap-1.5 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200 ${className}`}>
+      <Eye size={13} className="mt-px shrink-0" />
+      <span>View only. {ownerName ? `${ownerName} owns this ticket, so only they` : 'Only the ticket’s owner'} (or an admin) can change it. You can still comment.</span>
+    </p>
+  );
+}
+
+/** A drawer's frame. With `lockable`, a read-only viewer sees its fields disabled and no save bar. */
+export function DrawerShell({ title, subtitle, onClose, footer, lockable = false, children }) {
+  const { readOnly } = useContext(TicketAccess);
+  const locked = lockable && readOnly;
   return (
     <>
       <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
@@ -59,8 +80,11 @@ export function DrawerShell({ title, subtitle, onClose, footer, children }) {
         </div>
         <button className="btn-ghost p-1.5" onClick={onClose} aria-label={`Close ${title}`}><X size={18} /></button>
       </header>
-      <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
-      {footer && <footer className="border-t border-slate-200 bg-white px-5 py-3">{footer}</footer>}
+      <div className="flex-1 overflow-y-auto px-5 py-4">
+        {locked && <ViewOnlyNote className="mb-3" />}
+        {lockable ? <fieldset disabled={locked} className="min-w-0">{children}</fieldset> : children}
+      </div>
+      {footer && !locked && <footer className="border-t border-slate-200 bg-white px-5 py-3">{footer}</footer>}
     </>
   );
 }
@@ -96,6 +120,7 @@ function PeopleDrawer({ ticket, onClose, onChanged }) {
     <button type="button" onClick={back} className="mb-3 flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline"><ArrowLeft size={13} /> Back to people</button>
   );
   const selected = typeof view === 'number' ? people?.find((p) => p.id === view) : null;
+  const { readOnly } = useContext(TicketAccess);
 
   return (
     <DrawerShell title={selected ? contactName(selected) : view === 'new' ? 'Add a person' : view === 'link' ? 'Add from the CRM' : account ? 'CRM' : 'People'}
@@ -105,10 +130,12 @@ function PeopleDrawer({ ticket, onClose, onChanged }) {
         <div className="space-y-3">
           {account && <CrmPeople organization={ticket.organization} account reloadKey={people} />}
           {account && <h4 className="border-t border-slate-200 pt-3 text-xs font-medium text-slate-700">On this account</h4>}
-          <div className="flex gap-2">
-            <button type="button" className="btn-primary flex-1 text-xs" onClick={() => setView('new')}><Plus size={14} /> Add a person</button>
-            <button type="button" className="btn flex-1 text-xs" onClick={() => setView('link')}><Link2 size={14} /> Add from the CRM</button>
-          </div>
+          {readOnly ? <ViewOnlyNote /> : (
+            <div className="flex gap-2">
+              <button type="button" className="btn-primary flex-1 text-xs" onClick={() => setView('new')}><Plus size={14} /> Add a person</button>
+              <button type="button" className="btn flex-1 text-xs" onClick={() => setView('link')}><Link2 size={14} /> Add from the CRM</button>
+            </div>
+          )}
           {people && !people.length && <p className="text-sm text-slate-400">No one on this {noun} yet.</p>}
           <ul className="space-y-2">
             {people?.map((c) => (
@@ -122,6 +149,7 @@ function PeopleDrawer({ ticket, onClose, onChanged }) {
                   {contactLine(c) && <div className="truncate text-xs text-slate-500">{contactLine(c)}</div>}
                   <div className="text-[11px] text-slate-400">{c.interaction_count} interaction{c.interaction_count === 1 ? '' : 's'}{c.last_interaction_at ? ` · last ${stamp(c.last_interaction_at)}` : ''}</div>
                 </button>
+                {!readOnly && <>
                 <button type="button" onClick={() => makePrimary(c)} title={c.is_primary ? 'No longer the primary contact' : 'Make the primary contact'}
                   aria-label={c.is_primary ? 'No longer the primary contact' : 'Make the primary contact'} aria-pressed={c.is_primary}
                   className={`rounded p-1 hover:bg-slate-100 ${c.is_primary ? 'text-amber-500' : 'text-slate-300 opacity-0 group-hover:opacity-100 hover:text-amber-500'}`}>
@@ -129,6 +157,8 @@ function PeopleDrawer({ ticket, onClose, onChanged }) {
                 </button>
                 <button type="button" onClick={() => unlink(c)} title={`Take off this ${noun}`} aria-label={`Take off this ${noun}`}
                   className="rounded p-1 text-slate-300 opacity-0 group-hover:opacity-100 hover:bg-slate-100 hover:text-slate-600"><Unlink size={14} /></button>
+                </>}
+                {readOnly && c.is_primary && <Star size={14} className="m-1 text-amber-500" fill="currentColor" aria-label="Primary contact" />}
               </li>
             ))}
           </ul>
@@ -228,10 +258,12 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
 
   const userOptions = users.map((u) => ({ value: u.id, label: fullName(u), sub: u.team_name }));
   const byId = (id) => users.find((u) => u.id === id);
+  const { readOnly } = useContext(TicketAccess);
 
   return (
     <DrawerShell title="Milestones" subtitle="The formal steps of this pursuit: who was there, who approved, decisions and documents" onClose={onClose}>
       <div className="space-y-4">
+        {readOnly ? <ViewOnlyNote /> : (
         <section className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
           <span className="text-xs font-semibold tracking-wide text-slate-600 uppercase">New milestone</span>
           <div className="flex gap-2">
@@ -245,8 +277,9 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
             <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={add} disabled={busy}>{busy ? 'Adding…' : <><Plus size={13} /> Add milestone</>}</button>
           </div>
         </section>
+        )}
 
-        {steps && !steps.length && <p className="text-sm text-slate-400">No milestones yet. Add the first one above.</p>}
+        {steps && !steps.length && <p className="text-sm text-slate-400">{readOnly ? 'No milestones yet.' : 'No milestones yet. Add the first one above.'}</p>}
         {steps && steps.length > 0 && (
           <ol className="relative space-y-3 before:absolute before:top-3 before:bottom-3 before:left-[11px] before:w-px before:bg-slate-200">
             {steps.map((s) => (
@@ -263,6 +296,7 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
 
 function ProcessStep({ step: s, open, onToggle, byId, userOptions, onDirty, apply, onDeleted }) {
   const { user } = useAuth();
+  const { readOnly } = useContext(TicketAccess);
   const involved = REVIEW_AREAS.filter((a) => s.reviews[a.key].people.length || s.reviews[a.key].notes);
   const people = [...new Set(REVIEW_AREAS.flatMap((a) => s.reviews[a.key].people))].map(byId).filter(Boolean);
   return (
@@ -290,7 +324,11 @@ function ProcessStep({ step: s, open, onToggle, byId, userOptions, onDirty, appl
           </div>
           {open ? <ChevronDown size={15} className="mt-0.5 shrink-0 text-slate-400" /> : <ChevronRight size={15} className="mt-0.5 shrink-0 text-slate-300" />}
         </button>
-        {open && <ProcessStepEditor step={s} user={user} userOptions={userOptions} onDirty={onDirty} apply={apply} onDeleted={onDeleted} />}
+        {open && (
+          <fieldset disabled={readOnly} className="min-w-0">
+            <ProcessStepEditor step={s} user={user} userOptions={userOptions} onDirty={onDirty} apply={apply} onDeleted={onDeleted} />
+          </fieldset>
+        )}
       </div>
     </li>
   );
@@ -496,7 +534,7 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
   };
 
   return (
-    <DrawerShell title="Strategy" subtitle="How we win this account" onClose={onClose}
+    <DrawerShell title="Strategy" subtitle="How we win this account" onClose={onClose} lockable
       footer={plan && <SaveBar dirty={dirty} busy={busy} error={error} savedAt={plan.strategy_updated_at} savedBy={plan.strategy_updated_by} onSave={save} />}>
       {plan ? (
         <div className="space-y-5">
@@ -693,7 +731,7 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
   const rated = CRITERIA.filter((c) => draft?.[c.key]?.score).length;
 
   return (
-    <DrawerShell title="Bid and win assessment" subtitle="Do we have a real shot at winning?" onClose={onClose}
+    <DrawerShell title="Bid and win assessment" subtitle="Do we have a real shot at winning?" onClose={onClose} lockable
       footer={plan && <SaveBar dirty={dirty} busy={busy} error={error} savedAt={plan.assessment_updated_at} savedBy={plan.assessment_updated_by} onSave={save} />}>
       {!draft ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className="space-y-4">
@@ -921,7 +959,7 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
   ));
 
   return (
-    <DrawerShell title="Deal details" subtitle={synced ? `Pipedrive deal #${data.pipedrive_id} · changes here sync to Pipedrive` : 'Deal fields from Pipedrive, and any others'} onClose={onClose}
+    <DrawerShell title="Deal details" subtitle={synced ? `Pipedrive deal #${data.pipedrive_id} · changes here sync to Pipedrive` : 'Deal fields from Pipedrive, and any others'} onClose={onClose} lockable
       footer={form && <SaveBar dirty={dirty || orgDirty} busy={busy} error={error} onSave={save} />}>
       {form ? (
         <div className="space-y-6">

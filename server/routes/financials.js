@@ -11,9 +11,14 @@ import {
 import { addDays, quarterFor } from '../../src/lib/travelCalc.js';
 import { reportCard, period, directors, reportTrends, THRESHOLDS } from '../reportCard.js';
 import { spendEntries } from '../marketingSpend.js';
+import { tacticalReport } from '../tacticalReport.js';
+import { focusDirector } from '../focus.js';
 
 const r = Router();
 const sum = (rows, f) => rows.reduce((s, x) => s + (f(x) || 0), 0);
+
+// Someone with focus on gets their own figures wherever ?director= applies (not the money by team, which has no director).
+r.use(focusDirector);
 
 /** ?director=&territory= narrows everything to one BD director and/or territory. */
 r.get('/bd', (req, res) => {
@@ -122,6 +127,13 @@ r.get('/report-card', (req, res) => {
 r.get('/report-trends', (req, res) => {
   const weeks = [13, 26, 52].includes(Number(req.query.weeks)) ? Number(req.query.weeks) : 13;
   res.json(reportTrends({ weeks, director: Number(req.query.director) || null }));
+});
+
+/** The Tactical Meeting Report: ?week=<a date in the week> (default this week), ?director=<id>, ?weeks=13|26|52 for the chart. */
+r.get('/tactical', (req, res) => {
+  const week = /^\d{4}-\d{2}-\d{2}$/.test(req.query.week || '') ? req.query.week : undefined;
+  const weeks = [13, 26, 52].includes(Number(req.query.weeks)) ? Number(req.query.weeks) : 13;
+  res.json(tacticalReport({ week, director: Number(req.query.director) || null, weeks }));
 });
 
 export default r;

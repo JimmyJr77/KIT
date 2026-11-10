@@ -10,7 +10,8 @@ import SidePanel from '../components/SidePanel.jsx';
 import { TicketLabels } from '../components/Labels.jsx';
 import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx';
 import { ReplyBox } from './CommentPanel.jsx';
-import { PlanRail, PlanDrawer } from './TicketPlanning.jsx';
+import { PlanRail, PlanDrawer, TicketAccess, ViewOnlyNote } from './TicketPlanning.jsx';
+import { canEditTicket } from '../lib/ticketAccess.js';
 import { AssignmentBar } from './TicketAssignment.jsx';
 import ProcessTimeline from '../components/ProcessTimeline.jsx';
 
@@ -62,9 +63,12 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   }, [data, focus]);
 
   const t = data?.ticket;
+  const { user } = useAuth();
+  const canEdit = canEditTicket(user, t);
+  const access = { readOnly: !!t && !canEdit, ownerName: t?.owner_name ?? null };
 
   return (
-    <>
+    <TicketAccess.Provider value={access}>
     <SidePanel wide onClose={close} title={t ? t.opportunity_title : 'Loading…'}
       onEscape={processOpen ? () => setProcessOpen(false) : tool ? () => switchTool(null) : close}
       rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} skip={t.ticket_type === 'account' ? ['strategy', 'tickets'] : []} />}
@@ -85,7 +89,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
           )}
           {t.lost_reason && <span className="rounded bg-red-50 px-1.5 text-red-700" title="Lost reason">{t.lost_reason}</span>}
           {t.probability != null && <span className="rounded bg-slate-100 px-1.5 text-slate-600" title="Deal probability, set by hand (Pipedrive)">{t.probability}% probability</span>}
-          <TicketLabels ticket={t} onChanged={refresh} />
+          <TicketLabels ticket={t} onChanged={refresh} readOnly={!canEdit} />
           {t.pwin && <span className="rounded bg-brand-50 px-1.5 font-semibold text-brand-700" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>PWIN {t.pwin.score}%</span>}
         </span>
       )}>
@@ -98,10 +102,14 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
               <button type="button" className="btn-primary shrink-0 px-2.5 py-1 text-xs" onClick={() => setProcessOpen(true)}>Process view</button>
             </div>
           )}
-          {t.ticket_type !== 'account' && <ArchiveBar ticket={t} onChanged={refresh} />}
-          {t.ticket_type === 'bid' && <AssignmentBar ticket={t} onChanged={refresh} />}
-          {t.ticket_type === 'bid' && <OutcomeBar ticket={t} onChanged={refresh} />}
-          <Composer ticketId={t.id} onPosted={refresh} />
+          <ViewOnlyNote />
+          {/* Archiving, the BD director and territory, and won or lost are the owner's; others see them, disabled. */}
+          <fieldset disabled={!canEdit} className="min-w-0 space-y-5">
+            {t.ticket_type !== 'account' && <ArchiveBar ticket={t} onChanged={refresh} />}
+            {t.ticket_type === 'bid' && <AssignmentBar ticket={t} onChanged={refresh} />}
+            {t.ticket_type === 'bid' && (canEdit || t.deal_status !== 'open') && <OutcomeBar ticket={t} onChanged={refresh} />}
+          </fieldset>
+          <Composer ticketId={t.id} onPosted={refresh} canUpload={canEdit} />
           <Feed data={data} onChanged={refresh} onOpenActivity={showActivity} />
         </div>
       )}
@@ -118,7 +126,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
         </div>
       </div>
     )}
-    </>
+    </TicketAccess.Provider>
   );
 }
 
@@ -273,7 +281,7 @@ function Event({ event: e, ticket, onChanged, onOpenActivity }) {
   const isOwner = e.author?.id === ticket.owner_id;
   // A Pipedrive note from anyone but the ticket owner reads as a plain comment here; it keeps its pin only while pinned, so it can be unpinned.
   const isNote = e.type === 'comment' && e.comment.kind === 'note' && isOwner;
-  const canPin = e.type === 'comment' && e.comment.kind === 'note' && (isOwner || e.comment.pinned);
+  const canPin = e.type === 'comment' && e.comment.kind === 'note' && (isOwner || e.comment.pinned) && canEditTicket(user, ticket);
   const pin = async () => { await api.put(`/tickets/comments/${e.comment.id}/pin`, { pinned: !e.comment.pinned }); onChanged(); };
 
   return (
@@ -344,7 +352,7 @@ function Event({ event: e, ticket, onChanged, onOpenActivity }) {
                 {e.file.size != null && <span className="shrink-0 text-[11px] text-slate-400">{bytes(e.file.size)}</span>}
                 {e.file.url ? <ExternalLink size={14} className="shrink-0 text-slate-400" /> : <Download size={14} className="shrink-0 text-slate-400" />}
               </a>
-              {(e.author?.id === user.id || user.role === 'admin') && (
+              {canEditTicket(user, ticket) && (
                 <button type="button" className="btn-ghost shrink-0 px-2 py-1 text-slate-400 hover:text-red-600" aria-label={`Delete ${e.file.name}`} title="Delete file"
                   onClick={async () => { if (confirm(`Delete “${e.file.name}”?${e.file.synced ? ' It’s deleted from the deal in Pipedrive too.' : ''}`)) { await api.del(`/tickets/files/${e.file.id}`); onChanged(); } }}>
                   <Trash2 size={14} />
@@ -415,7 +423,7 @@ function Reply({ reply: r, onComment, onChanged }) {
 }
 
 /** "New comment or note" at the top of the timeline, plus document upload. */
-function Composer({ ticketId, onPosted }) {
+function Composer({ ticketId, onPosted, canUpload = true }) {
   const [mode, setMode] = useState('post'); // post | file
   const [text, setText] = useState('');
   const [file, setFile] = useState(null);
@@ -451,10 +459,12 @@ function Composer({ ticketId, onPosted }) {
   return (
     <section className="space-y-2 rounded-lg bg-slate-50 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs font-semibold tracking-wide text-slate-600 uppercase">{mode === 'file' ? 'Upload document' : 'New comment or note'}</span>
-        <button type="button" onClick={() => setMode(mode === 'file' ? 'post' : 'file')} className="flex items-center gap-1 text-xs text-slate-600 hover:text-brand-700">
-          {mode === 'file' ? '← Write a comment or note instead' : <><Upload size={13} /> Upload document</>}
-        </button>
+        <span className="text-xs font-semibold tracking-wide text-slate-600 uppercase">{mode === 'file' ? 'Upload document' : canUpload ? 'New comment or note' : 'New comment'}</span>
+        {canUpload && (
+          <button type="button" onClick={() => setMode(mode === 'file' ? 'post' : 'file')} className="flex items-center gap-1 text-xs text-slate-600 hover:text-brand-700">
+            {mode === 'file' ? '← Write a comment or note instead' : <><Upload size={13} /> Upload document</>}
+          </button>
+        )}
       </div>
 
       {mode === 'file' ? (

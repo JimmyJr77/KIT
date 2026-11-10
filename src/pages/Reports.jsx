@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Printer, Presentation, Loader2 } from 'lucide-react';
 import { useApi } from '../lib/data.js';
+import { useAuth } from '../lib/auth.jsx';
 import { fullName, todayIso, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import { BarList, StackedColumns, DataTable, SERIES, compact, pct } from '../components/Charts.jsx';
@@ -8,26 +9,43 @@ import { periods, periodQuery, isYearChoice, formatValue, StatusChip, StalledByS
 import YearBasisToggle from '../components/YearBasisToggle.jsx';
 import { useYearBasis } from '../lib/yearBasis.js';
 import ReportTrends from './ReportTrends.jsx';
+import TacticalReport from './TacticalReport.jsx';
 import PipelineByPerson from '../components/PipelineByPerson.jsx';
 import { BookToBill } from '../components/BdDashboard.jsx';
 import { nameOnLight, nameOnDark } from '../lib/brand.js';
 
 const shortQuarter = (q) => `Q${q.slice(-1)} '${q.slice(2, 4)}`;
+/** The Monday of this week and the twelve before it, newest first. */
+function recentWeeks() {
+  const d = new Date(`${todayIso()}T12:00:00`);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return Array.from({ length: 13 }, (_, i) => {
+    const m = new Date(d);
+    m.setDate(d.getDate() - 7 * i);
+    return m.toLocaleDateString('en-CA');
+  });
+}
 
 /**
  * The BD report: the report card for a period, and the pipeline, forecast, bookings, backlog and book-to-bill behind it,
  * for the team or one BD director. Prints cleanly (Print / Save as PDF) and downloads as an editable PowerPoint deck.
- * Change over time shows the same measures week by week instead.
+ * Change over time shows the same measures week by week instead. The Tactical Meeting Report is one week's pipeline
+ * movement, with a cheat sheet of the tickets behind it, and downloads as a single slide.
  */
 export default function Reports() {
   const users = useApi('/users').data?.users || [];
   const directors = users.filter((u) => u.teams?.some((t) => t.name === 'BD'));
   const [basis] = useYearBasis();
   const options = periods(basis);
-  const [view, setView] = useState('report'); // report | trends
+  const [view, setView] = useState('report'); // report | trends | tactical
+  const weekOptions = recentWeeks();
+  const [week, setWeek] = useState(weekOptions[0]);
   const [weeks, setWeeks] = useState(13);
   const [choice, setChoice] = useState('q');
-  const [director, setDirector] = useState('');
+  // With Focus on the report is your own (the server gives nothing else), so there's no one to pick.
+  const { user } = useAuth();
+  const [picked, setDirector] = useState('');
+  const director = user.focus ? String(user.id) : picked;
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState('');
   const p = options.find((o) => o.key === choice);
@@ -40,12 +58,22 @@ export default function Reports() {
   const who = director ? fullName(users.find((u) => u.id === Number(director))) : 'BD team';
   const ready = bd && rc;
   const report = ready && { bd, card: rc.card, directors: rc.directors, scope: who, period: p.value, prepared: todayIso() };
+  const tacticalQs = new URLSearchParams({ week, weeks: String(weeks) });
+  if (director) tacticalQs.set('director', director);
+  const tactical = useApi(view === 'tactical' ? `/financials/tactical?${tacticalQs}` : null).data;
+  const tacticalReady = view === 'tactical' && tactical && tactical.week.start === week;
 
   const downloadDeck = async () => {
     setBuilding(true);
     setError('');
     try {
       // Loaded only when needed: the PowerPoint library is large.
+      if (view === 'tactical') {
+        const [{ default: PptxGenJS }, { buildTacticalDeck }] = await Promise.all([import('pptxgenjs'), import('../lib/tacticalDeck.js')]);
+        const deck = buildTacticalDeck(new PptxGenJS(), tactical, { nameOnLight });
+        await deck.writeFile({ fileName: `Tactical Meeting Report ${who} ${tactical.week.start}.pptx` });
+        return;
+      }
       const [{ default: PptxGenJS }, { buildDeck }] = await Promise.all([import('pptxgenjs'), import('../lib/bdDeck.js')]);
       const deck = buildDeck(new PptxGenJS(), report, { nameOnLight, nameOnDark });
       await deck.writeFile({ fileName: `BD report ${who} ${p.value}.pptx` });
@@ -60,9 +88,9 @@ export default function Reports() {
     <div className="space-y-6 p-8 print:space-y-4 print:p-0">
       <div className="print:hidden">
         <PageHeader title="Reports" subtitle="The BD report: report card, pipeline, forecast, bookings and backlog. Print it or take it to PowerPoint.">
-          <button type="button" className="btn" onClick={() => window.print()} disabled={!ready}><Printer size={15} /> Print / Save as PDF</button>
-          <button type="button" className="btn-primary" onClick={downloadDeck} disabled={!ready || building || view === 'trends'}
-            title={view === 'trends' ? 'The PowerPoint covers the BD report' : undefined}>
+          <button type="button" className="btn" onClick={() => window.print()} disabled={view === 'tactical' ? !tacticalReady : !ready}><Printer size={15} /> Print / Save as PDF</button>
+          <button type="button" className="btn-primary" onClick={downloadDeck} disabled={(view === 'tactical' ? !tacticalReady : !ready) || building || view === 'trends'}
+            title={view === 'trends' ? 'The PowerPoint covers the BD report and the Tactical Meeting Report' : view === 'tactical' ? 'Slide 1: the numbers and the chart. Slide 2: the cheat sheet' : undefined}>
             {building ? <Loader2 size={15} className="animate-spin" /> : <Presentation size={15} />} Download PowerPoint
           </button>
         </PageHeader>
@@ -70,7 +98,7 @@ export default function Reports() {
           <div>
             <label className="label">Report</label>
             <div className="flex h-[38px] rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="radiogroup" aria-label="Report">
-              {[['report', 'BD report'], ['trends', 'Change over time']].map(([k, l]) => (
+              {[['report', 'BD report'], ['trends', 'Change over time'], ['tactical', 'Tactical Meeting Report']].map(([k, l]) => (
                 <button key={k} type="button" role="radio" aria-checked={view === k} onClick={() => setView(k)}
                   className={`rounded px-3 ${view === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
               ))}
@@ -92,25 +120,46 @@ export default function Reports() {
               )}
             </>
           ) : (
+            <>
+            {view === 'tactical' && (
+              <div className="w-60">
+                <label className="label">Week</label>
+                <select className="input" value={week} onChange={(e) => setWeek(e.target.value)}>
+                  {weekOptions.map((w, i) => {
+                    const end = new Date(`${w}T12:00:00`);
+                    end.setDate(end.getDate() + 6);
+                    return <option key={w} value={w}>{i === 0 ? 'This week · ' : i === 1 ? 'Last week · ' : ''}{shortDate(w)} – {shortDate(end.toLocaleDateString('en-CA'))}</option>;
+                  })}
+                </select>
+              </div>
+            )}
             <div className="w-48">
-              <label className="label">Timeline</label>
+              <label className="label">{view === 'tactical' ? 'Chart' : 'Timeline'}</label>
               <select className="input" value={weeks} onChange={(e) => setWeeks(Number(e.target.value))}>
                 {[13, 26, 52].map((n) => <option key={n} value={n}>Last {n} weeks</option>)}
               </select>
             </div>
+            </>
           )}
           <div className="w-56">
             <label className="label">For</label>
-            <select className="input" value={director} onChange={(e) => setDirector(e.target.value)}>
-              <option value="">The whole BD team</option>
-              {directors.map((u) => <option key={u.id} value={u.id}>{fullName(u)}</option>)}
-            </select>
+            {user.focus ? (
+              <select className="input" value={director} disabled title="Focus is on, so this is your own report. Turn it off in Settings to see the team or someone else.">
+                <option value={director}>{fullName(user)}</option>
+              </select>
+            ) : (
+              <select className="input" value={director} onChange={(e) => setDirector(e.target.value)}>
+                <option value="">The whole BD team</option>
+                {directors.map((u) => <option key={u.id} value={u.id}>{fullName(u)}</option>)}
+              </select>
+            )}
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
         </div>
       </div>
 
-      {view === 'trends' ? <ReportTrends weeks={weeks} director={director} who={who} />
+      {view === 'tactical' ? (tacticalReady ? <TacticalReport r={tactical} /> : <p className="text-sm text-slate-400">Loading…</p>)
+        : view === 'trends' ? <ReportTrends weeks={weeks} director={director} who={who} />
         : !ready ? <p className="text-sm text-slate-400">Loading…</p> : <Report r={report} />}
     </div>
   );

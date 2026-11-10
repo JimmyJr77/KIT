@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Ticket, CalendarDays, Megaphone, ContactRound, MessageSquare, StickyNote, CalendarCheck, Mail, FileText, Download, Layers, Star, ChessPawn, Scale, Check, Flag, Pencil, Trophy, XCircle, ExternalLink, Loader2, Upload, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName, stamp, fullStamp, shortDate } from '../lib/format.js';
@@ -8,6 +8,7 @@ import { REVIEW_AREAS, PHASES, milestoneOf } from '../lib/process.js';
 import Avatar from './Avatar.jsx';
 import { LabelList } from './Labels.jsx';
 import { MentionText } from './MentionTextarea.jsx';
+import { TicketAccess } from '../pages/TicketPlanning.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
@@ -454,6 +455,7 @@ function milestoneParts(m, data, onOpenTool, onChanged) {
 
 /** The milestone's documents: the archive of what was produced for it. Upload straight from here. */
 function Documents({ milestone: m, onChanged }) {
+  const { readOnly } = useContext(TicketAccess); // only the ticket's owner (or an admin) uploads
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const fileRef = useRef(null);
@@ -469,7 +471,7 @@ function Documents({ milestone: m, onChanged }) {
   };
   return (
     <div>
-      <Heading icon={FileText} action={(
+      <Heading icon={FileText} action={!readOnly && (
         <label className={`btn cursor-pointer px-2 py-0.5 text-[11px] ${uploading ? 'pointer-events-none opacity-60' : ''}`} title="Attach a document to this milestone">
           {uploading ? <><Loader2 size={11} className="animate-spin" /> Uploading…</> : <><Upload size={11} /> Upload</>}
           <input ref={fileRef} type="file" className="sr-only" onChange={(e) => upload(e.target.files[0])} />

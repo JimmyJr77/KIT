@@ -3,6 +3,7 @@ import { db, json, setUserTeams, setTeamRole, isTeamLead, withTeams } from '../d
 import { requireAdmin, publicUser, formatPhone, digitsOnly, checkPassword, hashPassword } from '../auth.js';
 import { uniqueMessage } from './auth.js';
 import { flightPrefs, flightLimitsChanged } from '../../src/lib/travelCalc.js';
+import { cleanHiddenNav } from '../../src/lib/sidebar.js';
 
 const r = Router();
 
@@ -46,10 +47,13 @@ function updateUser(id, body, res, { allowRole }) {
   const { data, error } = validateProfile(body);
   if (error) return res.status(400).json({ error });
   const role = allowRole && ['admin', 'member'].includes(body.role) ? body.role : undefined;
+  // The Developer role is a flag beside the site role; only admins set it, and leaving it out keeps it as it was.
+  const developer = allowRole && body.developer !== undefined ? (body.developer ? 1 : 0) : undefined;
   try {
     db.prepare(`UPDATE users SET first_name=@first_name, last_name=@last_name, email=@email, phone=@phone,
       phone_digits=@phone_digits, username=@username, title=@title
-      ${role ? ', role=@role' : ''} WHERE id=@id`).run({ ...data, id, ...(role ? { role } : {}) });
+      ${role ? ', role=@role' : ''}${developer !== undefined ? ', developer=@developer' : ''} WHERE id=@id`)
+      .run({ ...data, id, ...(role ? { role } : {}), ...(developer !== undefined ? { developer } : {}) });
     const teamIds = teamIdsFrom(body);
     if (teamIds) setUserTeams(id, teamIds);
     res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(id))) });
@@ -86,6 +90,20 @@ r.put('/me/travel-from', (req, res) => {
   res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(req.user.id))) });
 });
 
+/** Body: { hidden: [path] }. The sidebar pages you'd rather not see in your sidebar; they stay under More. */
+r.put('/me/sidebar', (req, res) => {
+  if (!Array.isArray(req.body?.hidden)) return res.status(400).json({ error: 'hidden must be a list' });
+  db.prepare('UPDATE users SET hidden_nav = ? WHERE id = ?').run(JSON.stringify(cleanHiddenNav(req.body.hidden)), req.user.id);
+  res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(req.user.id))) });
+});
+
+/** Body: { on: boolean }. Focus narrows the main pages to what you're tied to or mentioned in (see server/focus.js). */
+r.put('/me/focus', (req, res) => {
+  if (typeof req.body?.on !== 'boolean') return res.status(400).json({ error: 'on must be true or false' });
+  db.prepare('UPDATE users SET focus = ? WHERE id = ?').run(req.body.on ? 1 : 0, req.user.id);
+  res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(req.user.id))) });
+});
+
 r.put('/me/password', (req, res) => {
   const { current, next } = req.body || {};
   if (!checkPassword(current, req.user.password_hash)) return res.status(400).json({ error: 'Current password is incorrect' });
@@ -113,15 +131,16 @@ r.delete('/:id', requireAdmin, (req, res) => {
 
 // ---- Approved accounts (admin) ----
 r.get('/approved', requireAdmin, (req, res) => {
-  const rows = db.prepare(`SELECT a.*, u.id AS account_id, u.active, u.pending_activation, u.first_name, u.last_name
+  const rows = db.prepare(`SELECT a.*, u.id AS account_id, u.active, u.pending_activation, u.first_name, u.last_name, u.developer AS account_developer
     FROM approved_accounts a LEFT JOIN users u ON u.email = a.email ORDER BY a.email`).all();
   // Anyone with an account, even a deactivated one, keeps their teams on it (that's where PUT saves them);
-  // only emails never activated keep them on the approval. user_id is set for active accounts only; an account the
+  // only emails never activated keep them on the approval. Site Dev (developer) works the same way. user_id is set for active accounts only; an account the
   // Pipedrive sync made counts as waiting until its person activates it.
   const teams = new Map(withTeams(rows.filter((a) => a.account_id).map((a) => ({ id: a.account_id }))).map((u) => [u.id, u.team_ids]));
   res.json({
-    approved: rows.map(({ account_id, active, pending_activation, ...a }) => ({
+    approved: rows.map(({ account_id, active, pending_activation, account_developer, ...a }) => ({
       ...a, user_id: active && !pending_activation ? account_id : null, team_ids: account_id ? teams.get(account_id) : json.parse(a.team_ids, []),
+      developer: account_id ? account_developer : a.developer,
     })),
   });
 });
@@ -136,14 +155,20 @@ r.post('/approved', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-/** Body: { team_ids }. Sets the teams of whoever has (or will activate) this approved email. */
+/** Body: { team_ids?, developer? }. Sets the teams and Site Dev of whoever has (or will activate) this approved email; what's left out stays as it was. */
 r.put('/approved/:email', requireAdmin, (req, res) => {
   const a = db.prepare('SELECT * FROM approved_accounts WHERE email = ?').get(req.params.email);
   if (!a) return res.status(404).json({ error: 'That email is not approved' });
-  const ids = teamIdsFrom(req.body) || [];
+  const ids = teamIdsFrom(req.body);
+  const developer = req.body?.developer === undefined ? undefined : (req.body.developer ? 1 : 0);
   const user = db.prepare('SELECT id FROM users WHERE email = ?').get(a.email);
-  if (user) setUserTeams(user.id, ids);
-  else db.prepare('UPDATE approved_accounts SET team_ids = ? WHERE email = ?').run(json.str(ids), a.email);
+  if (ids) {
+    if (user) setUserTeams(user.id, ids);
+    else db.prepare('UPDATE approved_accounts SET team_ids = ? WHERE email = ?').run(json.str(ids), a.email);
+  }
+  if (developer !== undefined) {
+    db.prepare(user ? 'UPDATE users SET developer = ? WHERE id = ?' : 'UPDATE approved_accounts SET developer = ? WHERE email = ?').run(developer, user ? user.id : a.email);
+  }
   res.json({ ok: true });
 });
 

@@ -77,4 +77,9 @@ export function requireAdmin(req, res, next) {
   next();
 }
 
+export function requireDeveloper(req, res, next) {
+  if (!req.user?.developer) return res.status(403).json({ error: 'Developers only' });
+  next();
+}
+
 export { isApproved };

@@ -130,7 +130,8 @@ export function LabelPicker({ value, onChange, disabled }) {
 }
 
 /** A ticket's tags with the picker beside them, saved as they change. */
-export function TicketLabels({ ticket, onChanged }) {
+/** A ticket's tags, which its owner can add and remove (`readOnly` just shows them). */
+export function TicketLabels({ ticket, onChanged, readOnly = false }) {
   const [labels, setLabels] = useState(ticket.labels || []);
   const [error, setError] = useState('');
   useEffect(() => { setLabels(ticket.labels || []); }, [ticket.id, ticket.labels]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -149,8 +150,8 @@ export function TicketLabels({ ticket, onChanged }) {
   };
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {labels.map((l) => <LabelChip key={l} name={l} onRemove={() => save(labels.filter((x) => x !== l))} />)}
-      <LabelPicker value={labels} onChange={save} />
+      {labels.map((l) => <LabelChip key={l} name={l} onRemove={readOnly ? undefined : () => save(labels.filter((x) => x !== l))} />)}
+      {!readOnly && <LabelPicker value={labels} onChange={save} />}
       {error && <span className="text-[11px] text-red-600">{error}</span>}
     </span>
   );

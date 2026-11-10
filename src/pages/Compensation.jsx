@@ -36,6 +36,8 @@ export default function Compensation() {
   const [adding, setAdding] = useState('');
   const [err, setErr] = useState('');
   const canEdit = !!data?.canEdit;
+  // Just your own: anyone who isn't an admin, and an admin with Focus on (who still edits their own inputs).
+  const own = data?.own ?? !canEdit;
   const toggleProjected = () => setProjected((p) => { writeProjected(!p); return !p; });
 
   const addDirector = async (id) => {
@@ -66,12 +68,12 @@ export default function Compensation() {
           <PlanSummary settings={data.settings} />
           {showSettings && canEdit && <PlanSettings settings={data.settings} onSaved={() => reload({ quiet: true })} onClose={() => setShowSettings(false)} />}
 
-          {(canEdit || data.directors.length > 1) && <TeamSummary team={data.team} year={year} projected={projected} />}
+          {((canEdit && !own) || data.directors.length > 1) && <TeamSummary team={data.team} year={year} projected={projected} />}
 
           <section className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="section-title mr-auto flex items-center gap-2"><BadgeDollarSign size={16} className="text-brand-600" /> {canEdit ? 'BD directors' : 'Your compensation'}</h2>
-              {canEdit && data.members.length > 0 && (
+              <h2 className="section-title mr-auto flex items-center gap-2"><BadgeDollarSign size={16} className="text-brand-600" /> {own ? 'Your compensation' : 'BD directors'}</h2>
+              {canEdit && !own && data.members.length > 0 && (
                 <select className="input h-8 w-60 py-0 text-sm" value={adding} onChange={(e) => addDirector(e.target.value)} aria-label="Add a director">
                   <option value="">Add a director to {year}…</option>
                   {data.members.map((m) => <option key={m.id} value={m.id}>{fullName(m)}</option>)}
@@ -80,7 +82,7 @@ export default function Compensation() {
             </div>
             {!data.directors.length && (
               <p className="panel text-sm text-slate-500">
-                {canEdit ? `Nobody has a plan or a won deal in ${year} yet. Add a director above to set their plan inputs; their wins join on their own as deals are won.`
+                {!own ? `Nobody has a plan or a won deal in ${year} yet. Add a director above to set their plan inputs; their wins join on their own as deals are won.`
                   : `No compensation plan applies to you in ${year}. The plan covers BD directors' won deals.`}
               </p>
             )}

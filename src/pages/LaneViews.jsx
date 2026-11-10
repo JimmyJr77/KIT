@@ -1,4 +1,4 @@
-import { Package, CheckSquare, Plus, MessageSquare, StickyNote, FileText, CheckCircle2, Footprints, Workflow, Handshake, Ticket, Pencil } from 'lucide-react';
+import { Package, CheckSquare, Plus, MessageSquare, StickyNote, FileText, CheckCircle2, Footprints, Workflow, Pencil, Zap } from 'lucide-react';
 import Avatar from '../components/Avatar.jsx';
 import { MentionText } from '../components/MentionTextarea.jsx';
 import { ago, fullName, fullStamp } from '../lib/format.js';
@@ -13,7 +13,7 @@ export const LANE_VIEWS = [
   { key: 'tickets', label: 'Grouped by master ticket', icon: <Package size={15} /> },
   { key: 'tasks', label: 'Task list', icon: <CheckSquare size={15} /> },
   { key: 'threads', label: 'Questions & comments', icon: <Glyph>?!</Glyph> },
-  { key: 'support', label: 'Support needed', icon: <Handshake size={15} /> },
+  { key: 'work', label: 'Work this sprint', icon: <Zap size={15} /> },
 ];
 
 /** The thin strip of view icons between a member's name and their work. */
@@ -189,40 +189,7 @@ export function ThreadsView({ threads, rows, onOpenThread, onNew }) {
   );
 }
 
-/** A person's support requests: open ones, then ones closed this week. `onNew` (their own lane only) asks for more. */
-export function SupportView({ requests, rows, onOpen, onNew }) {
-  return (
-    <>
-      {requests.map((n) => (
-        <button key={n.id} type="button" onClick={() => onOpen(n)}
-          className={`flex shrink-0 flex-col rounded-lg border border-l-4 bg-white p-3 text-left text-sm shadow-sm transition hover:shadow-md ${
-            n.closed_at ? 'border-slate-200 border-l-slate-300 opacity-70' : 'border-slate-200 border-l-sky-500 hover:border-brand-500'} ${rows ? 'w-64' : 'w-full'}`}>
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium">
-            <span className={`flex items-center gap-1 ${n.closed_at ? 'text-slate-500' : 'text-sky-700'}`}><Handshake size={12} /> {n.closed_at ? 'Closed' : 'Support needed'}</span>
-            {n.tickets.length > 0 && (
-              <span className="ml-auto flex shrink-0 items-center gap-0.5 rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700 ring-1 ring-emerald-200"
-                title={n.tickets.map((t) => t.title).join('\n')}>
-                <Ticket size={11} /> {n.tickets.length === 1 ? 'Ticket made' : `${n.tickets.length} tickets`}
-              </span>
-            )}
-          </div>
-          {n.card && <div className="-mt-1 mb-1 truncate text-[11px] text-slate-400" title={n.card.ticket_title}>Priority: {n.card.title}</div>}
-          <p className="line-clamp-3 flex-1 text-slate-700"><MentionText text={n.body} /></p>
-          <div className="mt-2 text-[11px] text-slate-400" title={fullStamp(n.created_at)}>Asked {ago(n.created_at)}</div>
-        </button>
-      ))}
-      {!requests.length && <Empty>No support requests.</Empty>}
-      {onNew && (
-        <button type="button" onClick={onNew}
-          className={`flex shrink-0 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-brand-500 hover:text-brand-600 ${rows ? 'w-40' : 'py-3'}`}>
-          <Plus size={16} /> Ask for support
-        </button>
-      )}
-    </>
-  );
-}
-
-/** What each kind of additional work looks like. */
+/** What each kind of work looks like. */
 export const WORK_KINDS = {
   note: { label: 'Note', icon: <StickyNote size={12} /> },
   file: { label: 'Document', icon: <FileText size={12} /> },
@@ -237,7 +204,19 @@ export const WORK_KINDS = {
   process: { label: 'Process step', icon: <Workflow size={12} /> },
 };
 
-/** An action recorded while planning was closed, shown as a work ticket in the person's lane. */
+/**
+ * The work a person did this sprint, logged automatically as they do it: newest first. Nobody adds work by hand.
+ */
+export function WorkView({ work, rows, onOpen }) {
+  return (
+    <>
+      {work.map((w) => <WorkEntry key={w.id} entry={w} rows={rows} onOpen={onOpen} />)}
+      {!work.length && <Empty>No work yet this sprint. It shows up here on its own as work gets done.</Empty>}
+    </>
+  );
+}
+
+/** One action someone took this sprint, shown as a work ticket in the Work column. */
 export function WorkEntry({ entry, rows, onOpen }) {
   const k = WORK_KINDS[entry.kind] || { label: entry.kind, icon: null };
   return (
@@ -252,7 +231,6 @@ export function WorkEntry({ entry, rows, onOpen }) {
       <div className="truncate font-semibold text-slate-800" title={entry.ticket_title}>{entry.ticket_title || 'Deleted ticket'}</div>
       {entry.card_title && <div className="truncate text-[11px] text-slate-500" title={entry.card_title}>Priority: {entry.card_title}</div>}
       {entry.summary && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{entry.summary}</p>}
-      <div className="mt-auto pt-2 text-[10px] font-semibold tracking-wide text-amber-700 uppercase">Additional work</div>
     </button>
   );
 }

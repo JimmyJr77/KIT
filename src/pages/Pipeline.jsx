@@ -21,6 +21,8 @@ const NO_STAGE = '__none__';
 const money = (n) => usd(n).replace('.00', '');
 // Won and lost deals aren't on the board, as in Pipedrive: Closed deals lists them (and won ones are contracts in Delivery).
 import { isClosed } from '../lib/lanes.js';
+import { useAuth } from '../lib/auth.jsx';
+import { canEditTicket } from '../lib/ticketAccess.js';
 
 /** Master tickets as a board, one column per pipeline stage. Drag a ticket to move it to another stage. */
 // Ways to order the cards in each column. `dir` is the direction each starts in when picked; the arrow button reverses
@@ -259,8 +261,12 @@ function Column({ column, onOpen, onOpenStep, dragId, now, onWon }) {
   );
 }
 
-function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now, onWon }) {
-  const { attributes, listeners, setNodeRef } = useDraggable({ id: ticket.id });
+/** A pipeline ticket on the board. Its owner (or an admin) drags it to another stage or marks it won; others just open it. */
+function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now, onWon: won }) {
+  const { user } = useAuth();
+  const canEdit = canEditTicket(user, ticket);
+  const onWon = canEdit ? won : null;
+  const { attributes, listeners, setNodeRef } = useDraggable({ id: ticket.id, disabled: !canEdit });
   return (
     <div ref={setNodeRef} {...attributes} {...listeners} onClick={() => onOpen(ticket.id)} className={hidden ? 'opacity-30' : ''}>
       <TicketCard ticket={ticket} now={now} onOpenStep={onOpenStep} />

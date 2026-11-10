@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
-import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil } from 'lucide-react';
+import { Navigate, NavLink, useParams } from 'react-router-dom';
+import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil, Target, Code2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
@@ -17,14 +17,63 @@ import PipedrivePanel from '../components/PipedrivePanel.jsx';
 import NewPipelineTicketsPanel from '../components/NewPipelineTicketsPanel.jsx';
 import SiteFeedbackPanel from '../components/SiteFeedbackPanel.jsx';
 import { TerritoryTags, TerritoryChecklist, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
+import { ledTeams } from './MyTeam.jsx';
 
-/** Admins only: access requests from the sign-in page, approved accounts, and the team directory. */
+const isAdmin = (user) => user.role === 'admin';
+const isDeveloper = (user) => !!user.developer;
+
+/**
+ * Admin Access is the home for administrative and leadership views, each at /admin/<key>. Admin (access, the directory
+ * and site setup) is /admin itself. Each view is for one role: Admin for admins, Team Lead for anyone who leads a team,
+ * Developer for people with the Developer role (set on their account). Someone sees only the views for roles they have,
+ * and the switcher only when there's more than one. Add a view here as a new leadership title is built out.
+ */
+const VIEWS = [
+  { key: '', label: 'Admin', icon: ShieldCheck, title: 'Admin Access', subtitle: 'Who can use KIT, the team directory and site setup', can: isAdmin, Page: AdminView },
+  { key: 'team-lead', label: 'Team Lead', icon: Target, title: 'Team Lead', subtitle: 'What your team is expected to deliver', can: (u) => ledTeams(u).length > 0, Page: TeamLeadView },
+  { key: 'developer', label: 'Developer', icon: Code2, title: 'Developer', subtitle: 'Site feedback to work through', can: isDeveloper, Page: DeveloperView },
+];
+
+/** The views for the roles someone has (sent to Settings if none), with a switcher between them. */
 export default function AdminAccess() {
   const { user } = useAuth();
-  return user.role === 'admin' ? <AdminPage /> : <Navigate to="/settings" replace />;
+  const { view = '' } = useParams();
+  const open = VIEWS.filter((v) => v.can(user));
+  const current = open.find((v) => v.key === view);
+  if (!open.length) return <Navigate to="/settings" replace />;
+  if (!current) return <Navigate to={`/admin${open[0].key ? `/${open[0].key}` : ''}`} replace />;
+  return <AdminHub views={open} current={current} />;
 }
 
-function AdminPage() {
+function AdminHub({ views, current }) {
+  // Fetched here so the Developer tab can show how many are open, whichever view is showing. Developers only.
+  const feedback = useApi(views.some((v) => v.key === 'developer') ? '/feedback' : null);
+  const badges = { developer: feedback.data?.open };
+  const link = ({ isActive }) => `flex items-center gap-1.5 rounded px-3 whitespace-nowrap ${isActive ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`;
+  const { Page } = current;
+  return (
+    <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-8">
+      <PageHeader title={current.title} subtitle={current.subtitle}>
+        {views.length > 1 && (
+          <nav className="flex h-9 max-w-full overflow-x-auto rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" aria-label="Admin Access views">
+            {views.map((v) => (
+              <NavLink key={v.key} to={`/admin${v.key ? `/${v.key}` : ''}`} end className={link}>
+                <v.icon size={14} /> {v.label}
+                {badges[v.key] > 0 && (
+                  <span className={`rounded-full px-1.5 text-[10px] leading-4 font-bold ${v.key === current.key ? 'bg-white text-brand-700' : 'bg-amber-500 text-white'}`}>{badges[v.key]}</span>
+                )}
+              </NavLink>
+            ))}
+          </nav>
+        )}
+      </PageHeader>
+      <Page feedback={feedback} />
+    </div>
+  );
+}
+
+/** Access requests from the sign-in page, approved accounts, the team directory, and site setup. */
+function AdminView() {
   const approved = useApi('/users/approved');
   const users = useApi('/users');
   const teams = useApi('/teams');
@@ -32,22 +81,57 @@ function AdminPage() {
   const [error, setError] = useState('');
   const teamList = teams.data?.teams || [];
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-8">
-      <PageHeader title="Admin Access" subtitle="Who can use KIT, and the team directory" />
+    <>
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       <RequestsPanel onApproved={approved.reload} />
-      <SiteFeedbackPanel />
       <ApprovedPanel approved={approved} teams={teamList} onError={setError} />
       <DirectoryPanel approved={approved} users={users} teams={teamList} territories={territories.data?.territories || []} onError={setError} />
       <TerritoriesPanel territories={territories} onChanged={users.reload} />
+      {/* Admins set targets whether or not they lead BD; BD leads also have them on Team Lead. */}
       <BookingTargetsPanel />
       <QualifiedTargetsPanel />
       <NewPipelineTicketsPanel />
       <PipedrivePanel />
       <BackupPanel />
       <SampleDataPanel />
-    </div>
+    </>
   );
+}
+
+/**
+ * What a team's lead sees on the Team Lead view, by team name. Only BD's is built so far: the booking and qualified
+ * pipeline targets for each BD director. Add a team here as its lead page takes shape; until then its leads see a note.
+ */
+const LEAD_PAGES = {
+  BD: () => (<><BookingTargetsPanel /><QualifiedTargetsPanel /></>),
+};
+
+/** One page per team the person leads, with a picker when they lead more than one. */
+function TeamLeadView() {
+  const { user } = useAuth();
+  const led = ledTeams(user);
+  const [id, setId] = useState(led[0]?.id);
+  const team = led.find((t) => t.id === id) || led[0];
+  const Page = LEAD_PAGES[team.name];
+  return (
+    <>
+      {led.length > 1 && (
+        <div className="flex flex-wrap gap-1" role="tablist" aria-label="Teams you lead">
+          {led.map((t) => (
+            <button key={t.id} type="button" role="tab" aria-selected={t.id === team.id} onClick={() => setId(t.id)}
+              className={`rounded-full px-3 py-1 text-sm ${t.id === team.id ? 'bg-brand-600 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:text-slate-900'}`}>{t.name}</button>
+          ))}
+        </div>
+      )}
+      <h2 className="-mb-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">{team.name} team lead</h2>
+      {Page ? <Page /> : <div className="panel text-sm text-slate-500">Nothing on the {team.name} team lead page yet.</div>}
+    </>
+  );
+}
+
+/** Site feedback from KITT, as tickets to check off and archive. */
+function DeveloperView({ feedback }) {
+  return <SiteFeedbackPanel feedback={feedback} />;
 }
 
 function RequestsPanel({ onApproved }) {
@@ -148,14 +232,15 @@ function ApprovedPanel({ approved, teams, onError }) {
       onError(err.message);
     }
   };
-  const setTeams = async (a, ids) => {
-    try { await api.put(`/users/approved/${encodeURIComponent(a.email)}`, { team_ids: ids }); approved.reload(); } catch (err) { onError(err.message); }
+  const save = async (a, patch) => {
+    try { await api.put(`/users/approved/${encodeURIComponent(a.email)}`, patch); approved.reload(); } catch (err) { onError(err.message); }
   };
+  const setTeams = (a, ids) => save(a, { team_ids: ids });
 
   return (
     <div className="panel space-y-3">
       <h2 className="section-title flex items-center gap-2"><ShieldCheck size={16} className="text-brand-600" /> Approved accounts</h2>
-      <p className="text-xs text-slate-500">Approve an email so its owner can activate an account. Teams set here are theirs when they sign in.</p>
+      <p className="text-xs text-slate-500">Approve an email so its owner can activate an account. Teams and Site Dev set here are theirs when they sign in.</p>
       <form onSubmit={approve} className="flex flex-wrap gap-2">
         <input className="input min-w-0 flex-1 sm:max-w-sm" type="email" placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
         <select className="input w-28" value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
@@ -179,10 +264,12 @@ function ApprovedPanel({ approved, teams, onError }) {
                     </div>
                     <div className={ROW_REST}>
                       <div className="min-w-0 flex-1">
-                        <TeamTags teams={teams} value={ids} admin={a.role === 'admin'} onRemove={(id) => setTeams(a, ids.filter((x) => x !== id))} />
+                        <TeamTags teams={teams} value={ids} admin={a.role === 'admin'} onRemove={(id) => setTeams(a, ids.filter((x) => x !== id))}
+                          siteDev={!!a.developer} onRemoveSiteDev={() => save(a, { developer: false })} />
                       </div>
                       <div className={ROW_ACTIONS}>
-                        <AddTeamSelect teams={teams} value={ids} onAdd={(id) => setTeams(a, [...ids, id])} className="w-32" />
+                        <AddTeamSelect teams={teams} value={ids} onAdd={(id) => setTeams(a, [...ids, id])}
+                          siteDev={!!a.developer} onAddSiteDev={() => save(a, { developer: true })} className="w-32" />
                         <RevokeButton email={a.email} onRevoked={approved.reload} onError={onError} />
                       </div>
                     </div>
@@ -216,7 +303,7 @@ function RevokeButton({ email, onRevoked, onError }) {
 
 /** Everyone with an active account: their teams, role and contact details. */
 function DirectoryPanel({ approved, users, teams, territories, onError }) {
-  const { user: me } = useAuth();
+  const { user: me, setUser } = useAuth();
   const [q, setQ] = useState('');
   const [team, setTeam] = useState('');
   const [editing, setEditing] = useState(null);
@@ -258,7 +345,9 @@ function DirectoryPanel({ approved, users, teams, territories, onError }) {
               <div className="flex min-w-0 items-center gap-3">
                 <Avatar user={u} size="md" />
                 <div className="min-w-0 leading-snug">
-                  <div className="truncate text-sm font-semibold text-slate-800">{fullName(u)}</div>
+                  <div className="truncate text-sm font-semibold text-slate-800">
+                    {fullName(u)}
+                  </div>
                   {u.title && <div className="truncate text-xs text-slate-600">{u.title}</div>}
                   <div className="truncate text-xs text-slate-400" title={[u.email, `@${u.username}`, u.phone].filter(Boolean).join(' · ')}>
                     {[u.email, u.phone].filter(Boolean).join(' · ')}
@@ -268,13 +357,15 @@ function DirectoryPanel({ approved, users, teams, territories, onError }) {
               <div className={ROW_REST}>
                 <div className="min-w-0 flex-1">
                   <TeamTags teams={teams} value={ids} roles={rolesOf(u)} admin={u.role === 'admin'}
+                    siteDev={!!u.developer} onRemoveSiteDev={() => update(u, { developer: false })}
                     onRemove={(id) => update(u, { team_ids: ids.filter((x) => x !== id) })}
                     onSetRole={(teamId, role) => setTeamRole(u, teamId, role)}>
                     <TerritoryTags territories={u.territories} onRemove={(id) => setTerritories(u, u.territories.map((t) => t.id).filter((x) => x !== id))} />
                   </TeamTags>
                 </div>
                 <div className={ROW_ACTIONS}>
-                  <AddTeamSelect teams={teams} value={ids} onAdd={(id) => update(u, { team_ids: [...ids, id] })} className="w-32" />
+                  <AddTeamSelect teams={teams} value={ids} onAdd={(id) => update(u, { team_ids: [...ids, id] })}
+                    siteDev={!!u.developer} onAddSiteDev={() => update(u, { developer: true })} className="w-32" />
                   {roleSelect(u.role, (role) => update(u, { role }), `Role for ${fullName(u)}`)}
                   <button type="button" className="btn-ghost p-1.5 text-slate-500 hover:text-slate-800" onClick={() => setEditing(u)}
                     title={`Edit ${fullName(u)}`} aria-label={`Edit ${fullName(u)}`}><Pencil size={15} /></button>
@@ -289,7 +380,11 @@ function DirectoryPanel({ approved, users, teams, territories, onError }) {
         })}
         {users.data && !shown.length && <li className="px-3 py-6 text-center text-sm text-slate-400">No one matches.</li>}
       </ul>
-      {editing && <EditAccountPanel user={editing} territories={territories} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); users.reload(); approved.reload(); }} />}
+      {editing && <EditAccountPanel user={editing} territories={territories} onClose={() => setEditing(null)} onSaved={async () => {
+        // Your own roles decide which Admin Access views you see, so pick up the change right away.
+        if (editing.id === me.id) setUser((await api.get('/auth/me')).user);
+        setEditing(null); users.reload(); approved.reload();
+      }} />}
     </div>
   );
 }
@@ -298,7 +393,7 @@ function DirectoryPanel({ approved, users, teams, territories, onError }) {
 function EditAccountPanel({ user, territories, onClose, onSaved }) {
   const [form, setForm] = useState({
     first_name: user.first_name, last_name: user.last_name, email: user.email, phone: user.phone || '',
-    username: user.username, title: user.title || '', team_ids: user.team_ids || [], role: user.role,
+    username: user.username, title: user.title || '', team_ids: user.team_ids || [], role: user.role, developer: !!user.developer,
   });
   const [territoryIds, setTerritoryIds] = useState((user.territories || []).map((t) => t.id));
   const [busy, setBusy] = useState(false);
@@ -317,7 +412,7 @@ function EditAccountPanel({ user, territories, onClose, onSaved }) {
     }
   };
   return (
-    <SidePanel title={`Edit ${fullName(user)}`} subtitle="Account details, teams, territories and site role" onClose={onClose}
+    <SidePanel title={`Edit ${fullName(user)}`} subtitle="Account details, teams, territories and roles" onClose={onClose}
       footer={(
         <div className="flex items-center gap-2">
           <button type="button" className="btn-primary flex-1" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
@@ -335,6 +430,11 @@ function EditAccountPanel({ user, territories, onClose, onSaved }) {
           <label className="label">Site role</label>
           {roleSelect(form.role, (role) => setForm({ ...form, role }), 'Site role', 'w-40')}
           <p className="mt-1 text-xs text-slate-500">Admins can manage access and everyone's accounts.</p>
+          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" className="size-4 accent-brand-600" checked={form.developer} onChange={(e) => setForm({ ...form, developer: e.target.checked })} />
+            Site Dev
+          </label>
+          <p className="mt-1 text-xs text-slate-500">Site Dev members see the Developer section of Admin Access and work through site feedback.</p>
         </div>
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         <button type="submit" className="hidden" />

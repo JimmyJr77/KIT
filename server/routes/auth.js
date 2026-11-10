@@ -30,12 +30,13 @@ r.post('/register', (req, res) => {
   try {
     // An account the Pipedrive sync made for this email is claimed (keeping its tickets) rather than made again.
     const pending = db.prepare('SELECT id FROM users WHERE email = ? AND pending_activation = 1').get(data.email);
-    const values = { ...data, role: approval.role, password_hash: hashPassword(password) };
+    // Site Dev set on the approval carries over; a claimed account keeps it if it already had it.
+    const values = { ...data, role: approval.role, developer: approval.developer ? 1 : 0, password_hash: hashPassword(password) };
     const id = pending
       ? (db.prepare(`UPDATE users SET first_name = @first_name, last_name = @last_name, phone = @phone, phone_digits = @phone_digits, username = @username,
-          title = @title, role = @role, password_hash = @password_hash, pending_activation = 0 WHERE id = @id`).run({ ...values, id: pending.id }), pending.id)
-      : db.prepare(`INSERT INTO users (first_name, last_name, email, phone, phone_digits, username, title, role, password_hash)
-          VALUES (@first_name, @last_name, @email, @phone, @phone_digits, @username, @title, @role, @password_hash)`).run(values).lastInsertRowid;
+          title = @title, role = @role, developer = MAX(developer, @developer), password_hash = @password_hash, pending_activation = 0 WHERE id = @id`).run({ ...values, id: pending.id }), pending.id)
+      : db.prepare(`INSERT INTO users (first_name, last_name, email, phone, phone_digits, username, title, role, developer, password_hash)
+          VALUES (@first_name, @last_name, @email, @phone, @phone_digits, @username, @title, @role, @developer, @password_hash)`).run(values).lastInsertRowid;
     // Teams an admin assigned to the approved email come first, then any the person picked.
     setUserTeams(id, [...json.parse(approval.team_ids, []), ...(teamIdsFrom(req.body) || [])]);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);

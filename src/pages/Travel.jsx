@@ -75,6 +75,7 @@ export default function Travel() {
 
   const scopeQs = () => {
     const qs = new URLSearchParams();
+    if (user.focus) return qs;
     if (traveler) qs.set('traveler', traveler);
     if (team) qs.set('team', team);
     return qs;
@@ -119,7 +120,7 @@ export default function Travel() {
   const total = trips.reduce((s, t) => s + (t.total_estimate || 0), 0);
   const shownActuals = useMemo(() => (month ? actuals.filter((a) => a.spent_on.startsWith(month)) : actuals), [actuals, month]);
   const actualTotal = shownActuals.reduce((s, a) => s + a.amount, 0);
-  const who = traveler ? fullName(users.data?.users.find((u) => u.id === traveler))
+  const who = user.focus ? 'You' : traveler ? fullName(users.data?.users.find((u) => u.id === traveler))
     : team ? teams.data?.teams.find((t) => t.id === Number(team))?.name : 'All travelers';
   const newActual = () => setEditingActual({ traveler_id: traveler || user.id, spent_on: new Date().toLocaleDateString('en-CA'), amount: '', note: '' });
   // An actual cost that comes from a locked trip is changed on the trip.
@@ -232,6 +233,8 @@ export default function Travel() {
             ))}
           </div>
         </div>
+        {/* With Focus on the page holds only your own travel, so there's no traveler or team to pick. */}
+        {!user.focus && <>
         <div className="w-72">
           <label className="label">Traveler</label>
           {/* The Team filter beside this narrows the list, so the picker needs no team dropdown of its own. */}
@@ -245,6 +248,7 @@ export default function Travel() {
             {teams.data?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         </div>
+        </>}
         <div className="w-40">
           <label className="label">Quarter</label>
           <select className="input" value={quarter} onChange={(e) => { setQuarter(e.target.value); setMonth(''); }}>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X, Archive, Target, ListChecks, Redo2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, ArrowLeftRight, CalendarDays, Lock, LockOpen, Settings, X, Archive, Target, ListChecks, Redo2, Zap } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter, pointerWithin, useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, horizontalListSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -16,8 +16,7 @@ import PriorityCard from './PriorityCard.jsx';
 import StrategicPriorities from '../components/StrategicPriorities.jsx';
 import TaskView from '../components/TaskView.jsx';
 import CommentPanel from './CommentPanel.jsx';
-import SupportPanel from './SupportPanel.jsx';
-import { ViewSwitcher, TicketsView, TasksView, ThreadsView, SupportView, WorkEntry } from './LaneViews.jsx';
+import { LANE_VIEWS, ViewSwitcher, TicketsView, TasksView, ThreadsView, WorkView } from './LaneViews.jsx';
 
 // Prefer the card under the pointer, then the lane under the pointer, then the nearest target.
 const collision = (args) => {
@@ -47,9 +46,10 @@ export default function WeeklyPriorities() {
   const tasks = mode === 'tasks';
   const weekly = !strategic && !tasks;
   const [orientation, setOrientation] = useState(readPref('kit.priorities.orientation', 'rows'));
+  const [showWeeks, setShowWeeksState] = useState(() => readPref('kit.priorities.weeks', 'shown') !== 'hidden');
+  const setShowWeeks = (v) => { setShowWeeksState(v); writePref('kit.priorities.weeks', v ? 'shown' : 'hidden'); };
   const [panel, setPanel] = useState(null); // { card } | { newFor: userId }
   const [thread, setThread] = useState(null); // { id } | { options } for a new question or comment
-  const [support, setSupport] = useState(null); // { id } | { options, member } to ask for support
   const [activeId, setActiveId] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -75,7 +75,8 @@ export default function WeeklyPriorities() {
   }, [board]);
 
   const cardsById = useMemo(() => Object.fromEntries((board?.cards || []).map((c) => [c.id, c])), [board]);
-  const members = (board?.members || []).filter((m) => !filter.length || filter.includes(m.id));
+  // With Focus on the board is just you (the server sends no one else), so there's nobody to filter.
+  const members = (board?.members || []).filter((m) => user.focus || !filter.length || filter.includes(m.id));
   const editable = board && board.weekStart >= board.currentWeekStart;
   const planning = board?.planning;
   // On the All board each team has its own lock; someone's new cards are work once all their teams have closed planning.
@@ -158,7 +159,7 @@ export default function WeeklyPriorities() {
     try {
       const r = await api.put(`/priorities/cards/${card.id}/checklist/${index}`, { done });
       setBoard((b) => ({ ...b, cards: b.cards.map((c) => (c.id === card.id ? r.card : c)) }));
-      if (done && board.planning?.closed_count) load(); // a finished task may be logged as additional work
+      if (done) load(); // a finished task is logged as work
     } catch {
       load();
     }
@@ -183,7 +184,7 @@ export default function WeeklyPriorities() {
     return [...byTicket.values()];
   };
 
-  // Open what an additional-work entry points at: its thread, its priority, or the ticket timeline.
+  // Open what a work entry points at: its thread, its priority, or the ticket timeline.
   const openWork = (w) => {
     if (['question', 'comment', 'reply'].includes(w.kind) && w.ref_id) return setThread({ id: w.ref_id });
     if (w.card_id && cardsById[w.card_id]) return setPanel({ card: cardsById[w.card_id] });
@@ -200,7 +201,7 @@ export default function WeeklyPriorities() {
             : tasks ? 'How the team’s tasks stand. Choose a member for their full list, by this week, due date and strategic priority.' : "Set the week's priorities at check-in. Left-most (or top) card is the top priority. Unfinished priorities roll into the next week."}>
           {weekly && <>
           <button className="btn" onClick={() => { const o = orientation === 'rows' ? 'columns' : 'rows'; setOrientation(o); writePref('kit.priorities.orientation', o); }}>
-            <ArrowLeftRight size={15} /> {orientation === 'rows' ? 'Members as columns' : 'Members as rows'}
+            <ArrowLeftRight size={15} /> {user.focus ? 'Views' : 'Members'} as {orientation === 'rows' ? 'columns' : 'rows'}
           </button>
           <button className="btn" onClick={() => navigate('/archive?tab=cards')} title="Archived priority cards"><Archive size={15} /> Archive</button>
           <button className="btn" onClick={() => setSettingsOpen(true)}><Settings size={15} /> Settings</button>
@@ -226,6 +227,7 @@ export default function WeeklyPriorities() {
               {teams.data?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </div>
+          {user.focus ? <div className="flex-1" /> : (
           <div className="min-w-72 flex-1">
             <label className="label">Show members</label>
             <MultiSelect
@@ -235,13 +237,23 @@ export default function WeeklyPriorities() {
               placeholder="All members — type to filter…"
             />
           </div>
+          )}
+          {weekly && (
+            <button type="button" aria-pressed={showWeeks} aria-controls="week-strip" onClick={() => setShowWeeks(!showWeeks)}
+              title={`${showWeeks ? 'Hide' : 'Show'} the weeks${board ? ` · showing the week of ${shortDate(board.weekStart)}` : ''}`}
+              className={`btn h-[38px] px-2.5 ${showWeeks ? 'bg-brand-50 text-brand-700 ring-brand-200' : ''}`}>
+              <CalendarDays size={16} />
+              {!showWeeks && board && <span className="text-xs">{board.weekStart === board.currentWeekStart ? 'This week' : shortDate(board.weekStart)}</span>}
+            </button>
+          )}
         </div>
 
-        {board && weekly && <WeekStrip weekStart={board.weekStart} current={board.currentWeekStart} onPick={setWeekDate} />}
+        {board && weekly && showWeeks && <WeekStrip weekStart={board.weekStart} current={board.currentWeekStart} onPick={setWeekDate} />}
 
         {weekly && <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-brand-600 bg-white ring-1 ring-slate-200" /> Priority (planned)</span>
-          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-amber-500 bg-amber-50 ring-1 ring-amber-200" /> Work (added after planning closed)</span>
+          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-l-4 border-red-500 bg-red-50 ring-1 ring-red-200" /> Mid-sprint add (after planning closed)</span>
+          <span className="flex items-center gap-1.5"><Zap size={13} className="text-amber-500" /> Work (logged automatically)</span>
           <span className="flex items-center gap-1.5"><span className="flex h-3.5 items-center rounded bg-violet-100 px-1 text-violet-800"><Redo2 size={9} strokeWidth={3} /></span> Rolled over (unfinished last week)</span>
           {board && !editable && <span className="flex items-center gap-1 text-slate-600"><Lock size={12} /> Past week — read only</span>}
           {planning && (
@@ -263,20 +275,19 @@ export default function WeeklyPriorities() {
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
         {strategic ? (board && <StrategicPriorities members={members} me={user.id} />) : tasks ? (board && <TaskView members={members} teamSize={board.members.length} onPick={(id) => setFilter(id ? [id] : [])} />) : <>
-        {board && !members.length && <p className="py-16 text-center text-slate-400">No members on this team yet. Assign people to the team from their Profile.</p>}
+        {board && !members.length && <p className="py-16 text-center text-slate-400">{user.focus ? 'You aren’t on this team. Focus is on, so only your own priorities show: pick one of your teams, or All.' : 'No members on this team yet. Assign people to the team from their Profile.'}</p>}
         <DndContext sensors={sensors} collisionDetection={collision} onDragStart={({ active }) => setActiveId(active.id)} onDragEnd={onDragEnd} onDragCancel={() => setActiveId(null)}>
           <div className={orientation === 'rows' ? 'inline-flex min-w-full flex-col gap-3' : 'flex items-start gap-4'}>
-            {members.map((m) => (
-              <Lane key={m.id} member={m} orientation={orientation} asWork={planningClosedFor(m)} cardIds={lanes[m.id] || []} cardsById={cardsById}
+            {/* With Focus on there's only your lane, so each of its views gets a lane of its own instead of sharing one. */}
+            {members.flatMap((m) => (user.focus ? LANE_VIEWS.map((v) => v.key) : [null]).map((fixedView) => (
+              <Lane key={`${m.id}-${fixedView}`} fixedView={fixedView} member={m} orientation={orientation} cardIds={lanes[m.id] || []} cardsById={cardsById}
                 usersById={usersById} editable={editable && (board.team.id !== 'all' || !!m.team_ids?.length)} draggable={draggable}
                 onOpen={(card) => setPanel({ card })} onNew={() => setPanel({ newFor: m.id })}
                 onToggleTask={toggleTask} threads={threadsFor(m, lanes[m.id] || [])}
                 onOpenThread={(t) => setThread({ id: t.id })}
                 work={(board.work || []).filter((w) => w.user_id === m.id)} onOpenWork={openWork}
-                onNewThread={(lanes[m.id] || []).length ? () => setThread({ options: aboutOptions(lanes[m.id]), member: m }) : null}
-                support={(board.support || []).filter((n) => n.requester?.id === m.id)} onOpenSupport={(n) => setSupport({ id: n.id })}
-                onNewSupport={m.id === user.id && editable ? () => setSupport({ options: aboutOptions(lanes[m.id] || []), member: m }) : null} />
-            ))}
+                onNewThread={(lanes[m.id] || []).length ? () => setThread({ options: aboutOptions(lanes[m.id]), member: m }) : null} />
+            )))}
           </div>
           <DragOverlay>{activeCard && <PriorityCard card={activeCard} usersById={usersById} rank={null} overlay />}</DragOverlay>
         </DndContext>
@@ -292,11 +303,6 @@ export default function WeeklyPriorities() {
           onClose={() => setThread(null)} onPosted={(id) => { setThread({ id }); load(); }} onChanged={load} />
       )}
 
-      {support && (
-        <SupportPanel key={support.id ?? 'new'} id={support.id} options={support.options} member={support.member}
-          onClose={() => setSupport(null)} onPosted={(id) => { setSupport({ id }); load(); }} onChanged={load} />
-      )}
-
       {panel && board && (
         <PriorityPanel
           key={panel.card?.id ?? `new-${panel.newFor}`}
@@ -309,7 +315,7 @@ export default function WeeklyPriorities() {
           teamChoices={board.team.id === 'all' && !panel.card
             ? (newMember?.teams || []).map((t) => ({ id: t.id, name: t.name, week: board.teamWeeks[t.id] })) : undefined}
           readOnly={!editable}
-          asWork={planningClosedFor(newMember)}
+          midSprint={planningClosedFor(newMember)}
           onClose={() => setPanel(null)}
           onSaved={() => { setPanel(null); load(); }}
           onNotesChanged={load}
@@ -352,7 +358,7 @@ function WeekStrip({ weekStart, current, onPick }) {
     ref.current?.querySelector('[data-selected="true"]')?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
   }, [weekStart]);
   return (
-    <div className="flex items-center gap-2">
+    <div id="week-strip" className="flex items-center gap-2">
       <button className="btn p-2" onClick={() => onPick(addDays(weekStart, -7))} title="Previous week"><ChevronLeft size={16} /></button>
       <div ref={ref} className="flex flex-1 gap-1.5 overflow-x-auto scroll-smooth py-1 [scrollbar-width:thin]">
         {weeks.map((w) => {
@@ -377,19 +383,46 @@ function WeekStrip({ weekStart, current, onPick }) {
   );
 }
 
-function Lane({ member, asWork, work = [], onOpenWork, orientation, cardIds, cardsById, usersById, editable, draggable, onOpen, onNew, onToggleTask, threads, onOpenThread, onNewThread, support = [], onOpenSupport, onNewSupport }) {
-  const [view, setViewState] = useState(() => readPref(`kit.priorities.view.${member.id}`, 'priorities'));
+/**
+ * One person's lane. Its views share the lane, picked with the icon strip, unless `fixedView` pins it to one: then the
+ * lane is headed by that view's name instead of the person's (Focus shows a lane per view, all of them yours).
+ */
+function Lane({ fixedView = null, member, work = [], onOpenWork, orientation, cardIds, cardsById, usersById, editable, draggable, onOpen, onNew, onToggleTask, threads, onOpenThread, onNewThread }) {
+  // A saved view that no longer exists (the old Support tab) falls back to priority order.
+  const [pickedView, setViewState] = useState(() => {
+    const v = readPref(`kit.priorities.view.${member.id}`, 'priorities');
+    return LANE_VIEWS.some((l) => l.key === v) ? v : 'priorities';
+  });
   const setView = (v) => { setViewState(v); writePref(`kit.priorities.view.${member.id}`, v); };
+  const view = fixedView || pickedView;
   const sortable = draggable && view === 'priorities';
-  const { setNodeRef, isOver } = useDroppable({ id: `lane::${member.id}`, data: { type: 'lane', userId: member.id }, disabled: !sortable });
+  // Only the priority-order lane takes drops; a pinned lane for another view has its own id so it can't stand in for it.
+  const { setNodeRef, isOver } = useDroppable({ id: fixedView && fixedView !== 'priorities' ? `lane::${member.id}::${fixedView}` : `lane::${member.id}`, data: { type: 'lane', userId: member.id }, disabled: !sortable });
   const items = cardIds.map((id) => `${member.id}::${id}`);
   const rows = orientation === 'rows';
-  const header = (
+  const pinned = LANE_VIEWS.find((l) => l.key === fixedView);
+  const tasksOn = cardIds.flatMap((id) => cardsById[id]?.checklist || []);
+  const pinnedCount = {
+    priorities: `${cardIds.length} priorit${cardIds.length === 1 ? 'y' : 'ies'}`,
+    tickets: ((n) => `${n} ticket${n === 1 ? '' : 's'}`)(new Set(cardIds.map((id) => cardsById[id]?.ticket_id).filter(Boolean)).size),
+    tasks: `${tasksOn.filter((t) => t.done).length} of ${tasksOn.length} done`,
+    threads: `${threads.length} open`,
+    work: `${work.length} logged`,
+  }[fixedView];
+  const header = pinned ? (
+    <div className={`flex items-center gap-2.5 ${rows ? 'sticky left-0 z-10 w-52 shrink-0 self-stretch border-r border-slate-200 bg-white px-4 py-3' : 'border-b border-slate-200 px-4 py-3'}`}>
+      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-100 text-brand-700">{pinned.icon}</div>
+      <div className="min-w-0">
+        <div className="text-sm font-semibold whitespace-normal">{pinned.label}</div>
+        <div className="truncate text-xs text-slate-500">{pinnedCount}</div>
+      </div>
+    </div>
+  ) : (
     <div className={`flex items-center gap-2.5 ${rows ? 'sticky left-0 z-10 w-52 shrink-0 self-stretch border-r border-slate-200 bg-white px-4 py-3' : 'border-b border-slate-200 px-4 py-3'}`}>
       <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700">{initials(member)}</div>
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold">{fullName(member)}</div>
-        <div className="truncate text-xs text-slate-500">{member.title}{member.team_name && ` · ${member.team_name}`} · {cardIds.length} priorit{cardIds.length === 1 ? 'y' : 'ies'}{work.length > 0 && ` · ${work.length} additional`}</div>
+        <div className="truncate text-xs text-slate-500">{member.title}{member.team_name && ` · ${member.team_name}`} · {cardIds.length} priorit{cardIds.length === 1 ? 'y' : 'ies'}{work.length > 0 && ` · ${work.length} work`}</div>
       </div>
     </div>
   );
@@ -397,24 +430,21 @@ function Lane({ member, asWork, work = [], onOpenWork, orientation, cardIds, car
   return (
     <div className={`rounded-xl border bg-white shadow-sm ${isOver ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'} ${rows ? 'flex' : `${view === 'tasks' ? 'w-80' : 'w-72'} shrink-0`}`}>
       {header}
-      <div className={rows ? 'sticky left-52 z-10 flex self-stretch bg-white' : ''}>
-        <ViewSwitcher view={view} onChange={setView} rows={rows} counts={{ threads: threads.length, support: support.filter((n) => !n.closed_at).length }} />
-      </div>
+      {!pinned && (
+        <div className={rows ? 'sticky left-52 z-10 flex self-stretch bg-white' : ''}>
+          <ViewSwitcher view={view} onChange={setView} rows={rows} counts={{ threads: threads.length, work: work.length }} />
+        </div>
+      )}
       {view === 'priorities' && (
         <SortableContext items={items} strategy={rows ? horizontalListSortingStrategy : verticalListSortingStrategy} disabled={!sortable}>
           <div ref={setNodeRef} className={body}>
             {cardIds.map((id, i) => cardsById[id] && (
               <SortableCard key={id} id={`${member.id}::${id}`} userId={member.id} card={cardsById[id]} rank={i + 1} usersById={usersById} onOpen={onOpen} rows={rows} />
             ))}
-            {work.length > 0 && (
-              <div className={`flex shrink-0 gap-3 ${rows ? 'border-l-2 border-dashed border-amber-200 pl-3' : 'flex-col border-t-2 border-dashed border-amber-200 pt-3'}`}>
-                {work.map((w) => <WorkEntry key={w.id} entry={w} rows={rows} onOpen={onOpenWork} />)}
-              </div>
-            )}
             {editable && (
               <button onClick={onNew}
                 className={`flex shrink-0 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-brand-500 hover:text-brand-600 ${rows ? 'w-40' : 'py-3'}`}>
-                <Plus size={16} /> {asWork ? 'Add work' : 'Add priority'}
+                <Plus size={16} /> Add priority
               </button>
             )}
           </div>
@@ -423,7 +453,7 @@ function Lane({ member, asWork, work = [], onOpenWork, orientation, cardIds, car
       {view === 'tickets' && <div className={body}><TicketsView cardIds={cardIds} cardsById={cardsById} usersById={usersById} rows={rows} onOpen={onOpen} /></div>}
       {view === 'tasks' && <div className={body}><TasksView cardIds={cardIds} cardsById={cardsById} rows={rows} editable={editable} onToggle={onToggleTask} onOpen={onOpen} /></div>}
       {view === 'threads' && <div className={body}><ThreadsView threads={threads} rows={rows} onOpenThread={onOpenThread} onNew={onNewThread} /></div>}
-      {view === 'support' && <div className={body}><SupportView requests={support} rows={rows} onOpen={onOpenSupport} onNew={onNewSupport} /></div>}
+      {view === 'work' && <div className={body}><WorkView work={work} rows={rows} onOpen={onOpenWork} /></div>}
     </div>
   );
 }

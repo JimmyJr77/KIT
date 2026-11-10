@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db, json, withTeams } from '../db.js';
 import { estimateFlight, estimateCar, mcpStatus, VEHICLE_CLASSES, placeLabel } from '../services/estimators.js';
 import { mileageRate } from '../services/gsa.js';
+import { focusTravel } from '../focus.js';
 import { quarterFor, tripCosts, upcomingQuarters, lockTotal, LOCK_FIELDS, PURPOSES, flightPrefs, isQuarter, quarterStart, quarterMonths } from '../../src/lib/travelCalc.js';
 
 const r = Router();
@@ -105,18 +106,23 @@ const ACTUAL_QUARTER = "substr(a.spent_on, 1, 4) || ' Q' || ((CAST(substr(a.spen
 
 /**
  * Trips, with each quarter's totals for the same traveler or team (whatever the Quarter filter): what its trips are
- * estimated at, and what was actually spent in it.
+ * estimated at, and what was actually spent in it. Someone with focus on gets only their own travel here and in the
+ * outlook and actual costs below (see focusTravel).
  */
 r.get('/', (req, res) => {
   const scope = [];
   const params = {};
   if (req.query.traveler) { scope.push('t.traveler_id = @traveler'); params.traveler = Number(req.query.traveler); }
   if (req.query.team) { scope.push(`t.${ON_TEAM}`); params.team = Number(req.query.team); }
-  const where = [...scope];
+  const focus = { t: focusTravel(req.user, 't'), a: focusTravel(req.user, 'a', { actuals: true }) };
+  const where = [...scope, focus.t].filter(Boolean);
   if (req.query.quarter) { where.push('t.quarter = @quarter'); params.quarter = req.query.quarter; }
   const rows = db.prepare(`${SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY t.date_from DESC`).all(params);
   const quarters = {};
-  const scoped = (alias) => (scope.length ? `WHERE ${scope.map((s) => s.replace('t.', `${alias}.`)).join(' AND ')}` : '');
+  const scoped = (alias) => {
+    const parts = [...scope.map((s) => s.replace('t.', `${alias}.`)), focus[alias]].filter(Boolean);
+    return parts.length ? `WHERE ${parts.join(' AND ')}` : '';
+  };
   for (const q of db.prepare(`SELECT t.quarter, COALESCE(SUM(t.total_estimate), 0) AS total FROM trips t ${scoped('t')} GROUP BY t.quarter`).all(params)) {
     quarters[q.quarter] = { estimated: q.total, actual: 0 };
   }
@@ -139,15 +145,15 @@ r.get('/outlook', (req, res) => {
   const team = Number(req.query.team) || null;
   const rows = db.prepare(`SELECT quarter, COUNT(*) AS trips, COALESCE(SUM(total_estimate), 0) AS total FROM trips
     WHERE quarter IN (SELECT value FROM json_each(@quarters)) AND (@traveler IS NULL OR traveler_id = @traveler)
-    AND (@team IS NULL OR ${ON_TEAM})
+    AND (@team IS NULL OR ${ON_TEAM}) AND ${focusTravel(req.user, 'trips') || '1'}
     GROUP BY quarter`).all({ quarters: JSON.stringify(quarters), traveler, team });
   res.json({ quarters: quarters.map((q) => ({ quarter: q, trips: 0, total: 0, ...rows.find((r) => r.quarter === q) })) });
 });
 
 // ---- Actual spend: what travel really cost, entered as one total per traveler
 
-const actualFilter = (q, alias = 'a') => {
-  const where = [];
+const actualFilter = (q, user, alias = 'a') => {
+  const where = [focusTravel(user, alias, { actuals: alias === 'a' })].filter(Boolean);
   const params = {};
   if (q.traveler) { where.push(`${alias}.traveler_id = @traveler`); params.traveler = Number(q.traveler); }
   if (q.team) { where.push(`${alias}.traveler_id IN (SELECT user_id FROM user_teams WHERE team_id = @team)`); params.team = Number(q.team); }
@@ -157,7 +163,7 @@ const ACTUAL_SQL = `SELECT a.*, u.first_name || ' ' || u.last_name AS traveler_n
 
 /** Actual spend entries, newest first. ?traveler, ?team, ?quarter ("2026 Q4"). */
 r.get('/actuals', (req, res) => {
-  const { where, params } = actualFilter(req.query);
+  const { where, params } = actualFilter(req.query, req.user);
   const m = /^(\d{4}) Q([1-4])$/.exec(req.query.quarter || '');
   if (m) {
     const first = (Number(m[2]) - 1) * 3 + 1;
@@ -176,11 +182,11 @@ r.get('/actuals', (req, res) => {
 r.get('/actuals/summary', (req, res) => {
   const quarter = isQuarter(req.query.quarter) ? req.query.quarter : upcomingQuarters(1)[0];
   const months = quarterMonths(quarter);
-  const { where, params } = actualFilter(req.query);
+  const { where, params } = actualFilter(req.query, req.user);
   const rows = db.prepare(`SELECT substr(a.spent_on, 1, 7) AS month, COUNT(*) AS entries, SUM(a.amount) AS total FROM travel_actuals a
     WHERE substr(a.spent_on, 1, 7) IN (SELECT value FROM json_each(@months)) ${where.length ? `AND ${where.join(' AND ')}` : ''}
     GROUP BY month`).all({ ...params, months: JSON.stringify(months) });
-  const est = actualFilter(req.query, 't');
+  const est = actualFilter(req.query, req.user, 't');
   const trips = db.prepare(`SELECT substr(t.date_from, 1, 7) AS month, COUNT(*) AS trips, COALESCE(SUM(t.total_estimate), 0) AS estimated FROM trips t
     WHERE substr(t.date_from, 1, 7) IN (SELECT value FROM json_each(@months)) ${est.where.length ? `AND ${est.where.join(' AND ')}` : ''}
     GROUP BY month`).all({ ...est.params, months: JSON.stringify(months) });

@@ -23,7 +23,7 @@ const clamp = (x, y, w, h) => ({
 
 /**
  * KITT on every signed-in page. Hovering asks for feedback; clicking opens a short form. What's sent is kept with
- * the page it came from (admins read it on Admin Access), and KITT answers with a word bubble that goes away on its
+ * the page it came from (admins work through it in the Developer section of Admin Access), and KITT answers with a word bubble that goes away on its
  * own. He parks in the bottom-right corner until someone drags him somewhere else: he drives the way he's dragged,
  * so pulling him right turns him around, and he stays where he's left, facing that way, between visits.
  */

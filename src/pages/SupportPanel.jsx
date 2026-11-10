@@ -1,82 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Handshake, Ticket, Loader2, ArrowRight, Trash2, CheckCircle2, RotateCcw } from 'lucide-react';
+import { Ticket, Loader2, ArrowRight, Trash2, CheckCircle2, RotateCcw } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ago, fullName, fullStamp } from '../lib/format.js';
 import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
-import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx';
-
-const SAVE_KEY = /Mac|iP(hone|ad)/.test(navigator.platform) ? '⌘↵' : 'Ctrl+↵';
+import { MentionText } from '../components/MentionTextarea.jsx';
 
 /**
- * Right-hand pane for a support request from Weekly Priorities. With `id`, one request: what's needed, the tickets
- * made from it, and a way to make one (or your own, when one exists). With `options` instead, asking for support.
+ * Right-hand pane for one support request, asked from inside a priority: what's needed, the tickets made from it, and
+ * a way to make one (or your own, when one exists).
  */
-export default function SupportPanel({ id, options, member, onClose, onPosted, onChanged }) {
-  return id
-    ? <RequestPane id={id} onClose={onClose} onChanged={onChanged} />
-    : <NewRequestPane options={options} member={member} onClose={onClose} onPosted={onPosted} />;
-}
-
-function NewRequestPane({ options = [], member, onClose, onPosted }) {
-  const [cardId, setCardId] = useState('');
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const post = async () => {
-    if (!text.trim() || busy) return;
-    setBusy(true);
-    setError('');
-    try {
-      const { request } = await api.post('/support', { body: text, card_id: cardId ? Number(cardId) : null });
-      onPosted(request.id);
-    } catch (e) {
-      setError(e.message);
-      setBusy(false);
-    }
-  };
-  const close = () => { if (!text.trim() || confirm('Discard what you’ve written?')) onClose(); };
-
-  return (
-    <SidePanel title="Ask for support" subtitle={member && `For ${fullName(member)}’s work this week`} onClose={close}
-      footer={(
-        <div className="space-y-2">
-          {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-          <button className="btn-primary w-full" onClick={post} disabled={!text.trim() || busy}>
-            {busy ? 'Sending…' : <><Handshake size={15} /> Ask for support</>}
-          </button>
-        </div>
-      )}>
-      <div className="space-y-4">
-        <div>
-          <label className="label">What support do you need?</label>
-          <MentionTextarea className="input min-h-36" autoFocus value={text} onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.preventDefault(), post())}
-            placeholder="e.g. Need @Marketing to turn the capability statement around by Thursday" />
-          <p className="mt-1 text-[11px] text-slate-400">@ a person, or a team to reach everyone on it. They’ll get an alert. {SAVE_KEY} to send.</p>
-        </div>
-        {options.length > 0 && (
-          <div>
-            <label className="label">For a priority (optional)</label>
-            <select className="input" value={cardId} onChange={(e) => setCardId(e.target.value)}>
-              <option value="">Not for a particular priority</option>
-              {options.map((o) => (
-                <optgroup key={o.ticket_id} label={o.title}>
-                  {o.cards.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-        )}
-        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">
-          Anyone can turn your request into a work ticket. You’ll get an alert when they do. It stays in your lane each week until you close it.
-        </p>
-      </div>
-    </SidePanel>
-  );
+export default function SupportPanel({ id, onClose, onChanged }) {
+  return <RequestPane id={id} onClose={onClose} onChanged={onChanged} />;
 }
 
 function RequestPane({ id, onClose, onChanged }) {

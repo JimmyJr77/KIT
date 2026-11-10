@@ -670,6 +670,8 @@ CREATE INDEX IF NOT EXISTS forecast_snapshots_quarter ON forecast_snapshots(quar
 `);
 // Teams an admin assigns to an approved email before the person activates it (JSON array of team ids).
 addColumn('approved_accounts', 'team_ids', 'TEXT');
+// Site Dev (the developer flag) set on an approved email before the person activates it; it becomes users.developer.
+addColumn('approved_accounts', 'developer', 'INTEGER NOT NULL DEFAULT 0');
 // Documents uploaded to a process step are still ticket documents; this says which step they belong to.
 addColumn('ticket_files', 'process_step_id', 'INTEGER REFERENCES ticket_process_steps(id) ON DELETE SET NULL');
 
@@ -886,6 +888,10 @@ addColumn('tickets', 'pipeline_id', 'INTEGER REFERENCES pipelines(id) ON DELETE 
 // person claims the account (sets a password) by activating with that email.
 addColumn('users', 'pending_activation', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('users', 'pipedrive_id', 'INTEGER');
+// Sidebar pages this person hid from their own sidebar (Settings): a JSON array of paths. They stay under More.
+addColumn('users', 'hidden_nav', "TEXT NOT NULL DEFAULT '[]'");
+// Focus (Settings): while on, the main pages show this person only what they're tied to or mentioned in (see server/focus.js).
+addColumn('users', 'focus', 'INTEGER NOT NULL DEFAULT 0');
 // KIT → Pipedrive goes only when an admin sends it. pipedrive_pending marks a KIT edit (or pin) to a Pipedrive note that
 // hasn't been sent yet; pipedrive_note_id is the Pipedrive note a linked (not uploaded) document went to.
 addColumn('ticket_comments', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');
@@ -971,6 +977,13 @@ CREATE TABLE IF NOT EXISTS race_times (
 );
 CREATE INDEX IF NOT EXISTS race_times_track ON race_times(track, ms);
 `);
+// Site feedback works like a ticket in the Developer section of Admin Access: checked off when done, then archived.
+addColumn('site_feedback', 'done_at', 'TEXT');
+addColumn('site_feedback', 'done_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+addColumn('site_feedback', 'archived_at', 'TEXT');
+// Developers work the site feedback (the Developer section of Admin Access). Separate from role, so an admin or a
+// member can also be one.
+addColumn('users', 'developer', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('ticket_contacts', 'is_primary', 'INTEGER NOT NULL DEFAULT 0'); // the deal's main contact person
 addColumn('contacts', 'pipedrive_id', 'INTEGER');
 addColumn('ticket_comments', 'pinned', 'INTEGER NOT NULL DEFAULT 0'); // kind 'note' is a Pipedrive note; notes can be pinned

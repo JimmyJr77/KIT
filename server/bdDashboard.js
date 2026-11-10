@@ -1,7 +1,7 @@
 // The BD dashboard: the same views for one person (My dashboard, or a BD director on the Company dashboard) and for a
 // whole team. Four parts:
-//   To-do highlights: this week's priorities, open activities, unread alerts, upcoming trips and their estimated cost,
-//     open account objectives, and upcoming events (who from the scope is going, and the events nobody is going to).
+//   To-do highlights: this week's priorities, open activities, pipeline tickets moved this week, unread alerts, upcoming
+//     trips and their estimated cost, open account objectives, and upcoming events (who from the scope is going, and the events nobody is going to).
 //   Top-level metrics: Qualified+ pipeline, booked and revenue this quarter and year, PWIN-adjusted expected bookings,
 //     and expenses (actual travel and marketing) against revenue.
 //   BD numbers: bookings, revenue and expected bookings over time, the Qualified+ pipeline, and book-to-bill three ways.
@@ -14,6 +14,7 @@ import {
   targets, qualifiedTargets, quartersTarget, trailingQuarters, trends, quarters, quarterRange, localToday, QUALIFIED_STAGES, isOpen,
 } from './financials.js';
 import { spendEntries, spendFor } from './marketingSpend.js';
+import { mondayOf, moveCounts } from './tacticalReport.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
 
 const sum = (xs, f) => xs.reduce((s, x) => s + (f(x) || 0), 0);
@@ -72,7 +73,16 @@ function closedPerWeek(s, today) {
   return { closed, weeks };
 }
 
-/** This week's priorities, open activities, alerts, trips, events and account objectives for the scope's people. */
+/**
+ * The scope's pipeline tickets (the BD team: all of them) that moved across the pipeline this week, Monday on: their stage
+ * changed, or they were won or lost (see weekMoves).
+ */
+function pipelineMoves(s, today) {
+  const since = mondayOf(today);
+  return { since, ...moveCounts({ keep: (t) => s.allBids || s.people.includes(t.bd_director_id), from: since, to: today, inBooksOnly: true }) };
+}
+
+/** This week's priorities, open activities, pipeline moves, alerts, trips, events and account objectives for the scope's people. */
 function todo(s) {
   const today = localToday();
   const people = inList(s.people);
@@ -117,6 +127,7 @@ function todo(s) {
       open: activities.length, overdue: activities.filter((a) => a.due_date && a.due_date < today).length,
       dueThisWeek: activities.filter((a) => a.due_date && a.due_date >= today && a.due_date <= addDays(today, 7)).length,
     },
+    pipeline: pipelineMoves(s, today),
     alerts: db.prepare('SELECT COUNT(*) AS n FROM alerts WHERE user_id IN (SELECT value FROM json_each(?)) AND read_at IS NULL').get(people).n,
     trips: { list: trips.map((t) => ({ ...t, traveler: many ? t.traveler : null })), cost: sum(trips, (t) => t.total_estimate) },
     events: withPeople.filter((e) => e.attendees.length),

@@ -88,6 +88,10 @@ function TodoHighlights({ todo, isTeam, self, who, teamLabel }) {
           sub={p.weeks ? `Average over the last ${p.weeks === 1 ? 'week' : `${p.weeks} weeks`} · waiting on client not counted` : 'No finished weeks yet'} />
         <StatTile label="Open tasks" value={todo.activities.open}
           sub={[todo.activities.overdue && `${todo.activities.overdue} overdue`, todo.activities.dueThisWeek && `${todo.activities.dueThisWeek} due this week`].filter(Boolean).join(' · ') || 'Activities assigned'} />
+        <StatTile label="Pipeline tickets moved this week" value={todo.pipeline.moved}
+          sub={[todo.pipeline.forward && `${todo.pipeline.forward} forward`, todo.pipeline.back && `${todo.pipeline.back} back`,
+            todo.pipeline.won && `${todo.pipeline.won} won`, todo.pipeline.lost && `${todo.pipeline.lost} lost`].filter(Boolean).join(' · ')
+            || `No stage changes since ${day(todo.pipeline.since)}`} />
         <StatTile label="Unread alerts" value={todo.alerts} sub={self ? <Link to="/alerts" className="text-brand-700 hover:underline">Open alerts</Link> : null} />
         <StatTile label="Upcoming trips" value={todo.trips.list.length} sub={todo.trips.list.length ? `${compact(todo.trips.cost)} estimated` : 'None planned'} />
       </div>

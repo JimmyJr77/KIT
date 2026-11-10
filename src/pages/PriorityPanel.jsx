@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Plus, Trash2, Search, Ticket, ArrowLeft, Archive, Hourglass } from 'lucide-react';
+import { X, Plus, Trash2, Search, Ticket, ArrowLeft, Archive, Hourglass, Handshake } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
-import { fullName, shortDate, ticketKind } from '../lib/format.js';
+import { ago, fullName, fullStamp, shortDate, ticketKind } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import MultiSelect from '../components/MultiSelect.jsx';
 import CardNotes from './CardNotes.jsx';
+import SupportPanel from './SupportPanel.jsx';
+import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx';
 import { TicketTypeChoice, TeamField } from './NewTicketPanel.jsx';
 import { useApi } from '../lib/data.js';
 import { PANEL_WIDTH, usePanelResize } from '../components/SidePanel.jsx';
+import { canEditTicket } from '../lib/ticketAccess.js';
 
 const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: '', account_type: '', work_team_id: '', territory_id: '', pipeline_status: '', value: '' };
 
@@ -17,7 +20,7 @@ const EMPTY_TICKET = { ticket_type: 'bid', opportunity_title: '', organization: 
  * `teamChoices` ([{ id, name, week }]) is for a new card on the All board: the assignee's teams. With more than one,
  * the panel asks which team the card belongs to.
  */
-export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, teamChoices, readOnly, asWork, onBack: back, onClose: close, onSaved, onNotesChanged }) {
+export default function PriorityPanel({ card, defaultAssignee, users, statuses, teamId, weekStart, teamChoices, readOnly, midSprint, onBack: back, onClose: close, onSaved, onNotesChanged }) {
   const { user } = useAuth();
   const resize = usePanelResize();
   const meta = useApi('/priorities/meta');
@@ -25,6 +28,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   const isNew = !card;
   const [ticketMode, setTicketMode] = useState(isNew ? 'existing' : 'new'); // 'new' | 'existing' (new cards only)
   const [ticketId, setTicketId] = useState(card?.ticket_id ?? null);
+  const [ticketOwner, setTicketOwner] = useState(card?.ticket_created_by ?? null); // who owns an existing ticket
   // On an existing ticket, the priority can be one of its open next steps (activities) instead of a new one.
   const [openSteps, setOpenSteps] = useState([]);
   const [activityId, setActivityId] = useState(null);
@@ -47,16 +51,27 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   const picked = teamChoices?.find((t) => t.id === Number(teamPick));
   const notesDirty = useRef(false);
   const setNotesDirty = useCallback((v) => { notesDirty.current = v; }, []);
+  // Support asked for on this priority. The handshake opens a request; one picked from the list opens over this panel.
+  const [support, setSupport] = useState(card?.support || []);
+  const [ask, setAsk] = useState(null); // the request being written, or null when not asking
+  const [askBusy, setAskBusy] = useState(false);
+  const [askError, setAskError] = useState('');
+  const [openSupport, setOpenSupport] = useState(null); // id of the request shown over this panel
+  const askDirty = useRef(false);
+  askDirty.current = !!ask?.trim();
+  const supportOpen = useRef(false);
+  supportOpen.current = !!openSupport;
 
-  // Don't lose a half-written note when the panel closes.
+  // Don't lose a half-written note or support request when the panel closes.
   const onClose = useCallback(() => {
     if (notesDirty.current && !confirm('You have an unsaved note. Close and discard it?')) return;
+    if (askDirty.current && !confirm('You haven’t sent your support request. Close and discard it?')) return;
     close();
   }, [close]);
   const onBack = back && (() => { if (!notesDirty.current || confirm('You have an unsaved note. Go back and discard it?')) back(); });
 
   useEffect(() => {
-    const h = (e) => e.key === 'Escape' && onClose();
+    const h = (e) => e.key === 'Escape' && !supportOpen.current && onClose(); // Escape closes an open request first
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
@@ -80,6 +95,23 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
       checklist: a ? a.subtasks.map((s) => ({ text: s.text, done: s.done })) : [],
       waiting_client: !!a?.waiting_client,
     }));
+  };
+
+  const reloadSupport = () => card && api.get(`/support?card=${card.id}`).then((d) => setSupport(d.requests)).catch(() => {});
+  const postSupport = async () => {
+    if (!ask?.trim() || askBusy) return;
+    setAskBusy(true);
+    setAskError('');
+    try {
+      const { request } = await api.post('/support', { body: ask, card_id: card.id });
+      setSupport((list) => [request, ...list]);
+      setAsk(null);
+      onNotesChanged?.(); // the card on the board picks up its handshake
+    } catch (e) {
+      setAskError(e.message);
+    } finally {
+      setAskBusy(false);
+    }
   };
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -128,6 +160,8 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   };
 
   const ro = readOnly;
+  // Anyone can add a priority on an existing ticket, but only its owner (or an admin) changes the ticket's own fields.
+  const ticketRo = ro || (!!ticketId && !canEditTicket(user, { created_by: ticketOwner, ticket_type: ticket.ticket_type }));
   // A brand-new ticket (not an existing one picked from search) chooses Pipeline or Work.
   const creatingTicket = isNew && ticketMode === 'new' && !ticketId && !ro;
   const isWork = ticket.ticket_type === 'work';
@@ -150,11 +184,11 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
         )}
         <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
-            <h2 className="font-semibold">{isNew ? (asWork ? 'New work' : 'New priority') : card.is_planned ? 'Priority details' : 'Work details'}</h2>
-            {isNew && asWork && <p className="text-xs text-slate-500">Planning is closed, so this is tracked as work: an accomplishment or new task.</p>}
+            <h2 className="font-semibold">{isNew ? 'New priority' : 'Priority details'}</h2>
+            {isNew && midSprint && <p className="text-xs text-red-700">Planning is closed, so this shows in red as a mid-sprint add.</p>}
             {!isNew && (
               <p className="text-xs text-slate-500">
-                {ticketKind(card)} #{card.ticket_id} · {card.is_planned ? 'Priority (planned)' : 'Work (added after planning closed)'}
+                {ticketKind(card)} #{card.ticket_id} · {card.is_planned ? 'Priority (planned)' : 'Mid-sprint add (after planning closed)'}
                 {card.rolled_at ? ' · Not finished that week: rolled into the next' : card.rolled_since ? ` · Rolled over, unfinished since the week of ${shortDate(card.rolled_since)}` : ''}
               </p>
             )}
@@ -178,7 +212,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
               {isNew && !ro && (
                 <div className="flex rounded-md bg-white p-0.5 text-xs ring-1 ring-slate-200">
                   {[['new', 'New ticket'], ['existing', 'Existing ticket']].map(([m, l]) => (
-                    <button key={m} type="button" onClick={() => { setTicketMode(m); setTicketId(null); setTicket(EMPTY_TICKET); if (activityId) pickStep(null); }}
+                    <button key={m} type="button" onClick={() => { setTicketMode(m); setTicketId(null); setTicketOwner(null); setTicket(EMPTY_TICKET); if (activityId) pickStep(null); }}
                       className={`rounded px-2 py-1 ${ticketMode === m ? 'bg-brand-600 text-white' : 'text-slate-600'}`}>{l}</button>
                   ))}
                 </div>
@@ -187,25 +221,28 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
             {isNew && ticketMode === 'existing' && !ticketId ? (
               <TicketSearch onPick={(t) => {
                 setTicketId(t.id);
+                setTicketOwner(t.created_by ?? null);
                 setTicket({ ticket_type: t.ticket_type || 'bid', opportunity_title: t.opportunity_title, organization: t.organization || '', account_type: t.account_type || '', work_team_id: t.work_team_id ?? '', pipeline_status: t.pipeline_status || '', value: t.value ?? '' });
               }} />
             ) : (
               <>
-                {!isNew && <p className="text-xs text-slate-500">Ticket changes apply to every priority card on this ticket.</p>}
+                {ticketRo && !ro
+                  ? <p className="text-xs text-slate-500">You can add your priority here. Only the ticket’s owner (or an admin) can change the ticket itself.</p>
+                  : !isNew && <p className="text-xs text-slate-500">Ticket changes apply to every priority card on this ticket.</p>}
                 {isNew && ticketId && (
-                  <button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => { setTicketId(null); setTicket(EMPTY_TICKET); if (activityId) pickStep(null); }}>
+                  <button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => { setTicketId(null); setTicketOwner(null); setTicket(EMPTY_TICKET); if (activityId) pickStep(null); }}>
                     ← Choose a different ticket
                   </button>
                 )}
                 {creatingTicket && <TicketTypeChoice value={ticket.ticket_type} onChange={(k) => setT('ticket_type', k)} pipelineClosed={pipelineClosed} />}
                 <Field label={isWork ? 'Title *' : 'Opportunity title *'}>
-                  <input className="input" value={ticket.opportunity_title} onChange={(e) => setT('opportunity_title', e.target.value)} disabled={ro} autoFocus={isNew} />
+                  <input className="input" value={ticket.opportunity_title} onChange={(e) => setT('opportunity_title', e.target.value)} disabled={ticketRo} autoFocus={isNew} />
                 </Field>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Organization">
-                    <input className="input" value={ticket.organization} onChange={(e) => setT('organization', e.target.value)} disabled={ro} />
+                    <input className="input" value={ticket.organization} onChange={(e) => setT('organization', e.target.value)} disabled={ticketRo} />
                   </Field>
-                  <TeamField isWork={isWork} value={ticket.work_team_id} onChange={(v) => setT('work_team_id', v)} teams={meta.data?.teams} disabled={ro} />
+                  <TeamField isWork={isWork} value={ticket.work_team_id} onChange={(v) => setT('work_team_id', v)} teams={meta.data?.teams} disabled={ticketRo} />
                 </div>
                 {creatingTicket && !isWork && (
                   <Field label="Territory">
@@ -218,14 +255,14 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
                 {!isWork && ticket.ticket_type !== 'account' && (
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Pipeline status">
-                    <select className="input" value={ticket.pipeline_status} onChange={(e) => setT('pipeline_status', e.target.value)} disabled={ro}>
+                    <select className="input" value={ticket.pipeline_status} onChange={(e) => setT('pipeline_status', e.target.value)} disabled={ticketRo}>
                       <option value="">—</option>
                       {/* A ticket on another pipeline keeps its own stage as a choice. */}
                       {[...new Set([...statuses, ...(ticket.pipeline_status ? [ticket.pipeline_status] : [])])].map((s) => <option key={s}>{s}</option>)}
                     </select>
                   </Field>
                   <Field label="Value ($)">
-                    <input type="number" min="0" className="input" value={ticket.value} onChange={(e) => setT('value', e.target.value)} disabled={ro} />
+                    <input type="number" min="0" className="input" value={ticket.value} onChange={(e) => setT('value', e.target.value)} disabled={ticketRo} />
                   </Field>
                 </div>
                 )}
@@ -302,6 +339,49 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
               </div>
             )}
           </Field>
+          {!isNew && (
+            <Field label="Support">
+              {support.length > 0 && (
+                <ul className="mb-2 space-y-1.5">
+                  {support.map((n) => (
+                    <li key={n.id}>
+                      <button type="button" onClick={() => setOpenSupport(n.id)}
+                        className={`flex w-full items-start gap-2 rounded-md px-3 py-2 text-left text-sm ring-1 transition hover:ring-brand-500 ${n.closed_at ? 'bg-white ring-slate-200' : 'bg-sky-50 ring-sky-200'}`}>
+                        <Handshake size={15} className={`mt-0.5 shrink-0 ${n.closed_at ? 'text-slate-400' : 'text-sky-600'}`} />
+                        <span className="min-w-0 flex-1">
+                          <span className={`line-clamp-2 break-words ${n.closed_at ? 'text-slate-500' : 'text-slate-800'}`}><MentionText text={n.body} /></span>
+                          <span className="mt-0.5 block text-[11px] text-slate-500" title={fullStamp(n.created_at)}>
+                            {n.closed_at ? 'Closed' : 'Open'} · {n.requester?.id === user.id ? 'You' : fullName(n.requester) || 'Someone'} asked {ago(n.created_at)}
+                            {n.tickets.length > 0 && ` · ${n.tickets.length === 1 ? 'Ticket made' : `${n.tickets.length} tickets made`}`}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!ro && (ask === null ? (
+                <button type="button" className="btn" onClick={() => setAsk('')} title="Ask people or a team for help with this priority">
+                  <Handshake size={15} className="text-sky-600" /> Ask for support
+                </button>
+              ) : (
+                <div className="space-y-2 rounded-md bg-sky-50/60 p-3 ring-1 ring-sky-200">
+                  <MentionTextarea className="input min-h-24" autoFocus value={ask} onChange={(e) => setAsk(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.preventDefault(), postSupport())}
+                    placeholder="What support do you need? e.g. Need @Marketing to turn the capability statement around by Thursday" />
+                  <p className="text-[11px] text-slate-500">@ a person, or a team to reach everyone on it. They’ll get an alert, and anyone can turn it into a work ticket.</p>
+                  {askError && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{askError}</p>}
+                  <div className="flex gap-2">
+                    <button type="button" className="btn-primary" onClick={postSupport} disabled={!ask.trim() || askBusy}>
+                      <Handshake size={15} /> {askBusy ? 'Sending…' : 'Ask for support'}
+                    </button>
+                    <button type="button" className="btn" onClick={() => { setAsk(null); setAskError(''); }}>Cancel</button>
+                  </div>
+                </div>
+              ))}
+              {ro && !support.length && <p className="text-sm text-slate-400">No support requested.</p>}
+            </Field>
+          )}
           <Field label="Comments · also in the ticket’s history">
             <CardNotes cardId={card?.id ?? null} initial={card?.notes || []} user={user} readOnly={ro}
               onDirtyChange={setNotesDirty} onPendingChange={setPendingNotes} onChanged={onNotesChanged} />
@@ -318,13 +398,19 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
           <footer className="space-y-2 border-t border-slate-200 px-5 py-4">
             {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
             <div className="flex gap-2">
-              <button className="btn-primary flex-1" onClick={save} disabled={saving}>{saving ? 'Saving…' : isNew ? (asWork ? 'Add work' : 'Add priority') : 'Save changes'}</button>
+              <button className="btn-primary flex-1" onClick={save} disabled={saving}>{saving ? 'Saving…' : isNew ? 'Add priority' : 'Save changes'}</button>
               {!isNew && !ro && <button className="btn" onClick={archive} title="Archive: take it off the board (restore it from the Archive page)" aria-label="Archive this priority card"><Archive size={15} /></button>}
               {!isNew && <button className="btn-danger" onClick={remove}><Trash2 size={15} /></button>}
             </div>
           </footer>
         )}
       </aside>
+      {openSupport && (
+        <div className="relative z-[60]">
+          <SupportPanel key={openSupport} id={openSupport} onClose={() => setOpenSupport(null)}
+            onChanged={() => { reloadSupport(); onNotesChanged?.(); }} />
+        </div>
+      )}
     </>
   );
 }
@@ -333,31 +419,42 @@ function Field({ label, children }) {
   return <div><label className="label">{label}</label>{children}</div>;
 }
 
+/**
+ * Pick an existing ticket. It opens on your own tickets (you own it, direct it, or have a priority on it); typing searches
+ * everyone's, with yours still listed first.
+ */
 function TicketSearch({ onPick }) {
   const [q, setQ] = useState('');
-  const [tickets, setTickets] = useState([]);
+  const [tickets, setTickets] = useState(null);
+  const searching = q.trim() !== '';
   useEffect(() => {
-    const h = setTimeout(() => api.get(`/priorities/tickets?q=${encodeURIComponent(q)}`).then((d) => setTickets(d.tickets)), 200);
+    const h = setTimeout(() => api.get(`/priorities/tickets?${searching ? `q=${encodeURIComponent(q.trim())}` : 'mine=1'}`).then((d) => setTickets(d.tickets)), searching ? 200 : 0);
     return () => clearTimeout(h);
-  }, [q]);
+  }, [q, searching]);
   return (
     <div>
       <div className="relative">
         <Search size={14} className="absolute top-2.5 left-2.5 text-slate-400" />
-        <input autoFocus className="input pl-8" placeholder="Search by opportunity or organization…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input autoFocus className="input pl-8" placeholder="Search all tickets by opportunity or organization…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <ul className="mt-2 max-h-64 divide-y divide-slate-100 overflow-y-auto rounded-md bg-white ring-1 ring-slate-200">
-        {tickets.map((t) => (
+      <p className="mt-1.5 text-[11px] text-slate-500">{searching ? 'All tickets matching your search, yours first.' : 'Your tickets. Type to search everyone’s.'}</p>
+      <ul className="mt-1 max-h-64 divide-y divide-slate-100 overflow-y-auto rounded-md bg-white ring-1 ring-slate-200">
+        {(tickets || []).map((t) => (
           <li key={t.id}>
             <button type="button" className="w-full px-3 py-2 text-left hover:bg-brand-50" onClick={() => onPick(t)}>
-              <div className="text-sm font-medium">{t.opportunity_title}</div>
+              <div className="flex items-center gap-1.5 text-sm font-medium">
+                <span className="min-w-0 flex-1">{t.opportunity_title}</span>
+                {searching && t.mine && <span className="shrink-0 rounded-full bg-brand-50 px-1.5 text-[10px] font-semibold text-brand-700">Yours</span>}
+              </div>
               <div className="text-xs text-slate-500">
                 #{t.id} · {[t.organization, t.pipeline_status, t.value != null ? usd(t.value) : null].filter(Boolean).join(' · ')} · {t.card_count} card{t.card_count === 1 ? '' : 's'}
               </div>
             </button>
           </li>
         ))}
-        {!tickets.length && <li className="px-3 py-2 text-sm text-slate-400">No tickets found</li>}
+        {tickets && !tickets.length && (
+          <li className="px-3 py-2 text-sm text-slate-400">{searching ? 'No tickets found' : 'You have no open tickets. Type to search everyone’s.'}</li>
+        )}
       </ul>
     </div>
   );
