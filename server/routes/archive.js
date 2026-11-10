@@ -8,6 +8,7 @@ import { db, json } from '../db.js';
 import { laneFor, isArchived } from '../../src/lib/lanes.js';
 import { restoreRows, deleteRows, archivedRowCounts } from '../sample/registry.js';
 import { queueDelete } from '../services/pipedrive.js';
+import { sendModes } from '../services/pipedriveSend.js';
 import { ticketEditDenied } from './tickets.js';
 
 const r = Router();
@@ -60,7 +61,8 @@ function datasets() {
 }
 
 r.get('/', (req, res) => {
-  res.json({ tickets: archivedTickets(), cards: archivedCards(), datasets: datasets(), canDelete: req.user.role === 'admin' });
+  // deletesDeals: deleting a ticket for good also deletes its deal in Pipedrive (deals are being sent there).
+  res.json({ tickets: archivedTickets(), cards: archivedCards(), datasets: datasets(), canDelete: req.user.role === 'admin', deletesDeals: sendModes().deals !== 'off' });
 });
 
 /** Puts a whole dataset back on the boards. Admins only. */
@@ -116,7 +118,9 @@ r.post('/restore', (req, res) => {
 /**
  * Body: { tickets: [ids], cards: [ids] }. Deletes them for good: admins only, archived items only. A ticket takes its
  * priority cards, comments, documents (and their files), tasks, history, won contract and forecast lines with it. A ticket
- * linked to a Pipedrive deal stays out of KIT: pulls skip that deal from now on (and the deal itself is left alone in Pipedrive).
+ * linked to a Pipedrive deal stays out of KIT: pulls skip that deal from now on. While the sync sends deals to Pipedrive
+ * (two way, KIT → Pipedrive only, or a selective sync with deals on) the deal is deleted there too, with the next send;
+ * otherwise the deal itself is left alone in Pipedrive.
  */
 r.post('/delete', (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can delete permanently' });
@@ -127,11 +131,12 @@ r.post('/delete', (req, res) => {
   if (c.length && db.prepare('SELECT COUNT(*) AS n FROM priority_cards WHERE archived_at IS NOT NULL AND id IN (SELECT value FROM json_each(?))').get(JSON.stringify(c)).n !== c.length) {
     return res.status(400).json({ error: 'Archive a priority card before deleting it' });
   }
-  const linked = t.length ? db.prepare('SELECT pipedrive_id FROM tickets WHERE pipedrive_id IS NOT NULL AND id IN (SELECT value FROM json_each(?))').all(JSON.stringify(t)) : [];
+  const linked = t.length ? db.prepare('SELECT pipedrive_id, opportunity_title FROM tickets WHERE pipedrive_id IS NOT NULL AND id IN (SELECT value FROM json_each(?))').all(JSON.stringify(t)) : [];
+  const send = sendModes().deals !== 'off'; // as the sync stands now: a later change of direction doesn't delete these deals
   const deleted = removeForGood(t, c);
   // Unless a live copy of the deal is still here (a full reset followed by a pull makes one).
   linked.filter((l) => !db.prepare('SELECT 1 FROM tickets WHERE pipedrive_id = ? AND archive_set_id IS NULL').get(l.pipedrive_id))
-    .forEach((l) => queueDelete('deal', l.pipedrive_id));
+    .forEach((l) => queueDelete('deal', l.pipedrive_id, null, null, { send, title: l.opportunity_title }));
   res.json({ deleted });
 });
 

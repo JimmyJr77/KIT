@@ -12,7 +12,8 @@ import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
 import { recordWork, recordTicketUpdate } from '../worklog.js';
 import { notifyMentions, notifyTicketOwner } from '../mentions.js';
 import { ticketFields } from './priorities.js';
-import { statusesFor, listPipelines } from '../pipelines.js';
+import { statusesFor, listPipelines, defaultPipeline, pipelineForNew, kitPipelineAllowed, KIT_PIPELINE_CLOSED } from '../pipelines.js';
+import '../sample/registry.js'; // sample_rows, so sample tickets aren't moved off KIT's own pipeline
 import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields } from '../services/pipedriveFields.js';
 import { PROCESS_TYPES, DECISIONS, cleanReviews } from '../../src/lib/process.js';
@@ -144,6 +145,38 @@ r.put('/pipeline-creation', requireAdmin, (req, res) => {
   res.json({ closed: pipelineTicketsClosed() });
 });
 
+// Pipeline tickets still on KIT's own pipeline (sample data aside): the ones to move once it's turned off.
+const ON_KIT_PIPELINE = "ticket_type = 'bid' AND pipeline_id IS NULL AND id NOT IN (SELECT row_id FROM sample_rows WHERE tbl = 'tickets')";
+const kitPipelineOut = () => {
+  const kit = listPipelines()[0];
+  return {
+    allowed: kitPipelineAllowed(), closed: !!kit.closed, hasPipedrive: listPipelines().length > 1, default: defaultPipeline().name,
+    tickets: db.prepare(`SELECT id, opportunity_title AS title FROM tickets WHERE ${ON_KIT_PIPELINE} ORDER BY opportunity_title COLLATE NOCASE`).all(),
+  };
+};
+
+/** Admins: whether KIT's own pipeline takes tickets, where new ones go instead, and the tickets still on it. */
+r.get('/kit-pipeline', requireAdmin, (req, res) => res.json(kitPipelineOut()));
+
+/** Admins. Body: { allowed }. Off, new pipeline tickets go on Pipedrive's first pipeline and none can be moved to KIT's own. */
+r.put('/kit-pipeline', requireAdmin, (req, res) => {
+  setSetting('kit_pipeline_allowed', req.body?.allowed ? '1' : '0');
+  res.json(kitPipelineOut());
+});
+
+/** Admins: move every ticket on KIT's own pipeline (while it's off) to the default one, keeping a stage both have. */
+r.post('/kit-pipeline/move', requireAdmin, (req, res) => {
+  const to = defaultPipeline();
+  if (to.id == null) return res.status(400).json({ error: 'The KIT pipeline is on, so there’s nowhere to move its tickets' });
+  db.transaction(() => {
+    for (const t of db.prepare(`SELECT id, pipeline_status FROM tickets WHERE ${ON_KIT_PIPELINE}`).all()) {
+      const stage = !t.pipeline_status || to.statuses.includes(t.pipeline_status) ? t.pipeline_status : to.statuses[0];
+      db.prepare("UPDATE tickets SET pipeline_id = ?, pipeline_status = ?, updated_at = datetime('now') WHERE id = ?").run(to.id, stage, t.id);
+    }
+  })();
+  res.json(kitPipelineOut());
+});
+
 /**
  * Master tickets. scope: mine (default) | all. Outside "mine", `team` keeps tickets whose owner is
  * on that team. In any scope, `owners` (comma-separated user ids) keeps those owners' tickets and `types`
@@ -214,8 +247,8 @@ r.post('/', (req, res) => {
   if (!tf.opportunity_title) return res.status(400).json({ error: type === 'work' ? 'Title is required' : 'Opportunity title is required' });
   const fields = type === 'work' ? { ...tf, pipeline_status: null, value: null } : { ...tf, work_team_id: null };
   const assign = type === 'bid' ? bidAssignment(req.body, req.user.id, fields.account_type) : NO_ASSIGNMENT;
-  // A pipeline ticket can start on any pipeline, in one of that pipeline's stages.
-  const pipeline = type === 'bid' ? listPipelines().find((p) => p.id === (Number(req.body?.pipeline_id) || null)) || listPipelines()[0] : null;
+  // A pipeline ticket can start on any pipeline that takes tickets (the default when none is chosen), in one of its stages.
+  const pipeline = type === 'bid' ? pipelineForNew(req.body?.pipeline_id) : null;
   if (pipeline && fields.pipeline_status && !pipeline.statuses.includes(fields.pipeline_status)) fields.pipeline_status = null;
   const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, work_team_id, value, ticket_type, created_by,
       bd_director_id, territory_id, projected_win_date, win_date_undetermined, pipeline_id)
@@ -796,7 +829,7 @@ const detailsOf = (t) => ({
   source_origin: t.source_origin ?? null, source_origin_id: t.source_origin_id ?? null, source_channel_id: t.source_channel_id ?? null,
   deal_status: t.deal_status || 'open', won_at: t.won_at ?? null, lost_at: t.lost_at ?? null, value: t.value ?? null, projected_win_date: t.projected_win_date ?? null,
   labels: json.parse(t.labels, []), custom_fields: json.parse(t.custom_fields, []), pipedrive_id: t.pipedrive_id ?? null,
-  pipeline_id: t.pipeline_id ?? null, pipelines: listPipelines().map(({ id, name }) => ({ id, name })),
+  pipeline_id: t.pipeline_id ?? null, pipelines: listPipelines().filter((p) => !p.closed || p.id === (t.pipeline_id ?? null)).map(({ id, name }) => ({ id, name })),
   // Pipedrive's field definitions, so the form shows every custom deal field with its options, and people's and organizations' labels.
   fields: { deal: customDealFields(), person: fieldsOf('person'), organization: fieldsOf('organization') },
   organization: orgOut(t.organization_id ? db.prepare('SELECT * FROM organizations WHERE id = ?').get(t.organization_id) : null)
@@ -843,6 +876,7 @@ r.put('/:id/details', ownerOnly(), (req, res) => {
   if ('pipeline_id' in b && (Number(b.pipeline_id) || null) !== (t.pipeline_id ?? null)) {
     const p = listPipelines().find((x) => x.id === (Number(b.pipeline_id) || null));
     if (!p) return res.status(400).json({ error: 'Unknown pipeline' });
+    if (p.closed) return res.status(400).json({ error: KIT_PIPELINE_CLOSED });
     set.pipeline_id = p.id;
     if (t.pipeline_status && !p.statuses.includes(t.pipeline_status)) set.pipeline_status = p.statuses[0];
   }

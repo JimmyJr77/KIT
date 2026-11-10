@@ -64,7 +64,8 @@ export default function Archive() {
     const contracts = tab === 'cards' ? 0 : picked.reduce((s, r) => s + (r.contract_count || 0), 0);
     const extra = [cards && `${cards} priority card${cards === 1 ? '' : 's'}`, files && `${files} document${files === 1 ? '' : 's'}`,
       contracts && `${contracts} won contract${contracts === 1 ? '' : 's'} with its funding and billing`].filter(Boolean);
-    const text = `Permanently delete ${picked.length} ${noun(picked.length)}?${extra.length ? ` This also deletes ${extra.join(' and ')} on ${picked.length === 1 ? 'it' : 'them'}, plus comments, tasks and history.` : ''}\n\nThis can't be undone.`;
+    const deals = tab === 'cards' || !data?.deletesDeals ? 0 : picked.filter((r) => r.pipedrive_id).length;
+    const text = `Permanently delete ${picked.length} ${noun(picked.length)}?${extra.length ? ` This also deletes ${extra.join(' and ')} on ${picked.length === 1 ? 'it' : 'them'}, plus comments, tasks and history.` : ''}${deals ? `\n\n${deals === 1 ? 'The Pipedrive deal' : `${deals} Pipedrive deals`} will be deleted in Pipedrive too.` : ''}\n\nThis can't be undone.`;
     if (!confirm(text)) return;
     run(() => api.post('/archive/delete', body()), (r) => `Deleted ${r.deleted.tickets ? `${r.deleted.tickets} ticket${r.deleted.tickets === 1 ? '' : 's'} and ` : ''}${r.deleted.cards} priority card${r.deleted.cards === 1 ? '' : 's'} for good.`);
   };

@@ -50,10 +50,12 @@ export function TicketTypeChoice({ value, onChange, pipelineClosed }) {
 
 /**
  * Create a ticket on its own, without a priority. With `bidOnly` (the BD Pipeline) it's always a Pipeline Ticket,
- * starting in `stage` when given, on `pipeline` ({ id, statuses }; KIT's own when not given). Calls onCreated(ticket) once saved.
+ * starting in `stage` when given, on `pipeline` ({ id, statuses }; the default pipeline when not given, or when that one
+ * no longer takes tickets). Calls onCreated(ticket) once saved.
  */
-export default function NewTicketPanel({ bidOnly, stage = '', pipeline = null, onClose, onCreated }) {
+export default function NewTicketPanel({ bidOnly, stage = '', pipeline: asked = null, onClose, onCreated }) {
   const meta = useApi('/priorities/meta');
+  const pipeline = asked && !asked.closed ? asked : (meta.data?.pipelines || []).find((p) => !p.closed) || null;
   const { user } = useAuth();
   const [form, setForm] = useState({ ticket_type: 'bid', opportunity_title: '', organization: '', work_team_id: user.teams?.length === 1 ? user.teams[0].id : '', pipeline_status: stage, value: '' });
   // A BD director creating a pipeline ticket directs it by default, in their territory when they cover just one.
@@ -77,7 +79,7 @@ export default function NewTicketPanel({ bidOnly, stage = '', pipeline = null, o
     setError('');
     try {
       const { ticket } = await api.post('/tickets', isWork ? form
-        : { ...form, ...assign, bd_director_id: assign.bd_director_id || null, territory_id: assign.territory_id || null, pipeline_id: pipeline?.id ?? null });
+        : { ...form, ...assign, bd_director_id: assign.bd_director_id || null, territory_id: assign.territory_id || null, ...(pipeline ? { pipeline_id: pipeline.id } : {}) });
       onCreated(ticket);
     } catch (e) {
       setError(e.message);

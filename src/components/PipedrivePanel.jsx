@@ -132,7 +132,7 @@ export function PipedrivePullPanel({ scope }) {
 // ---- Admins: sending to Pipedrive
 
 const KINDS = [
-  { key: 'deals', label: 'Deal fields', hint: 'Title, value, stage, won / lost, lost reason, probability, expected close date, owner, organization, Account and every custom field' },
+  { key: 'deals', label: 'Deals', hint: 'New pipeline tickets become deals and tickets deleted for good delete their deal; title, value, stage, won / lost, lost reason, probability, expected close date, owner, organization, Account and every custom field' },
   { key: 'labels', label: 'Tags', hint: 'Pipedrive’s labels only; tags made in KIT stay in KIT' },
   { key: 'notes', label: 'Notes', hint: 'Comments added in KIT, and Pipedrive notes edited, pinned or deleted in KIT' },
   { key: 'activities', label: 'Activities', hint: 'Added, edited or deleted in KIT' },
@@ -145,7 +145,7 @@ const KINDS = [
   { key: 'projects', label: 'Projects', hint: 'A contract’s overview, status, phase, dates, labels, plan (tasks and activities), notes and documents, on its Pipedrive project' },
 ];
 const SENT = {
-  deals: 'deal', labels: ['deal’s tags', 'deals’ tags'], notesAdded: 'new note', notesUpdated: 'edited note', notesDeleted: 'deleted note',
+  deals: 'deal', dealsAdded: 'new deal', dealsLinked: ['deal linked by its title', 'deals linked by their titles'], dealsDeleted: 'deleted deal', labels: ['deal’s tags', 'deals’ tags'], notesAdded: 'new note', notesUpdated: 'edited note', notesDeleted: 'deleted note',
   activitiesAdded: ['new activity', 'new activities'], activitiesUpdated: ['edited activity', 'edited activities'], activitiesDeleted: ['deleted activity', 'deleted activities'],
   filesAdded: 'file', filesDeleted: 'deleted file', project_filesDeleted: 'deleted project file', productsAdded: 'new product', productsUpdated: 'changed product', productsDeleted: 'removed product',
   catalogProductsAdded: 'new catalog product', installmentsAdded: 'new installment', installmentsUpdated: 'changed installment', installmentsDeleted: 'removed installment',
@@ -204,6 +204,18 @@ function Preview({ p }) {
   return (
     <div className="divide-y divide-slate-100 rounded-lg border border-slate-200 px-3 py-1">
       <div className="py-1.5 text-xs text-slate-500">Across {plural(p.tickets, 'Pipedrive deal')}. Nothing has been sent yet.</div>
+      {p.dealsNew && (
+        <Section title="New deals" count={n(p.dealsNew)} note="pipeline tickets made in KIT; one Pipedrive already has under the same title is linked instead">
+          {p.dealsNew.items.map((d) => <Item key={d.ticket_id} title={d.title}>{d.pipeline}</Item>)}
+          {more(p.dealsNew)}
+        </Section>
+      )}
+      {p.dealsRemove && (
+        <Section title="Deals to delete" count={n(p.dealsRemove)} note="their tickets were deleted for good in KIT">
+          {p.dealsRemove.items.map((d) => <Item key={d.pipedrive_id} title={d.title || `Deal ${d.pipedrive_id}`}>deleted in Pipedrive</Item>)}
+          {more(p.dealsRemove)}
+        </Section>
+      )}
       {p.deals && (
         <Section title="Deal fields" count={n(p.deals)}>
           {p.deals.items.map((d) => (
@@ -820,7 +832,7 @@ function PipedriveParity() {
   const sameValue = (r) => Math.round(r.pipedrive.value) === Math.round(r.kit.value);
   return (
     <div className="space-y-2">
-      <p className="text-xs text-slate-500">Open, won and lost deals in Pipedrive against the deals KIT has from it. Deals whose tickets were deleted in KIT are left out of KIT&apos;s side (a pull never brings them back, and KIT never deletes a deal in Pipedrive).</p>
+      <p className="text-xs text-slate-500">Open, won and lost deals in Pipedrive against the deals KIT has from it. Deals whose tickets were deleted in KIT are left out of KIT&apos;s side (a pull never brings them back). While the sync sends deals, a deal whose ticket is deleted for good is deleted in Pipedrive too.</p>
       <button type="button" className="btn text-sm" onClick={check} disabled={busy}>{busy ? <Loader2 size={14} className="animate-spin" /> : <Scale size={14} />} Check now</button>
       {error && <p className="text-sm text-red-600">{error}</p>}
       {p && (

@@ -58,7 +58,7 @@ export default function CompanyDashboard() {
 
       {team === 'all' ? <TeamFinancials team="all" /> : !teamRow ? null : chosen ? (
         <BdDashboard key={`p${chosen.id}${territory}`} director={chosen.id} territory={territory}
-          header={(d) => d.isDirector && <PriorityAccounts userId={chosen.id} name={fullName(chosen)} />}>
+          header={(d) => d.isDirector && <PriorityAccounts userId={chosen.id} name={fullName(chosen)} readOnly />}>
           {team === 'Marketing' && <Titled title="Marketing spend"><MarketingSpend entries={false} /></Titled>}
         </BdDashboard>
       ) : (

@@ -94,7 +94,8 @@ r.get('/parity', requireAdmin, async (req, res) => {
       ],
       projects: { pipedrive: projects.length, kit: kitProjects, unlinked: projects.filter((p) => !(p.deal_ids || []).length).length },
       only_kit: onlyKit,
-      // Deals whose tickets were deleted in KIT: a pull never brings them back, and a send never deletes a deal in Pipedrive.
+      // Deals whose tickets were deleted in KIT and are still in Pipedrive: a pull never brings them back. (One deleted while
+      // deals were being sent is deleted in Pipedrive by the next send, and leaves this count then.)
       deleted_in_kit: db.prepare("SELECT COUNT(*) AS n FROM pipedrive_deletes WHERE kind = 'deal'").get().n,
     });
   } catch (e) {

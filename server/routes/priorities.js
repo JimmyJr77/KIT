@@ -5,7 +5,7 @@ import { recordWork, loadWorkLog } from '../worklog.js';
 import { awardTokens, TOKENS } from '../race.js';
 import { notifyMentions } from '../mentions.js';
 import { supportForCards } from './support.js';
-import { KIT_STAGES, listPipelines, allStatuses } from '../pipelines.js';
+import { KIT_STAGES, listPipelines, defaultPipeline, allStatuses } from '../pipelines.js';
 import { nextPosition, openOrder, rankOf, reorderWithin, mirrorCards, setSubtasksFromChecklist, syncMilestone } from '../activities.js';
 import { canEditTicket } from '../../src/lib/ticketAccess.js';
 import { focusBoard } from '../focus.js';
@@ -71,7 +71,8 @@ function loadCard(id) {
   return c ? loadCards(c.team_id, c.week_start).find((x) => x.id === Number(id)) : null;
 }
 
-r.get('/meta', (req, res) => res.json({ pipelineStatuses: PIPELINE_STATUSES, pipelines: listPipelines(), teams: db.prepare('SELECT id, name FROM teams ORDER BY name').all(), pipelineTicketsClosed: pipelineTicketsClosed() }));
+// pipelineStatuses: the stages a new pipeline ticket can start in (the default pipeline's).
+r.get('/meta', (req, res) => res.json({ pipelineStatuses: defaultPipeline().statuses, pipelines: listPipelines(), teams: db.prepare('SELECT id, name FROM teams ORDER BY name').all(), pipelineTicketsClosed: pipelineTicketsClosed() }));
 
 /** The weeks an activity can be placed in for a team: this week and the next few, each with whether its planning has closed. */
 r.get('/weeks', (req, res) => {
@@ -359,11 +360,14 @@ r.post('/cards', (req, res) => {
       if (ticketType === 'bid' && pipelineTicketsClosed()) throw new Error(PIPELINE_TICKETS_CLOSED);
       const fields = ticketType === 'work' ? { ...tf, pipeline_status: null, value: null } : { ...tf, work_team_id: null };
       const assign = ticketType === 'bid' ? bidAssignment(b.ticket, req.user.id, fields.account_type) : NO_ASSIGNMENT;
+      // A new pipeline ticket goes on the default pipeline, in one of its stages.
+      const pipeline = ticketType === 'bid' ? defaultPipeline() : null;
+      if (pipeline && fields.pipeline_status && !pipeline.statuses.includes(fields.pipeline_status)) fields.pipeline_status = null;
       ticketId = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, work_team_id, value, ticket_type, created_by,
-          bd_director_id, territory_id, projected_win_date, win_date_undetermined)
+          bd_director_id, territory_id, projected_win_date, win_date_undetermined, pipeline_id)
         VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @work_team_id, @value, @ticket_type, @created_by,
-          @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined)`)
-        .run({ ...fields, ...assign, ticket_type: ticketType, created_by: req.user.id }).lastInsertRowid;
+          @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined, @pipeline_id)`)
+        .run({ ...fields, ...assign, ticket_type: ticketType, created_by: req.user.id, pipeline_id: pipeline?.id ?? null }).lastInsertRowid;
     }
     // A priority is an activity on the ticket: an existing one placed in this week, or a new one at the bottom of its list.
     let activityId = Number(b.activity_id) || null;

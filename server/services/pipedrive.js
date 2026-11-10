@@ -24,6 +24,7 @@ import {
 } from './pipedriveFields.js';
 import { readProjects, writeProjects } from './pipedriveProjects.js';
 import { holdConflicts } from './pipedriveConflicts.js';
+import { listPipelines, KIT_STAGES } from '../pipelines.js';
 
 const API = process.env.PIPEDRIVE_API_URL || 'https://api.pipedrive.com/v1';
 // Pipedrive calls it the API token; either name works. Stray spaces or quotes from pasting are ignored.
@@ -268,9 +269,12 @@ export const pullsBlockedReason = () => (syncDirection() === 'off' ? 'The sync i
 export const FILE_HOLD_AT = 20;
 export const fileHold = () => json.parse(getSetting('pipedrive_file_hold'), null);
 
-/** Mark a Pipedrive record deleted in KIT: it isn't imported again, and a send deletes it in Pipedrive. */
-export function queueDelete(kind, pipedriveId, dealId = null, projectId = null) {
-  if (pipedriveId) db.prepare('INSERT OR IGNORE INTO pipedrive_deletes (kind, pipedrive_id, deal_id, project_id) VALUES (?, ?, ?, ?)').run(kind, pipedriveId, dealId, projectId);
+/**
+ * Mark a Pipedrive record deleted in KIT: it isn't imported again, and a send deletes it in Pipedrive. A deal is only
+ * deleted in Pipedrive with `send` (its ticket was deleted while deals were being sent); otherwise it's just kept out of KIT.
+ */
+export function queueDelete(kind, pipedriveId, dealId = null, projectId = null, { send = false, title = null } = {}) {
+  if (pipedriveId) db.prepare('INSERT OR IGNORE INTO pipedrive_deletes (kind, pipedrive_id, deal_id, project_id, send, title) VALUES (?, ?, ?, ?, ?, ?)').run(kind, pipedriveId, dealId, projectId, send ? 1 : 0, title);
 }
 export const deletedIds = (kind) => new Set(db.prepare('SELECT pipedrive_id FROM pipedrive_deletes WHERE kind = ?').all(kind).map((x) => x.pipedrive_id));
 
@@ -991,7 +995,8 @@ function holdFiles({ deal, project }) {
 
 /**
  * An admin's decision on held files. 'delete' deletes them in KIT (as Pipedrive did). 'keep' makes them KIT's own files, never
- * sent back; a ticket whose deal is gone from Pipedrive becomes a KIT-only ticket on KIT's own pipeline, back on the boards.
+ * sent back; a ticket whose deal is gone from Pipedrive becomes a KIT-only ticket on KIT's own pipeline (or, with that turned off,
+ * the pipeline it was on), back on the boards.
  */
 export function decideFileHold(action) {
   const hold = fileHold();
@@ -1012,9 +1017,11 @@ export function decideFileHold(action) {
         if (f.deal_gone && f.ticket_id) {
           const t = db.prepare('SELECT * FROM tickets WHERE id = ? AND pipedrive_deleted_at IS NOT NULL').get(f.ticket_id);
           if (t) {
-            const stage = ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation', 'Awarded', 'Lost'].includes(t.pipeline_status) ? t.pipeline_status : null;
-            db.prepare(`UPDATE tickets SET pipedrive_id = NULL, pipeline_id = NULL, pipeline_status = ?, archived_at = NULL, pipedrive_deleted_at = NULL,
-              pipedrive_snapshot = NULL, labels_pending = 0, updated_at = datetime('now') WHERE id = ?`).run(stage, t.id);
+            // With KIT's own pipeline turned off, the ticket stays on the pipeline (and stage) its deal was on.
+            const stay = !!listPipelines()[0].closed;
+            const stage = stay || KIT_STAGES.includes(t.pipeline_status) ? t.pipeline_status : null;
+            db.prepare(`UPDATE tickets SET pipedrive_id = NULL, pipedrive_detached = 1, pipeline_id = ?, pipeline_status = ?, archived_at = NULL, pipedrive_deleted_at = NULL,
+              pipedrive_snapshot = NULL, labels_pending = 0, updated_at = datetime('now') WHERE id = ?`).run(stay ? t.pipeline_id : null, stage, t.id);
             tickets += 1;
           }
         }

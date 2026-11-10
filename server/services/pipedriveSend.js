@@ -1,4 +1,4 @@
-// KIT → Pipedrive. Every kind of change (deal fields, tags, notes, activities, files and their deletions, products,
+// KIT → Pipedrive. Every kind of change (deals made or deleted in KIT and deal fields, tags, notes, activities, files and their deletions, products,
 // installments, followers, people, organizations, projects) is Auto unless an admin sets it to On push or Do not send.
 // Auto kinds go on their own a minute or so after they change; Manual and Auto kinds go when an admin pushes, after a
 // preview of exactly that.
@@ -92,6 +92,18 @@ function ticketsIn(scope = {}) {
 }
 const everyDeal = (scope = {}) => !scope.pipeline_id && !Array.isArray(scope.ticket_ids);
 
+/**
+ * Pipeline tickets made in KIT that Pipedrive has no deal for yet: on one of Pipedrive's pipelines, on the boards, and not
+ * sample data or a ticket kept after its deal was deleted in Pipedrive. Tickets on KIT's own pipeline stay in KIT.
+ */
+function newDealTickets(scope = {}) {
+  if (Array.isArray(scope.ticket_ids)) return [];
+  return db.prepare(`SELECT t.id, t.opportunity_title AS title, p.name AS pipeline FROM tickets t JOIN pipelines p ON p.id = t.pipeline_id AND p.pipedrive_id IS NOT NULL
+    WHERE t.ticket_type = 'bid' AND t.pipedrive_id IS NULL AND t.pipedrive_detached = 0 AND t.archive_set_id IS NULL AND t.archived_at IS NULL AND t.pipedrive_deleted_at IS NULL
+      AND t.id NOT IN (SELECT row_id FROM sample_rows WHERE tbl = 'tickets') ${scope.pipeline_id ? 'AND t.pipeline_id = @pipeline' : ''}
+    ORDER BY t.opportunity_title COLLATE NOCASE`).all(scope.pipeline_id ? { pipeline: Number(scope.pipeline_id) } : {});
+}
+
 // ---- Showing values
 
 const name = (u) => (u ? `${u.first_name} ${u.last_name}`.trim() : null);
@@ -153,6 +165,9 @@ function plan(kinds, scope, { auto = false } = {}) {
   if (on('deals')) {
     out.deals = tickets.map((t) => ({ ticket_id: t.id, title: t.opportunity_title, fields: kitChanges(withCustom(t), tracked) }))
       .filter((d) => d.fields.length).map((d) => ({ ...d, changes: changeList(withCustom(tickets.find((t) => t.id === d.ticket_id)), d.fields) }));
+    // New and deleted tickets are deals to make and to delete.
+    out.dealsNew = newDealTickets(scope).map((t) => ({ ticket_id: t.id, title: t.title, pipeline: t.pipeline }));
+    out.dealsRemove = everyDeal(scope) ? db.prepare("SELECT kind, pipedrive_id, title FROM pipedrive_deletes WHERE kind = 'deal' AND send = 1").all() : [];
   }
   if (on('labels')) out.labels = tickets.filter((t) => t.labels_pending).map((t) => ({ ticket_id: t.id, title: t.opportunity_title, labels: json.parse(t.labels, []) }));
   if (on('notes')) {
@@ -385,7 +400,8 @@ let resumeAt = 0;
 function byKey(out) {
   const m = new Map();
   const put = (key, kind, item) => m.set(key, [...(m.get(key) || []), [kind, item]]);
-  ['deals', 'labels'].forEach((k) => (out[k] || []).forEach((x) => put(x.ticket_id, k, x)));
+  ['deals', 'labels', 'dealsNew'].forEach((k) => (out[k] || []).forEach((x) => put(x.ticket_id, k, x)));
+  (out.dealsRemove || []).forEach((d) => put(`d${d.kind}${d.pipedrive_id}`, 'deals', d));
   ['notes', 'activities', 'files', 'products', 'installments'].forEach((k) => {
     [...(out[k]?.add || []), ...(out[k]?.edit || [])].forEach((x) => put(x.ticket_id, k, x));
     (out[k]?.remove || []).forEach((d) => put(`d${d.kind}${d.pipedrive_id}`, k, d));
@@ -409,7 +425,8 @@ function byKey(out) {
 function without(out, gone) {
   const keep = (x) => !gone.has(x.ticket_id);
   const keepDelete = (d) => !gone.has(`d${d.kind}${d.pipedrive_id}`);
-  ['deals', 'labels', 'followers'].forEach((k) => { if (out[k]) out[k] = out[k].filter(keep); });
+  ['deals', 'labels', 'followers', 'dealsNew'].forEach((k) => { if (out[k]) out[k] = out[k].filter(keep); });
+  if (out.dealsRemove) out.dealsRemove = out.dealsRemove.filter(keepDelete);
   ['notes', 'activities', 'files', 'products', 'installments'].forEach((k) => {
     if (!out[k]) return;
     ['add', 'edit'].forEach((x) => { if (out[k][x]) out[k][x] = out[k][x].filter(keep); });
@@ -581,15 +598,67 @@ async function send({ out, tickets }, phase) {
     }
   }
 
+  const accountField = fieldByName('deal', ACCOUNT_FIELD);
+  const lookups = {
+    stageName: (id) => db.prepare('SELECT name FROM pipeline_stages WHERE pipedrive_id = ?').get(id)?.name,
+    owner: kitUser,
+    territory: (d) => (accountField ? db.prepare('SELECT id FROM territories WHERE pipedrive_id = ?').get(Number(d[accountField.key]) || -1)?.id ?? null : null),
+  };
+
+  // New deals: pipeline tickets made in KIT. A deal Pipedrive already has under the same title (and KIT has no ticket for)
+  // is linked instead, so nothing is made twice. A new deal goes with its title, pipeline, stage, owner, value, close date,
+  // probability and status; its other fields follow below as changes, and its notes, activities, files and people with
+  // the next send.
+  if (out.dealsNew?.length) {
+    const stageId = (t) => (t.pipeline_status && t.pipeline_status !== 'Lost'
+      ? db.prepare('SELECT pipedrive_id FROM pipeline_stages WHERE pipeline_id = ? AND name = ? AND pipedrive_id IS NOT NULL').get(t.pipeline_id, t.pipeline_status)?.pipedrive_id ?? null : null);
+    for (const [i, n] of out.dealsNew.entries()) {
+      phase(`Creating deals (${i + 1} of ${out.dealsNew.length})`);
+      const t = db.prepare('SELECT * FROM tickets WHERE id = ?').get(n.ticket_id);
+      const pipeline = t && !t.pipedrive_id ? db.prepare('SELECT pipedrive_id FROM pipelines WHERE id = ?').get(t.pipeline_id)?.pipedrive_id : null;
+      if (!pipeline) continue; // linked, moved or deleted since the plan was made
+      await attempt(`New deal ${t.opportunity_title}`, async () => {
+        const skipDeals = deletedIds('deal');
+        const hits = (await call('deals/search', { term: t.opportunity_title, fields: 'title', exact_match: 'true', limit: 10 }, { v2: true })).data?.items || [];
+        const match = hits.map((h) => h.item).find((d) => d && String(d.title || '').trim().toLowerCase() === t.opportunity_title.trim().toLowerCase()
+          && !skipDeals.has(d.id) && !db.prepare('SELECT 1 FROM tickets WHERE pipedrive_id = ?').get(d.id));
+        if (match) {
+          // Linked as it stands, with nothing waiting to go: the next pull brings the deal's own values (Pipedrive wins).
+          db.prepare('UPDATE tickets SET pipedrive_id = ?, pipedrive_snapshot = ? WHERE id = ?').run(match.id, snapshotOf(withCustom(t), tracked), t.id);
+          count('dealsLinked');
+          return;
+        }
+        const stage = stageId(t);
+        const owner = pdUser(t.bd_director_id);
+        const body = {
+          title: t.opportunity_title, pipeline_id: pipeline, ...(stage ? { stage_id: stage } : {}), ...(owner ? { owner_id: owner } : {}),
+          ...(t.value != null ? { value: t.value } : {}), ...(t.currency ? { currency: t.currency } : {}),
+          ...(t.projected_win_date ? { expected_close_date: t.projected_win_date } : {}), ...(t.probability != null ? { probability: t.probability } : {}),
+          ...(['won', 'lost'].includes(t.deal_status) ? { status: t.deal_status } : {}), ...(t.deal_status === 'lost' && t.lost_reason ? { lost_reason: t.lost_reason } : {}),
+        };
+        const { data: made } = await call('deals', {}, { method: 'POST', body, v2: true });
+        // Linked at once, so nothing that follows can make the deal a second time.
+        db.prepare("UPDATE tickets SET pipedrive_id = ?, pipedrive_followers_sent = '', pipedrive_people_sent = '', labels_pending = ? WHERE id = ?")
+          .run(made.id, json.parse(t.labels, []).length ? 1 : 0, t.id);
+        count('dealsAdded');
+        const view = dealView((await call(`deals/${made.id}`)).data, lookups);
+        // What Pipedrive decided on its own stays as it is there: the owner when the director has no Pipedrive user (a
+        // deal always has an owner), and the stage when the ticket had none Pipedrive knows. The next pull brings the owner.
+        if (!owner) view.bd_director_id = t.bd_director_id;
+        const status = stage || t.pipeline_status === 'Lost' ? t.pipeline_status : view.pipeline_status;
+        db.prepare('UPDATE tickets SET pipedrive_snapshot = ?, pipeline_status = ? WHERE id = ?').run(snapshotOf(view, tracked), status, t.id);
+        const fresh = db.prepare('SELECT * FROM tickets WHERE id = ?').get(t.id);
+        ticketById.set(t.id, fresh);
+        const fields = kitChanges(withCustom(fresh), tracked);
+        if (fields.length) out.deals = [...(out.deals || []), { ticket_id: t.id, title: t.opportunity_title, fields }];
+        if (fresh.labels_pending && out.labels) out.labels.push({ ticket_id: t.id, title: t.opportunity_title, labels: json.parse(fresh.labels, []) });
+      }, t.id);
+    }
+  }
+
   // Deal fields, checked against the deal as it is now.
   if (out.deals?.length) {
     phase('Sending deal fields');
-    const accountField = fieldByName('deal', ACCOUNT_FIELD);
-    const lookups = {
-      stageName: (id) => db.prepare('SELECT name FROM pipeline_stages WHERE pipedrive_id = ?').get(id)?.name,
-      owner: kitUser,
-      territory: (d) => (accountField ? db.prepare('SELECT id FROM territories WHERE pipedrive_id = ?').get(Number(d[accountField.key]) || -1)?.id ?? null : null),
-    };
     for (const [i, d] of out.deals.entries()) {
       phase(`Sending deal fields (${i + 1} of ${out.deals.length})`);
       const t = withCustom(ticketById.get(d.ticket_id));
@@ -686,6 +755,8 @@ async function send({ out, tickets }, phase) {
       }, `d${kind}${d.pipedrive_id}`);
     }
   };
+  // Deals whose tickets were deleted for good in KIT (Pipedrive keeps a deleted deal for 30 days).
+  if (out.dealsRemove?.length) { phase('Deleting deals'); await removeAll(out.dealsRemove, 'deal', 'deals', true); }
   if (out.notes) { phase('Deleting notes'); await removeAll(out.notes.remove, 'note', 'notes'); }
   if (out.files) {
     phase('Deleting files');

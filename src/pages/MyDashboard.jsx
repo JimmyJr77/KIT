@@ -12,7 +12,7 @@ export default function MyDashboard() {
   const { user } = useAuth();
   const onMarketing = (user.teams || []).some((t) => t.name === 'Marketing');
   return (
-    <BdDashboard director={user.id} self header={(d) => d.isDirector && <PriorityAccounts />}>
+    <BdDashboard director={user.id} self header={(d) => d.isDirector && <PriorityAccounts readOnly />}>
       {onMarketing && (
         <section>
           <h2 className="mb-3 text-base font-semibold text-slate-900">Marketing spend</h2>

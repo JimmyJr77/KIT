@@ -15,6 +15,7 @@ import SampleDataPanel from '../components/SampleDataPanel.jsx';
 import BackupPanel from '../components/BackupPanel.jsx';
 import PipedrivePanel from '../components/PipedrivePanel.jsx';
 import NewPipelineTicketsPanel from '../components/NewPipelineTicketsPanel.jsx';
+import KitPipelinePanel from '../components/KitPipelinePanel.jsx';
 import SiteFeedbackPanel from '../components/SiteFeedbackPanel.jsx';
 import { TerritoryTags, TerritoryChecklist, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
 import { ledTeams } from './MyTeam.jsx';
@@ -91,6 +92,7 @@ function AdminView() {
       <BookingTargetsPanel />
       <QualifiedTargetsPanel />
       <NewPipelineTicketsPanel />
+      <KitPipelinePanel />
       <PipedrivePanel />
       <BackupPanel />
       <SampleDataPanel />

@@ -1499,6 +1499,12 @@ addColumn('delivery_programs', 'pop_end', 'TEXT');
 addColumn('delivery_files', 'pipedrive_id', 'INTEGER');
 addColumn('delivery_files', 'url', 'TEXT');
 addColumn('pipedrive_deletes', 'project_id', 'INTEGER'); // for project items: the Pipedrive project they were on
+// A deal whose ticket was deleted in KIT while deals were being sent is deleted in Pipedrive too (send = 1, with its title
+// for the preview). Without it (every deal deleted before this, or with sending off) the deal is only kept out of KIT.
+addColumn('pipedrive_deletes', 'send', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('pipedrive_deletes', 'title', 'TEXT');
+// A ticket kept in KIT after its deal was deleted in Pipedrive: KIT's own now, so a send never makes a new deal for it.
+addColumn('tickets', 'pipedrive_detached', 'INTEGER NOT NULL DEFAULT 0');
 // A file kept in KIT after it was deleted in Pipedrive (an admin's choice when many go at once): KIT's own now, never sent back.
 addColumn('ticket_files', 'pipedrive_detached', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('delivery_files', 'pipedrive_detached', 'INTEGER NOT NULL DEFAULT 0');

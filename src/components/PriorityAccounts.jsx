@@ -20,11 +20,12 @@ import { isClosed } from '../lib/lanes.js';
 const GENERIC = new Set(['the', 'and', 'for', 'of', 'command', 'department', 'office', 'agency', 'systems', 'center', 'program', 'executive', 'directorate', 'division', 'service', 'services', 'administration', 'national', 'defense', 'force', 'air', 'u.s.', 'us']);
 
 /**
- * Priority accounts, at the top of My dashboard: agencies, departments and organizations sorted into tiers (tiers, not
- * a ranking), the pipeline and work tickets that matter at each, and an ordered list of priority tickets picked from those.
- * The tickets show as standard ticket cards with a "Priority" tag. `userId` shows someone else's, read-only.
+ * Priority accounts: agencies, departments and organizations sorted into tiers (tiers, not a ranking), the pipeline and
+ * work tickets that matter at each, and an ordered list of priority tickets picked from those. The tickets show as
+ * standard ticket cards with a "Priority" tag. `userId` shows someone else's, read-only. `readOnly` shows anyone's for
+ * review, your own included: the dashboards show them; they're arranged under Priorities → Strategic.
  */
-export default function PriorityAccounts({ userId, name }) {
+export default function PriorityAccounts({ userId, name, readOnly = false }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [openAccount, setOpenAccount] = useState(null);
@@ -44,7 +45,8 @@ export default function PriorityAccounts({ userId, name }) {
   const save = (p) => p.then((d) => { setData((cur) => ({ ...cur, ...d })); setError(''); return d; }).catch((e) => { setError(e.message); load(); });
 
   if (!data) return error ? <p className="text-sm text-red-600">{error}</p> : null;
-  const edit = data.canEdit;
+  const edit = data.canEdit && !readOnly;
+  const yours = data.canEdit; // your own, even when shown for review
   const account = openAccount && data.tiers.flatMap((t) => t.accounts.map((a) => ({ ...a, tier_id: t.id }))).find((a) => a.id === openAccount);
   const inTiers = uniqueTickets(data.tiers);
   const empty = !data.tiers.some((t) => t.accounts.length);
@@ -56,8 +58,8 @@ export default function PriorityAccounts({ userId, name }) {
       <div>
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <div className="mr-auto">
-            <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Building2 size={17} className="text-brand-600" /> {edit ? 'Priority accounts' : `${name}'s priority accounts`}</h2>
-            <p className="text-xs text-slate-500">Agencies, departments and organizations in tiers.{edit ? ' Click a tier’s name to rename it, drag accounts between tiers, and click an account to choose its priority tickets.' : ''}</p>
+            <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Building2 size={17} className="text-brand-600" /> {yours ? 'Priority accounts' : `${name}'s priority accounts`}</h2>
+            <p className="text-xs text-slate-500">Agencies, departments and organizations in tiers.{edit ? ' Click a tier’s name to rename it, drag accounts between tiers, and click an account to choose its priority tickets.' : yours ? ' Arrange them under Priorities → Strategic.' : ''}</p>
           </div>
           {edit && <AddTier onAdd={(n) => save(api.post('/priority-accounts/tiers', { name: n }))} />}
         </div>
