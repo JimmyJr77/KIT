@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Flag, Send, X } from 'lucide-react';
+import { Flag, Home, Send, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import RaceGame from './RaceGame.jsx';
 
@@ -11,9 +11,10 @@ const CAR_WIDTH = 112; // w-28
 const DRAG_START_PX = 4; // a press that moves less than this is a click, not a drag
 const PARK_KEY = 'kit.kitt.park';
 
-/** Where the car was last left, and which way it faced: { x, y, flipped }. Nothing saved means the bottom-right corner. */
+/** Where the car was last left, and which way it faced: { x, y, flipped }. Nothing saved means his home spot in the sidebar. */
 const readPark = () => { try { return JSON.parse(localStorage.getItem(PARK_KEY)) || null; } catch { return null; } };
 const writePark = (p) => { try { localStorage.setItem(PARK_KEY, JSON.stringify(p)); } catch { /* private mode */ } };
+const clearPark = () => { try { localStorage.removeItem(PARK_KEY); } catch { /* private mode */ } };
 
 /** Keeps the car's top-left corner inside the window. */
 const clamp = (x, y, w, h) => ({
@@ -24,8 +25,10 @@ const clamp = (x, y, w, h) => ({
 /**
  * KITT on every signed-in page. Hovering asks for feedback; clicking opens a short form. What's sent is kept with
  * the page it came from (admins work through it in the Developer section of Admin Access), and KITT answers with a word bubble that goes away on its
- * own. He parks in the bottom-right corner until someone drags him somewhere else: he drives the way he's dragged,
- * so pulling him right turns him around, and he stays where he's left, facing that way, between visits.
+ * own. He parks in the sidebar, just above More, until someone drags him somewhere else: he drives the way he's dragged,
+ * so pulling him right turns him around, and he stays where he's left, facing that way, between visits. "Send home" on
+ * his right-click menu puts him back. The sidebar renders him, and at home he holds his own room there; he is fixed
+ * either way, so the sidebar never clips him or his bubbles.
  */
 export default function FeedbackWidget() {
   const { pathname, search } = useLocation();
@@ -35,7 +38,7 @@ export default function FeedbackWidget() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [reply, setReply] = useState(0); // a counter so a second send restarts the bubble
-  const [park, setPark] = useState(readPark); // null = the corner
+  const [park, setPark] = useState(readPark); // null = home, in the sidebar
   const [menu, setMenu] = useState(false); // the right-click menu
   const [tokens, setTokens] = useState(null); // { tokens, unlimited } for the menu
   const [race, setRace] = useState(false);
@@ -75,6 +78,7 @@ export default function FeedbackWidget() {
     api.get('/race').then((r) => setTokens({ tokens: r.tokens, unlimited: r.unlimited })).catch(() => setTokens(null));
   };
   const startRace = () => { setMenu(false); setHover(false); setRace(true); };
+  const goHome = () => { setMenu(false); setHover(false); clearPark(); setPark(null); };
 
   // A smaller window shouldn't leave him parked off-screen.
   useEffect(() => {
@@ -150,14 +154,17 @@ export default function FeedbackWidget() {
   // Bubbles and the form hang off the car (above him, or below when he's parked near the top; towards the side of the
   // screen with more room) without taking any room of their own, so he never shifts to make way for them.
   const flipped = !!park?.flipped;
-  const onLeft = !!park && park.x + CAR_WIDTH / 2 < window.innerWidth / 2;
+  const onLeft = !park || park.x + CAR_WIDTH / 2 < window.innerWidth / 2; // home is on the left
   const below = !!park && park.y < 240;
   const showPrompt = hover && !open && !reply && !dragging && !menu && !race;
   const bubbleProps = { onLeft, below };
   const style = park ? { left: park.x, top: park.y } : undefined;
   return (
+    <>
+    {/* At home he has no left or top, so he sits where the sidebar put him, over this stand-in that holds his room. */}
+    {!park && <img src="/kitt.webp" alt="" aria-hidden className="invisible block w-28 shrink-0" />}
     <div ref={wrap} style={style}
-      className={`fixed z-50 print:hidden ${park ? '' : 'right-3 bottom-2'} ${dragging ? 'select-none' : ''}`}
+      className={`fixed z-50 whitespace-normal text-slate-800 print:hidden ${dragging ? 'select-none' : ''}`}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       {race && <RaceGame onClose={() => setRace(false)} />}
       <div className={`absolute flex w-max max-w-[calc(100vw-1.5rem)] ${below ? 'top-full flex-col-reverse' : 'bottom-full flex-col'} ${onLeft ? 'left-0 items-start' : 'right-0 items-end'}`}>
@@ -170,6 +177,11 @@ export default function FeedbackWidget() {
               <p className="px-3 pb-1.5 pt-0.5 text-[11px] text-slate-500">
                 {tokens == null ? 'Checking your tokens…' : `${tokens.tokens} token${tokens.tokens === 1 ? '' : 's'} · finish a task to earn one`}
               </p>
+            )}
+            {park && (
+              <button type="button" role="menuitem" onClick={goHome} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left font-semibold text-slate-800 hover:bg-slate-100">
+                <Home size={15} className="text-slate-500" /> Send home
+              </button>
             )}
           </div>
         )}
@@ -203,6 +215,7 @@ export default function FeedbackWidget() {
           className={`block w-28 drop-shadow-md transition-[filter] group-hover:drop-shadow-lg ${flipped ? '-scale-x-100' : ''} ${dragging ? 'drop-shadow-xl' : ''}`} />
       </button>
     </div>
+    </>
   );
 }
 

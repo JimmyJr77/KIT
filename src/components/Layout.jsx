@@ -215,6 +215,8 @@ export default function Layout() {
             <Crosshair size={15} className="shrink-0" /> {!collapsed && 'Focus on'}
           </NavLink>
         )}
+        {/* KITT's home spot, just above More. Minimized, he lines up with the edge and reaches out over the page. */}
+        <div className={`flex ${collapsed ? 'justify-start' : 'justify-center'}`}><FeedbackWidget /></div>
         {/* More sits outside the scrolling list, so it's always in view however many pages are shown. */}
         <div className={`space-y-1 border-t border-white/10 pt-2 pb-2 ${collapsed ? 'px-2' : 'px-3'}`}>
           <MoreMenu items={items} counts={counts} collapsed={collapsed} />
@@ -247,7 +249,6 @@ export default function Layout() {
       <main className="min-w-0 flex-1 overflow-y-auto print:overflow-visible">
         <Outlet />
       </main>
-      <FeedbackWidget />
     </div>
   );
 }
