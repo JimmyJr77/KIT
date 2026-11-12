@@ -9,7 +9,7 @@ import Avatar from './Avatar.jsx';
 const FLAGS = [
   { key: 'in_numbers', label: 'BD numbers', help: 'A BD director in the report card, Tactical Meeting Report, targets, compensation and dashboards. Off for people who support BD but don’t sell.' },
   { key: 'in_priorities', label: 'Weekly Priorities', help: 'Has a lane on BD’s Weekly Priorities.' },
-  { key: 'in_travel', label: 'Travel', help: 'Their trips and spend count in BD’s travel. Off for someone with a travel budget of their own.' },
+  { key: 'in_travel', label: 'Travel', help: 'BD’s leads approve their trips, and their trips and spend count in BD’s travel totals. Off for someone with a travel budget of their own: an admin approves their trips instead.' },
 ];
 
 function Switch({ on, onChange, disabled, label }) {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { Users } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -7,7 +7,6 @@ import { useApi } from '../lib/data.js';
 import { fullName } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
-import BookingTargetsPanel, { QualifiedTargetsPanel } from '../components/BookingTargets.jsx';
 import { PipedrivePullPanel } from '../components/PipedrivePanel.jsx';
 import { TeamTags } from '../components/TeamPicker.jsx';
 import { TerritoryTags, AddTerritorySelect, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
@@ -96,8 +95,11 @@ function MyTeamPage() {
         );
       })}
       {managesTerritories && <TerritoriesPanel territories={territories} onChanged={users.reload} />}
-      {managesTerritories && <BookingTargetsPanel />}
-      {managesTerritories && <QualifiedTargetsPanel />}
+      {managesTerritories && (
+        <p className="panel text-sm text-slate-600">
+          BD’s booking and qualified pipeline goals are set on <Link to="/admin/team-lead?team=BD" className="font-medium text-brand-700 hover:underline">Team Lead</Link>.
+        </p>
+      )}
       <PipedrivePullPanel scope="team" />
     </div>
   );

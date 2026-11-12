@@ -1743,25 +1743,18 @@ export function setMembershipFlags(userId, teamId, flags) {
     .run({ userId, teamId, ...Object.fromEntries(set.map((k) => [k, flags[k] ? 1 : 0])) }).changes > 0;
 }
 
-// One-time BD clean-up (November 2026). The first Pipedrive sync put every deal owner on BD; Adam Lurie isn't BD, so he
-// comes off it (and off the team his pending approval would give him). Jimmy O'Brien (SVP of Growth, oversees BD) and
-// Lindsay Wall (the Google rep supporting BD) don't sell: out of BD's numbers, still on priorities; Lindsay's travel
-// has its own budget, so it's out of BD's travel too. Matched by name; anyone not here is skipped.
+// One-time clean-up (November 2026): the first Pipedrive sync put every deal owner on BD. Adam Lurie isn't BD, so he
+// comes off it, and off the pending approval that would put him back on when he activates. Anything else about who
+// counts in what is set with the switches on BD Team.
 if (getSetting('bd_cleanup_2026_11') !== '1') {
   const bd = db.prepare("SELECT id FROM teams WHERE name = 'BD'").get()?.id;
   if (bd) {
-    const find = (first, last) => db.prepare(`SELECT id, email FROM users WHERE lower(first_name) LIKE ? AND replace(replace(lower(last_name), '''', ''), '’', '') = ?`)
-      .all(`${first}%`, last);
     db.transaction(() => {
-      for (const u of find('adam', 'lurie')) {
+      for (const u of db.prepare("SELECT id, email FROM users WHERE lower(first_name) = 'adam' AND lower(last_name) = 'lurie'").all()) {
         db.prepare('DELETE FROM user_teams WHERE user_id = ? AND team_id = ?').run(u.id, bd);
         db.prepare("UPDATE approved_accounts SET team_ids = (SELECT json_group_array(value) FROM json_each(team_ids) WHERE value != ?) WHERE email = ? AND json_valid(team_ids)")
           .run(bd, u.email);
       }
-      for (const u of [...find('jim', 'obrien'), ...find('lindsay', 'wall')]) {
-        db.prepare('UPDATE user_teams SET in_numbers = 0 WHERE user_id = ? AND team_id = ?').run(u.id, bd);
-      }
-      for (const u of find('lindsay', 'wall')) db.prepare('UPDATE user_teams SET in_travel = 0 WHERE user_id = ? AND team_id = ?').run(u.id, bd);
       setSetting('bd_cleanup_2026_11', '1');
     })();
   }

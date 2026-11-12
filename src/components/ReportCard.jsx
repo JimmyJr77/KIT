@@ -38,7 +38,7 @@ function explain(key, t) {
       assesses: 'Whether we are winning enough work to hit our booking goal.',
       how: 'Contract value awarded in the period ÷ the booking target for the period. While the period is still running, the result is compared with how much of the period has passed (pace), so 50% booked halfway through the quarter is on track.',
       scale: ['At or ahead of pace (100% or more for a finished period)', 'At least 75% of pace', 'Below 75% of pace'],
-      needs: 'Booking targets (Admin Access or My team › Booking targets) and pipeline tickets marked won.',
+      needs: 'Booking targets (Admin Access › Team Lead › Booking targets) and pipeline tickets marked won.',
     },
     newQualified: {
       assesses: 'Whether we are creating enough future growth opportunity.',

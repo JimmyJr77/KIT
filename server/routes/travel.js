@@ -22,10 +22,13 @@ const SELECT = `SELECT t.*, u.first_name || ' ' || u.last_name AS traveler_name,
 
 // ---- Approval: every saved trip is a travel request for a lead of one of the traveler's teams to approve.
 
-/** Who approves someone's travel: the leads of their teams, or the admins when none of their teams has a lead. */
+/**
+ * Who approves someone's travel: the leads of the teams their travel counts in (a team's Travel switch, on BD Team), or
+ * the admins when none of those teams has a lead. Someone with a travel budget of their own goes to the admins.
+ */
 export function approversFor(travelerId) {
   const leads = db.prepare(`SELECT DISTINCT user_id AS id FROM user_teams WHERE role = 'lead' AND user_id != @t
-    AND team_id IN (SELECT team_id FROM user_teams WHERE user_id = @t)`).all({ t: travelerId }).map((x) => x.id);
+    AND team_id IN (SELECT team_id FROM user_teams WHERE user_id = @t AND in_travel = 1)`).all({ t: travelerId }).map((x) => x.id);
   if (leads.length) return leads;
   return db.prepare("SELECT id FROM users WHERE role = 'admin' AND active = 1 AND id != ?").all(travelerId).map((x) => x.id);
 }

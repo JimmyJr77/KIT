@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate, NavLink, useParams } from 'react-router-dom';
+import { Navigate, NavLink, useParams, useSearchParams } from 'react-router-dom';
 import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil, Target, Code2, Briefcase } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -33,7 +33,7 @@ const leadsBd = (user) => isAdmin(user) || ledTeams(user).some((t) => t.name ===
  */
 const VIEWS = [
   { key: '', label: 'Admin', icon: ShieldCheck, title: 'Admin Access', subtitle: 'Who can use KIT, the team directory and site setup', can: isAdmin, Page: AdminView },
-  { key: 'team-lead', label: 'Team Lead', icon: Target, title: 'Team Lead', subtitle: 'What your team is expected to deliver', can: (u) => ledTeams(u).length > 0, Page: TeamLeadView },
+  { key: 'team-lead', label: 'Team Lead', icon: Target, title: 'Team Lead', subtitle: 'What your team is expected to deliver', can: (u) => leadPages(u).length > 0, Page: TeamLeadView },
   { key: 'bd-team', label: 'BD Team', icon: Briefcase, title: 'BD Team', subtitle: 'What each BD team member counts toward: BD numbers, Weekly Priorities and travel', can: leadsBd, Page: BdTeamPanel },
   { key: 'developer', label: 'Developer', icon: Code2, title: 'Developer', subtitle: 'Site feedback to work through', can: isDeveloper, Page: DeveloperView },
 ];
@@ -91,9 +91,6 @@ function AdminView() {
       <ApprovedPanel approved={approved} teams={teamList} onError={setError} />
       <DirectoryPanel approved={approved} users={users} teams={teamList} territories={territories.data?.territories || []} onError={setError} />
       <TerritoriesPanel territories={territories} onChanged={users.reload} />
-      {/* Admins set targets whether or not they lead BD; BD leads also have them on Team Lead. */}
-      <BookingTargetsPanel />
-      <QualifiedTargetsPanel />
       <NewPipelineTicketsPanel />
       <KitPipelinePanel />
       <PipedrivePanel />
@@ -104,27 +101,46 @@ function AdminView() {
 }
 
 /**
- * What a team's lead sees on the Team Lead view, by team name. Only BD's is built so far: the booking and qualified
- * pipeline targets for each BD director. Add a team here as its lead page takes shape; until then its leads see a note.
+ * What a team's lead sees on the Team Lead view, by team name. Only BD's is built so far: the booking (sales) and
+ * qualified pipeline goals for each BD director. These are the only place goals are set; the report card, dashboards,
+ * Reports and the BD deck all read them. Add a team here as its lead page takes shape; until then its leads see a note.
  */
 const LEAD_PAGES = {
   BD: () => (<><BookingTargetsPanel /><QualifiedTargetsPanel /></>),
 };
 
-/** One page per team the person leads, with a picker when they lead more than one. */
+/**
+ * The teams whose lead page someone can open: the teams they lead, or every team for an admin (`teams`, from /teams;
+ * until it loads, BD stands in so admins aren't sent away).
+ */
+function leadPages(user, teams = null) {
+  const led = ledTeams(user);
+  if (!isAdmin(user)) return led;
+  if (teams?.length) return teams;
+  return led.some((t) => t.name === 'BD') ? led : [...led, { id: 'bd', name: 'BD' }];
+}
+
+/**
+ * One page per team, with a tab for each when there's more than one. The open team is in the address (?team=BD), so a
+ * reload or a shared link comes back to it.
+ */
 function TeamLeadView() {
   const { user } = useAuth();
-  const led = ledTeams(user);
-  const [id, setId] = useState(led[0]?.id);
-  const team = led.find((t) => t.id === id) || led[0];
+  const teams = useApi(isAdmin(user) ? '/teams' : null).data?.teams;
+  const led = leadPages(user, teams);
+  const [params, setParams] = useSearchParams();
+  const team = led.find((t) => t.name === params.get('team')) || led.find((t) => t.name === 'BD') || led[0];
   const Page = LEAD_PAGES[team.name];
+  const pick = (t) => setParams((p) => { p.set('team', t.name); return p; }, { replace: true });
   return (
     <>
       {led.length > 1 && (
-        <div className="flex flex-wrap gap-1" role="tablist" aria-label="Teams you lead">
+        <div className="flex max-w-full overflow-x-auto border-b border-slate-200" role="tablist" aria-label="Team lead pages">
           {led.map((t) => (
-            <button key={t.id} type="button" role="tab" aria-selected={t.id === team.id} onClick={() => setId(t.id)}
-              className={`rounded-full px-3 py-1 text-sm ${t.id === team.id ? 'bg-brand-600 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:text-slate-900'}`}>{t.name}</button>
+            <button key={t.id} type="button" role="tab" aria-selected={t.id === team.id} onClick={() => pick(t)}
+              className={`-mb-px border-b-2 px-4 py-2 text-sm whitespace-nowrap ${t.id === team.id ? 'border-brand-600 font-semibold text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
+              {t.name}
+            </button>
           ))}
         </div>
       )}
