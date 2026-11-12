@@ -30,7 +30,7 @@ const WRITE = /^(\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+
 const prepare = db.prepare.bind(db);
 db.prepare = (sql) => prepare(sql.replace(WRITE, (m, verb, q, name) => `${verb}main.${q}${name}${q}`));
 
-export const TEAMS = ['BD', 'Operations', 'Technical Solutioning', 'Marketing', 'Admin', 'Google', 'Proposal Mgmt'];
+export const TEAMS = ['BD', 'Operations', 'Technical Solutioning', 'Marketing', 'Admin', 'Google', 'Proposal Mgmt', 'Finance'];
 
 export const DEFAULT_SETTINGS = {
   // GSA FY2027 standard CONUS rate (overwritten by the GSA file on import).
