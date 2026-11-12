@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, Trash2, Loader2, ArrowLeft, Phone, Users, SquareCheck, Clock, Mail, Utensils, Flag, Video, MapPin, ExternalLink, GripVertical, ListChecks, MessageSquare, CalendarRange, CalendarPlus, Check, Hourglass } from 'lucide-react';
+import { Plus, Trash2, Loader2, ArrowLeft, Phone, Users, SquareCheck, Clock, Mail, Utensils, Flag, Video, MapPin, ExternalLink, GripVertical, ListChecks, MessageSquare, CalendarRange, Star, Check, Hourglass } from 'lucide-react';
 import { DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -114,6 +114,7 @@ function ActivityRow({ a, ticketId, sortable, onToggle, onOpen, onChanged }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: a.id, disabled: !sortable });
   const [commenting, setCommenting] = useState(false);
   const [picking, setPicking] = useState(null); // { x, y }: where the week menu opens
+  const prio = isPriorityNow(a);
   const next = a.rank === 1;
   return (
     <li ref={setNodeRef} style={sortable ? { transform: CSS.Transform.toString(transform), transition } : undefined}
@@ -147,11 +148,12 @@ function ActivityRow({ a, ticketId, sortable, onToggle, onOpen, onChanged }) {
           )}
         </button>
         {!a.done && (
-          <button type="button" title="Make this a weekly priority" aria-label={`Make “${a.subject}” a weekly priority`} aria-haspopup="menu" aria-expanded={!!picking}
+          <button type="button" title={prio ? 'A weekly priority: change or remove its weeks' : 'Mark as a weekly priority'}
+            aria-label={`${prio ? 'Change' : 'Mark'} “${a.subject}” as a weekly priority`} aria-haspopup="menu" aria-expanded={!!picking} aria-pressed={prio}
             onMouseDown={(e) => e.stopPropagation()} // so the menu's click-away doesn't fire first and reopen it
             onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPicking(picking ? null : { x: r.right, y: r.bottom }); }}
-            className={`flex items-center text-[11px] ${a.cards.length || picking ? 'text-brand-600' : 'text-slate-300 opacity-0 group-hover:opacity-100 focus:opacity-100'} hover:text-brand-700`}>
-            <CalendarPlus size={14} />
+            className={`flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] font-medium ${prio ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' : 'text-slate-400 hover:bg-slate-50 hover:text-amber-600'}`}>
+            <Star size={13} className={prio ? 'fill-amber-400 text-amber-500' : ''} /> Priority
           </button>
         )}
         <button type="button" onClick={() => setCommenting(!commenting)} title="Comment on this activity" aria-label={`Comment on “${a.subject}”`}
@@ -159,7 +161,7 @@ function ActivityRow({ a, ticketId, sortable, onToggle, onOpen, onChanged }) {
           <MessageSquare size={14} />{a.comment_count > 0 && a.comment_count}
         </button>
       </div>
-      {picking && <PriorityWeekMenu activity={a} ticketId={ticketId} x={picking.x} y={picking.y} onClose={() => setPicking(null)} onAdded={() => { setPicking(null); onChanged(); }} />}
+      {picking && <PriorityWeekMenu activity={a} ticketId={ticketId} x={picking.x} y={picking.y} onClose={() => setPicking(null)} onChanged={onChanged} />}
       {commenting && (
         <div className="mt-1.5 ml-6">
           <CommentComposer ticketId={ticketId} target={{ type: 'activity', id: a.id }} autoFocus placeholder={`Comment on “${a.subject}”…`}
@@ -201,6 +203,8 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
   const initial = activity ? formOf(activity) : blank(ticket);
   const [form, setForm] = useState(initial);
   const [newSubtasks, setNewSubtasks] = useState([]);
+  const { user } = useAuth();
+  const [prioTeam, setPrioTeam] = useState(''); // a new activity: the team to make it a priority for this week ('' = not one)
   const [users, setUsers] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [tickets, setTickets] = useState([]);
@@ -222,7 +226,12 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
     setError('');
     try {
       if (activity) await api.put(`/activities/${activity.id}`, form);
-      else await api.post('/activities', { ...form, subtasks: newSubtasks });
+      else {
+        const { activity: made } = await api.post('/activities', { ...form, subtasks: newSubtasks });
+        if (prioTeam) {
+          await api.post('/priorities/cards', { team_id: prioTeam, ticket_id: made.ticket_id, activity_id: made.id, assignees: [made.assignee_id || user.id] });
+        }
+      }
       onSaved();
     } catch (e) {
       setError(e.message);
@@ -346,6 +355,21 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
             ? <SubtaskList activity={activity} ticketId={ticket.id} onChanged={onChanged} />
             : <DraftSubtasks value={newSubtasks} onChange={setNewSubtasks} />}
         </section>
+
+        {!activity && (user.teams || []).length > 0 && (
+          <section className="border-t border-slate-200 pt-4">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={!!prioTeam}
+                onChange={(e) => setPrioTeam(e.target.checked ? user.teams[0].id : '')} />
+              <Star size={13} className={prioTeam ? 'fill-amber-400 text-amber-500' : 'text-slate-400'} /> Make it a weekly priority this week
+            </label>
+            {prioTeam && user.teams.length > 1 && (
+              <select className="input mt-1.5 ml-6 h-8 w-48 py-0 text-sm" value={prioTeam} onChange={(e) => setPrioTeam(Number(e.target.value))} aria-label="Team">
+                {user.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            )}
+          </section>
+        )}
 
         {activity && (
           <>
@@ -492,11 +516,15 @@ function ActivityComments({ comments, activity }) {
   return <div className="mb-2 space-y-1.5">{comments.map((m) => <div key={m.id} className="space-y-1">{one(m)}{m.replies.map((x) => one(x, true))}</div>)}</div>;
 }
 
+/** Whether an activity is a weekly priority this week or a coming one (weeks start within the last seven days). */
+const weekAgo = () => new Date(Date.now() - 6 * 864e5).toLocaleDateString('en-CA');
+export const isPriorityNow = (a) => (a.cards || []).some((c) => c.week_start >= weekAgo());
+
 /**
- * The menu behind an activity's priority icon: pick the week to make it a priority in, for one of your teams.
+ * The menu behind an activity's Priority button: pick the week to make it a priority in, for one of your teams.
  * Weeks start on the team's check-in day. A week whose planning has closed takes it as work instead.
  */
-function PriorityWeekMenu({ activity, ticketId, x, y, onClose, onAdded }) {
+function PriorityWeekMenu({ activity, ticketId, x, y, onClose, onChanged }) {
   const { user } = useAuth();
   const teams = user.teams || [];
   const [team, setTeam] = useState(teams[0]?.id ?? '');
@@ -517,23 +545,27 @@ function PriorityWeekMenu({ activity, ticketId, x, y, onClose, onAdded }) {
     api.get(`/priorities/weeks?team=${team}`).then(setWeeks).catch((e) => setError(e.message));
   }, [team]);
 
-  const onWeek = (w) => activity.cards.some((c) => c.team_id === Number(team) && c.week_start === w);
-  const add = async (week) => {
+  const cardOn = (w) => activity.cards.find((c) => c.team_id === Number(team) && c.week_start === w);
+  // Picking a week marks it; picking a marked week takes it off that week (the activity stays on the ticket).
+  const toggle = async (week) => {
+    const card = cardOn(week);
+    if (card && !confirm(`Take “${activity.subject}” off ${card.team_name}’s priorities for the week of ${shortDate(week)}? Notes on that week’s card go with it.`)) return;
     setBusy(week);
     setError('');
     try {
-      await api.post('/priorities/cards', { team_id: team, ticket_id: ticketId, activity_id: activity.id, week_start: week, assignees: [activity.assignee_id || user.id] });
-      onAdded();
+      if (card) await api.del(`/priorities/cards/${card.id}?keep_activity=1`);
+      else await api.post('/priorities/cards', { team_id: team, ticket_id: ticketId, activity_id: activity.id, week_start: week, assignees: [activity.assignee_id || user.id] });
+      onChanged();
     } catch (e) {
       setError(e.message);
-      setBusy(null);
     }
+    setBusy(null);
   };
   const width = 240;
   return (
-    <div ref={ref} role="menu" aria-label="Make it a priority for the week of" style={{ left: Math.max(8, Math.min(x - width, window.innerWidth - width - 8)), top: y + 4 }}
+    <div ref={ref} role="menu" aria-label="Weekly priority for the week of" style={{ left: Math.max(8, Math.min(x - width, window.innerWidth - width - 8)), top: y + 4 }}
       className="fixed z-50 rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
-      <div className="px-3 pt-1 pb-1.5 text-[11px] font-semibold text-slate-500 uppercase" style={{ width }}>Priority for the week of</div>
+      <div className="px-3 pt-1 pb-1.5 text-[11px] font-semibold text-slate-500 uppercase" style={{ width }}>Weekly priority for the week of</div>
       {!teams.length && <p className="px-3 py-1.5 text-xs text-slate-400">You’re not on a team yet.</p>}
       {teams.length > 1 && (
         <div className="px-3 pb-1.5">
@@ -545,10 +577,10 @@ function PriorityWeekMenu({ activity, ticketId, x, y, onClose, onAdded }) {
       {team && !weeks && !error && <p className="px-3 py-1.5 text-xs text-slate-400">Loading…</p>}
       {weeks?.weeks.map((w) => {
         const current = w.week_start === weeks.currentWeekStart;
-        const on = onWeek(w.week_start);
+        const on = !!cardOn(w.week_start);
         return (
-          <button key={w.week_start} type="button" role="menuitem" disabled={on || !!busy} onClick={() => add(w.week_start)}
-            title={on ? 'Already a priority for this team that week' : w.closed ? 'Planning for this week has closed, so it’s added as work' : undefined}
+          <button key={w.week_start} type="button" role="menuitemcheckbox" aria-checked={on} disabled={!!busy} onClick={() => toggle(w.week_start)}
+            title={on ? 'A priority for this team that week: select to take it off' : w.closed ? 'Planning for this week has closed, so it’s added as work' : undefined}
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-50 focus:bg-slate-50 focus:outline-none disabled:cursor-default disabled:opacity-60">
             <span className="w-3.5 shrink-0">{on ? <Check size={14} className="text-brand-600" /> : busy === w.week_start ? <Loader2 size={14} className="animate-spin text-slate-400" /> : null}</span>
             <span className="flex-1">{current ? 'Current week' : shortDate(w.week_start)}{current && <span className="ml-1 text-xs text-slate-400">{shortDate(w.week_start)}</span>}</span>
@@ -561,28 +593,10 @@ function PriorityWeekMenu({ activity, ticketId, x, y, onClose, onAdded }) {
   );
 }
 
-/** Which weeks this activity is someone's priority, and a way to make it one this week. */
+/** Which weeks this activity is someone's weekly priority, with the week picker to mark or unmark it. */
 function WeeklyPriority({ activity, ticket, onChanged }) {
-  const { user } = useAuth();
-  const teams = user.teams || [];
-  const [team, setTeam] = useState(teams[0]?.id ?? '');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  // Already on that team's board this week (weeks start on the team's check-in day, within the last 7 days).
-  const weekAgo = new Date(Date.now() - 6 * 864e5).toLocaleDateString('en-CA');
-  const onThisWeek = activity.cards.some((c) => c.team_id === Number(team) && c.week_start >= weekAgo);
-  const add = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      await api.post('/priorities/cards', { team_id: team, ticket_id: ticket.id, activity_id: activity.id, assignees: [activity.assignee_id || user.id] });
-      onChanged();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const [picking, setPicking] = useState(null);
+  const prio = isPriorityNow(activity);
   return (
     <section className="border-t border-slate-200 pt-4">
       <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><CalendarRange size={13} /> Weekly priorities</h4>
@@ -591,19 +605,15 @@ function WeeklyPriority({ activity, ticket, onChanged }) {
           {activity.cards.map((c) => <li key={c.id}>{c.team_name} · week of {shortDate(c.week_start)}</li>)}
         </ul>
       )}
-      {!activity.done && teams.length > 0 && !(onThisWeek && teams.length === 1) && (
-        <div className="flex items-center gap-1.5">
-          {teams.length > 1 && (
-            <select className="input h-8 w-40 py-0 text-sm" value={team} onChange={(e) => setTeam(Number(e.target.value))} aria-label="Team">
-              {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-          )}
-          <button type="button" className="btn h-8 px-2.5 text-xs" onClick={add} disabled={busy || !team || onThisWeek}
-            title={onThisWeek ? 'Already a priority for this team this week' : undefined}><Plus size={13} /> Make it a priority this week</button>
-        </div>
+      {!activity.done && (
+        <button type="button" className="btn h-8 px-2.5 text-xs" aria-haspopup="menu" aria-expanded={!!picking}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPicking(picking ? null : { x: r.right, y: r.bottom }); }}>
+          <Star size={13} className={prio ? 'fill-amber-400 text-amber-500' : ''} /> {prio ? 'Change priority weeks' : 'Mark as a weekly priority'}
+        </button>
       )}
+      {picking && <PriorityWeekMenu activity={activity} ticketId={ticket.id} x={picking.x} y={picking.y} onClose={() => setPicking(null)} onChanged={onChanged} />}
       {!activity.cards.length && activity.done && <p className="text-xs text-slate-400">Not on anyone’s weekly priorities.</p>}
-      {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}
     </section>
   );
 }

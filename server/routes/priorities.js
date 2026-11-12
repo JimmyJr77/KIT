@@ -482,12 +482,17 @@ r.put('/cards/:id/archive', (req, res) => {
 });
 
 /** Deleting a priority deletes its activity too, unless the activity is on another week's board or came from Pipedrive. */
+/**
+ * Take a card off its board. An activity made just for it (not from Pipedrive, on no other card) goes with it, unless
+ * ?keep_activity=1: unmarking an activity as a priority from its ticket keeps the activity.
+ */
 r.delete('/cards/:id', (req, res) => {
   const card = db.prepare('SELECT * FROM priority_cards WHERE id = ?').get(req.params.id);
   if (!card) return res.json({ ok: true });
+  const keep = req.query.keep_activity === '1';
   db.transaction(() => {
     db.prepare('DELETE FROM priority_cards WHERE id = ?').run(card.id);
-    const k = card.activity_id && db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(card.activity_id);
+    const k = !keep && card.activity_id && db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(card.activity_id);
     if (k && !k.pipedrive_id && !db.prepare('SELECT 1 FROM priority_cards WHERE activity_id = ?').get(k.id)) {
       db.prepare("UPDATE ticket_comments SET target_type = NULL, target_id = NULL WHERE (target_type = 'activity' AND target_id = ?) OR (target_type = 'subtask' AND target_id IN (SELECT id FROM activity_subtasks WHERE task_id = ?))").run(k.id, k.id);
       db.prepare('DELETE FROM ticket_tasks WHERE id = ?').run(k.id);
