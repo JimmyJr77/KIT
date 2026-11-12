@@ -1,7 +1,7 @@
 // The BD report card: are BD directors performing and winning? Seven measures for one director (or the whole team)
 // over a quarter or a year. Each has a value, a plain-language detail, and a status: good, watch, or behind
 // (or "none" when there isn't enough to judge). Thresholds are below so they're easy to tune.
-import { db } from './db.js';
+import { db, BD_DIRECTOR_IDS } from './db.js';
 import { bids, contracts, forecastLines, targets, quartersTarget, trailingQuarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES, isOpen, isWon } from './financials.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
 
@@ -201,12 +201,12 @@ export function reportCard(director, p) {
 }
 
 /**
- * The BD directors with a card of their own: active members of the BD team. Pipeline tickets directed by anyone else still count
+ * The BD directors with a card of their own: active members of the BD team who count in its numbers (BD Team page). Pipeline tickets directed by anyone else still count
  * toward the team's card.
  */
 export function directors() {
   return db.prepare(`SELECT DISTINCT u.id, u.first_name, u.last_name, u.title FROM users u
-    WHERE u.active = 1 AND u.id IN (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD')
+    WHERE u.active = 1 AND u.id IN (${BD_DIRECTOR_IDS})
     ORDER BY u.last_name, u.first_name`).all();
 }
 

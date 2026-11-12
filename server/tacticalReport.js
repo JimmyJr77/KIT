@@ -143,20 +143,25 @@ export function tacticalReport({ week, director = null, weeks = 13 } = {}) {
   const who = director ? db.prepare("SELECT first_name || ' ' || last_name AS n FROM users WHERE id = ?").get(director)?.n : 'BD team';
   const people = q.people.map((p) => ({ ...p, now: p.values.at(-1), change: change(p.values) }));
 
-  // Each person's numbers: everyone with qualified pipeline, and anyone else who directs a ticket on the week's lists.
+  // Each BD director's numbers (those with qualified pipeline, or anything on the week's lists). Tickets directed by
+  // anyone else, or by no one, share one Others row in the team view when they have anything to show; they still count
+  // in the team's totals.
+  const bdIds = new Set(director ? [director] : directors().map((d) => d.id));
   const names = new Map(people.map((p) => [p.id, p.name]));
-  [...moves, ...removed].forEach((x) => { if (x.directorId && !names.has(x.directorId)) names.set(x.directorId, x.director); });
-  steps.forEach((x) => { if (x.bd_director_id && !names.has(x.bd_director_id)) names.set(x.bd_director_id, x.director); });
-  const mine = (id) => (x) => (x.directorId ?? x.bd_director_id ?? null) === id;
-  const rowFor = (id, name) => {
+  [...moves, ...removed].forEach((x) => { if (bdIds.has(x.directorId) && !names.has(x.directorId)) names.set(x.directorId, x.director); });
+  steps.forEach((x) => { if (bdIds.has(x.bd_director_id) && !names.has(x.bd_director_id)) names.set(x.bd_director_id, x.director); });
+  const idOf = (x) => x.directorId ?? x.bd_director_id ?? null;
+  const rowFor = (id, name, mine) => {
     const p = people.find((x) => x.id === id);
-    return { id, name, qualified: p ? p.now : 0, qualifiedChange: p ? p.change : 0, ...countsOf(moves.filter(mine(id)), removed.filter(mine(id)), steps.filter(mine(id))) };
+    return { id, name, qualified: p ? p.now : 0, qualifiedChange: p ? p.change : 0, ...countsOf(moves.filter(mine), removed.filter(mine), steps.filter(mine)) };
   };
-  const byPerson = [...names].map(([id, name]) => rowFor(id, name));
-  // Tickets with no BD director get a row of their own when they have anything to show (the team view only).
+  const byPerson = [...names].map(([id, name]) => rowFor(id, name, (x) => idOf(x) === id));
   if (!director) {
-    const none = rowFor(null, 'No BD director');
-    if (none.closed || none.forward || none.downgradedOrRemoved || none.steps) byPerson.push(none);
+    const others = rowFor(null, 'Others (not a BD director)', (x) => !bdIds.has(idOf(x)));
+    // Their qualified pipeline is whatever the team holds beyond the directors'.
+    const rest = (i) => (q.total.at(i) ?? 0) - sum(people, (p) => p.values.at(i));
+    Object.assign(others, { qualified: rest(-1), qualifiedChange: q.total.length > 1 ? rest(-1) - rest(-2) : 0 });
+    if (others.qualified || others.closed || others.forward || others.downgradedOrRemoved || others.steps) byPerson.push(others);
   }
 
   return {

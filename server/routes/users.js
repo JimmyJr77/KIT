@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, json, setUserTeams, setTeamRole, isTeamLead, withTeams } from '../db.js';
+import { db, json, setUserTeams, setTeamRole, setMembershipFlags, isTeamLead, withTeams } from '../db.js';
 import { requireAdmin, publicUser, formatPhone, digitsOnly, checkPassword, hashPassword } from '../auth.js';
 import { uniqueMessage } from './auth.js';
 import { flightPrefs, flightLimitsChanged } from '../../src/lib/travelCalc.js';
@@ -120,6 +120,17 @@ r.put('/:id/teams/:teamId', (req, res) => {
   if (req.user.role !== 'admin' && !isTeamLead(req.user.id, teamId)) return res.status(403).json({ error: 'Only an admin or this team\'s lead can change that' });
   if (!['member', 'lead'].includes(req.body?.role)) return res.status(400).json({ error: 'Role must be member or lead' });
   if (!setTeamRole(Number(req.params.id), teamId, req.body.role)) return res.status(404).json({ error: 'They aren\'t on that team' });
+  res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(req.params.id))) });
+});
+
+/**
+ * What someone's place on a team counts toward. Body: any of { in_numbers, in_priorities, in_travel } (true/false).
+ * Admins and the team's leads (the BD Team page).
+ */
+r.put('/:id/teams/:teamId/flags', (req, res) => {
+  const teamId = Number(req.params.teamId);
+  if (req.user.role !== 'admin' && !isTeamLead(req.user.id, teamId)) return res.status(403).json({ error: 'Only an admin or this team\'s lead can change that' });
+  if (!setMembershipFlags(Number(req.params.id), teamId, req.body)) return res.status(404).json({ error: 'They aren\'t on that team' });
   res.json({ user: publicUser(withTeams(db.prepare(`${LIST_SQL} WHERE u.id = ?`).get(req.params.id))) });
 });
 

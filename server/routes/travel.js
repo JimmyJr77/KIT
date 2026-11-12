@@ -99,8 +99,9 @@ function withTravelerTeams(trips) {
   return trips.map((t) => ({ ...t, team_name: teams.get(t.traveler_id) || null }));
 }
 
-// A team filter matches trips by anyone on that team.
-const ON_TEAM = 'traveler_id IN (SELECT user_id FROM user_teams WHERE team_id = @team)';
+// A team filter matches trips by anyone on that team whose travel counts there (BD Team's Travel switch; someone with a
+// travel budget of their own is left out).
+const ON_TEAM = 'traveler_id IN (SELECT user_id FROM user_teams WHERE team_id = @team AND in_travel = 1)';
 // The calendar quarter an actual cost falls in, from its date: "2026 Q4".
 const ACTUAL_QUARTER = "substr(a.spent_on, 1, 4) || ' Q' || ((CAST(substr(a.spent_on, 6, 2) AS INTEGER) + 2) / 3)";
 
@@ -156,7 +157,7 @@ const actualFilter = (q, user, alias = 'a') => {
   const where = [focusTravel(user, alias, { actuals: alias === 'a' })].filter(Boolean);
   const params = {};
   if (q.traveler) { where.push(`${alias}.traveler_id = @traveler`); params.traveler = Number(q.traveler); }
-  if (q.team) { where.push(`${alias}.traveler_id IN (SELECT user_id FROM user_teams WHERE team_id = @team)`); params.team = Number(q.team); }
+  if (q.team) { where.push(`${alias}.${ON_TEAM}`); params.team = Number(q.team); }
   return { where, params };
 };
 const ACTUAL_SQL = `SELECT a.*, u.first_name || ' ' || u.last_name AS traveler_name FROM travel_actuals a JOIN users u ON u.id = a.traveler_id`;

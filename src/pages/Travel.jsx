@@ -238,7 +238,7 @@ export default function Travel() {
         <div className="w-72">
           <label className="label">Traveler</label>
           {/* The Team filter beside this narrows the list, so the picker needs no team dropdown of its own. */}
-          <UserCombobox users={(users.data?.users || []).filter((u) => !team || (u.team_ids || []).includes(Number(team)))}
+          <UserCombobox users={(users.data?.users || []).filter((u) => !team || u.teams?.some((t) => t.id === Number(team) && t.in_travel !== false))}
             value={traveler} onChange={setTraveler} placeholder="All travelers" />
         </div>
         <div className="w-48">

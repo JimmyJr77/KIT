@@ -3,7 +3,7 @@
 // only people on BD get one, and only theirs count. Everyone can read them, since the BD report card and dashboards
 // compare the numbers against them; admins and BD team leads set them.
 import { Router } from 'express';
-import { db, canManageBd } from '../db.js';
+import { db, canManageBd, BD_DIRECTOR_IDS } from '../db.js';
 import { TARGET_TABLES } from '../financials.js';
 
 const r = Router();
@@ -12,8 +12,8 @@ const LABELS = { booking: 'Booking targets', qualified: 'Qualified pipeline targ
 /** ?kind= or body.kind: 'booking' (the default) or 'qualified'. */
 const kindOf = (v) => (v === 'qualified' ? 'qualified' : 'booking');
 
-const ON_BD = "SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD'";
-/** Everyone on BD. */
+const ON_BD = BD_DIRECTOR_IDS;
+/** The BD directors. */
 const directors = () => db.prepare(`SELECT u.id, u.first_name, u.last_name, u.title FROM users u
   WHERE u.active = 1 AND u.id IN (${ON_BD}) ORDER BY u.last_name, u.first_name`).all();
 /** The year's targets of one kind for people on BD. */

@@ -13,6 +13,7 @@ import TacticalReport from './TacticalReport.jsx';
 import PipelineByPerson from '../components/PipelineByPerson.jsx';
 import { BookToBill } from '../components/BdDashboard.jsx';
 import { nameOnLight, nameOnDark } from '../lib/brand.js';
+import { isBdDirector } from '../lib/bd.js';
 
 const shortQuarter = (q) => `Q${q.slice(-1)} '${q.slice(2, 4)}`;
 /** The Monday of this week and the twelve before it, newest first. */
@@ -34,7 +35,7 @@ function recentWeeks() {
  */
 export default function Reports() {
   const users = useApi('/users').data?.users || [];
-  const directors = users.filter((u) => u.teams?.some((t) => t.name === 'BD'));
+  const directors = users.filter(isBdDirector);
   const [basis] = useYearBasis();
   const options = periods(basis);
   const [view, setView] = useState('report'); // report | trends | tactical

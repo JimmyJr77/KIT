@@ -5,7 +5,7 @@
 //   Bookings: contracts won (delivery programs), on the day they were awarded.
 //   Backlog: what's left to bill on active contracts, split into funded (funded − billed) and unfunded (value − funded).
 //   Book-to-bill: bookings ÷ revenue billed over the same period.
-import { db, json } from './db.js';
+import { db, json, BD_DIRECTOR_IDS } from './db.js';
 import { pwin } from '../src/lib/assessment.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
 import { pwinModel } from './routes/tickets.js';
@@ -113,12 +113,17 @@ export function expected(list, count = 4) {
   };
 }
 
-/** Qualified pipeline (open, Qualified onward) grouped by `key` (territory or director), largest first. */
+/** Rows grouped by BD director put everyone who isn't one (BD_DIRECTOR_IDS), and tickets with no director, together. */
+export const OTHERS = 'Others (not a BD director)';
+const bdDirectorIds = () => new Set(db.prepare(BD_DIRECTOR_IDS).all().map((r) => r.user_id));
+
+/** Qualified pipeline (open, Qualified onward) grouped by `key` (territory or BD director), largest first. */
 export function qualifiedBy(list, key) {
   const groups = new Map();
+  const bd = key === 'territory' ? null : bdDirectorIds();
   list.filter((t) => isOpen(t) && QUALIFIED_STAGES.includes(t.pipeline_status)).forEach((t) => {
-    const id = key === 'territory' ? t.territory_id : t.bd_director_id;
-    const name = (key === 'territory' ? t.territory_name : t.director_name) || (key === 'territory' ? 'No territory' : 'No BD director');
+    const id = key === 'territory' ? t.territory_id : bd.has(t.bd_director_id) ? t.bd_director_id : null;
+    const name = key === 'territory' ? t.territory_name || 'No territory' : (id && t.director_name) || OTHERS;
     if (!groups.has(id)) groups.set(id, { id, name, count: 0, value: 0, weighted: 0 });
     const g = groups.get(id);
     g.count += 1; g.value += t.value || 0; g.weighted += weighted(t);
@@ -174,19 +179,21 @@ export function bookToBill(list, start, end) {
 
 /** Book-to-bill per BD director over a period, from contracts they won. */
 export function bookToBillByDirector(list, start, end) {
-  const ids = [...new Set(list.map((p) => p.bd_director_id))];
+  const bd = bdDirectorIds();
+  const idOf = (p) => (bd.has(p.bd_director_id) ? p.bd_director_id : null);
+  const ids = [...new Set(list.map(idOf))];
   return ids.map((id) => {
-    const mine = list.filter((p) => p.bd_director_id === id);
-    return { id, name: mine[0]?.director_name || 'No BD director', ...bookToBill(mine, start, end) };
+    const mine = list.filter((p) => idOf(p) === id);
+    return { id, name: (id && mine[0]?.director_name) || OTHERS, ...bookToBill(mine, start, end) };
   }).filter((r) => r.booked || r.billed).sort((a, b) => b.booked - a.booked);
 }
 
-// Targets apply to the BD team only: a target counts while its person is on BD (someone who leaves BD keeps theirs,
+// Targets apply to BD directors only: a target counts while its person is a BD director (BD_DIRECTOR_IDS) (someone who leaves BD keeps theirs,
 // unused, in case they come back). Two kinds: booking targets (what to win, which adds up over the year) and qualified
 // pipeline targets (how much Qualified+ pipeline to hold: a level, so the year's figure is where it should stand at year end).
 export const TARGET_TABLES = { booking: 'booking_targets', qualified: 'qualified_targets' };
 const bdTargets = (kind) => `SELECT * FROM ${TARGET_TABLES[kind] || TARGET_TABLES.booking} WHERE user_id IN
-  (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD')`;
+  (${BD_DIRECTOR_IDS})`;
 
 /**
  * Targets for a year: per director, quarters 1–4 and the year. A booking year left unset is the sum of its quarters; a
@@ -262,8 +269,9 @@ export function trends({ from, to, interval = 'month', by = 'stage', f = {} }) {
   history.forEach((h) => { if (!byTicket.has(h.ticket_id)) byTicket.set(h.ticket_id, []); byTicket.get(h.ticket_id).push(h); });
 
   const series = new Map();
+  const bd = by === 'director' ? bdDirectorIds() : null;
   const keyOf = (h) => (by === 'stage' ? [h.pipeline_status || 'No stage', h.pipeline_status || 'No stage']
-    : by === 'director' ? [`d${h.bd_director_id ?? 0}`, h.director_name || 'No BD director']
+    : by === 'director' ? (bd.has(h.bd_director_id) ? [`d${h.bd_director_id}`, h.director_name] : ['d0', OTHERS])
     : [`t${h.territory_id ?? 0}`, h.territory_name || 'No territory']);
   if (by === 'stage') OPEN_STAGES.forEach((s) => series.set(s, { key: s, label: s, values: points.map(() => 0) }));
   points.forEach((point, i) => {

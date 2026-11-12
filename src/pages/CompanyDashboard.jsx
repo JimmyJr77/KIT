@@ -5,6 +5,7 @@ import { StatTile, ChartCard, BarList, StackedColumns, SERIES, compact, fullMone
 import BdDashboard from '../components/BdDashboard.jsx';
 import PriorityAccounts from '../components/PriorityAccounts.jsx';
 import MarketingSpend from '../components/MarketingSpend.jsx';
+import { isBdDirector } from '../lib/bd.js';
 
 /**
  * The Company dashboard: pick a team, and then anyone on it. BD (the team, or one person on it) gets the BD dashboard:
@@ -20,7 +21,8 @@ export default function CompanyDashboard() {
   const [person, setPerson] = useState('');
   const [territory, setTerritory] = useState('');
   const teamRow = teams.find((t) => t.name === team);
-  const members = users.filter((u) => u.teams?.some((t) => t.name === team)).sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }));
+  // BD's people picker lists the BD directors only (BD Team's "BD numbers" switch).
+  const members = users.filter((u) => (team === 'BD' ? isBdDirector(u) : u.teams?.some((t) => t.name === team))).sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }));
   const chosen = members.find((u) => u.id === Number(person));
   const isBd = team === 'BD';
   const pickTeam = (name) => { setTeam(name); setPerson(''); setTerritory(''); };

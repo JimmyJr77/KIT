@@ -473,6 +473,12 @@ CREATE INDEX IF NOT EXISTS user_teams_team ON user_teams(team_id);
 // users.team_id is not used after that.
 if (!hadUserTeams) db.exec('INSERT OR IGNORE INTO user_teams (user_id, team_id) SELECT id, team_id FROM users WHERE team_id IS NOT NULL');
 addColumn('user_teams', 'role', "TEXT NOT NULL DEFAULT 'member'");
+// What someone's membership counts toward (all on by default). in_numbers: on BD, they're a BD director in the money
+// reporting (report card, Tactical Meeting Report, targets, compensation). in_priorities: they have a lane on the team's
+// Weekly Priorities. in_travel: their trips count in the team's travel. BD leads and admins switch these on BD Team.
+addColumn('user_teams', 'in_numbers', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('user_teams', 'in_priorities', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('user_teams', 'in_travel', 'INTEGER NOT NULL DEFAULT 1');
 // Teams used to be ordered, the first one "primary"; that order is gone.
 if (db.prepare('PRAGMA table_info(user_teams)').all().some((c) => c.name === 'position')) db.exec('ALTER TABLE user_teams DROP COLUMN position');
 
@@ -1713,6 +1719,9 @@ export function setUserTeams(userId, teamIds) {
     db.prepare('DELETE FROM user_teams WHERE user_id = ? AND team_id NOT IN (SELECT value FROM json_each(?))').run(userId, JSON.stringify(ids));
     const ins = db.prepare('INSERT OR IGNORE INTO user_teams (user_id, team_id) VALUES (?, ?)');
     ids.forEach((id) => ins.run(userId, id));
+    // An account waiting to be activated gets its approval's teams on sign-up, so keep that approval in step.
+    db.prepare(`UPDATE approved_accounts SET team_ids = ? WHERE email = (SELECT email FROM users WHERE id = ? AND pending_activation = 1)`)
+      .run(JSON.stringify(ids), userId);
   })();
 }
 
@@ -1722,10 +1731,47 @@ export function setTeamRole(userId, teamId, role) {
     .run(role === 'lead' ? 'lead' : 'member', userId, teamId).changes > 0;
 }
 
+/** The BD directors' user ids, as SQL: people on BD who count in BD's numbers (the BD Team page's "BD numbers" switch). */
+export const BD_DIRECTOR_IDS = `SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD' AND ut.in_numbers = 1`;
+
+/** Switch what someone's place on a team counts toward (in_numbers, in_priorities, in_travel). False if they aren't on it. */
+export const MEMBERSHIP_FLAGS = ['in_numbers', 'in_priorities', 'in_travel'];
+export function setMembershipFlags(userId, teamId, flags) {
+  const set = MEMBERSHIP_FLAGS.filter((k) => k in (flags || {}));
+  if (!set.length) return !!db.prepare('SELECT 1 FROM user_teams WHERE user_id = ? AND team_id = ?').get(userId, teamId);
+  return db.prepare(`UPDATE user_teams SET ${set.map((k) => `${k} = @${k}`).join(', ')} WHERE user_id = @userId AND team_id = @teamId`)
+    .run({ userId, teamId, ...Object.fromEntries(set.map((k) => [k, flags[k] ? 1 : 0])) }).changes > 0;
+}
+
+// One-time BD clean-up (November 2026). The first Pipedrive sync put every deal owner on BD; Adam Lurie isn't BD, so he
+// comes off it (and off the team his pending approval would give him). Jimmy O'Brien (SVP of Growth, oversees BD) and
+// Lindsay Wall (the Google rep supporting BD) don't sell: out of BD's numbers, still on priorities; Lindsay's travel
+// has its own budget, so it's out of BD's travel too. Matched by name; anyone not here is skipped.
+if (getSetting('bd_cleanup_2026_11') !== '1') {
+  const bd = db.prepare("SELECT id FROM teams WHERE name = 'BD'").get()?.id;
+  if (bd) {
+    const find = (first, last) => db.prepare(`SELECT id, email FROM users WHERE lower(first_name) LIKE ? AND replace(replace(lower(last_name), '''', ''), '’', '') = ?`)
+      .all(`${first}%`, last);
+    db.transaction(() => {
+      for (const u of find('adam', 'lurie')) {
+        db.prepare('DELETE FROM user_teams WHERE user_id = ? AND team_id = ?').run(u.id, bd);
+        db.prepare("UPDATE approved_accounts SET team_ids = (SELECT json_group_array(value) FROM json_each(team_ids) WHERE value != ?) WHERE email = ? AND json_valid(team_ids)")
+          .run(bd, u.email);
+      }
+      for (const u of [...find('jim', 'obrien'), ...find('lindsay', 'wall')]) {
+        db.prepare('UPDATE user_teams SET in_numbers = 0 WHERE user_id = ? AND team_id = ?').run(u.id, bd);
+      }
+      for (const u of find('lindsay', 'wall')) db.prepare('UPDATE user_teams SET in_travel = 0 WHERE user_id = ? AND team_id = ?').run(u.id, bd);
+      setSetting('bd_cleanup_2026_11', '1');
+    })();
+  }
+}
+
 export const isTeamLead = (userId, teamId) => !!db.prepare("SELECT 1 FROM user_teams WHERE user_id = ? AND team_id = ? AND role = 'lead'").get(userId, teamId);
 
 /**
- * Add each person's teams and territories to user rows (matched on `id`): teams [{ id, name, role }] by name,
+ * Add each person's teams and territories to user rows (matched on `id`): teams [{ id, name, role, in_numbers,
+ * in_priorities, in_travel }] by name,
  * team_ids, team_name (every team, "BD, Marketing", for display), and territories [{ id, name }] in list order.
  */
 export function withTeams(rows) {
@@ -1734,9 +1780,10 @@ export function withTeams(rows) {
   const byUser = new Map();
   const terrByUser = new Map();
   if (ids !== '[]') {
-    db.prepare(`SELECT ut.user_id, ut.role, t.id, t.name FROM user_teams ut JOIN teams t ON t.id = ut.team_id
+    db.prepare(`SELECT ut.user_id, ut.role, ut.in_numbers, ut.in_priorities, ut.in_travel, t.id, t.name FROM user_teams ut JOIN teams t ON t.id = ut.team_id
       WHERE ut.user_id IN (SELECT value FROM json_each(?)) ORDER BY t.name`).all(ids)
-      .forEach(({ user_id, id, name, role }) => byUser.set(user_id, [...(byUser.get(user_id) || []), { id, name, role }]));
+      .forEach(({ user_id, ...t }) => byUser.set(user_id, [...(byUser.get(user_id) || []),
+        { ...t, in_numbers: !!t.in_numbers, in_priorities: !!t.in_priorities, in_travel: !!t.in_travel }]));
     db.prepare(`SELECT ut.user_id, t.id, t.name FROM user_territories ut JOIN territories t ON t.id = ut.territory_id
       WHERE ut.user_id IN (SELECT value FROM json_each(?)) ORDER BY t.position, t.name`).all(ids)
       .forEach(({ user_id, id, name }) => terrByUser.set(user_id, [...(terrByUser.get(user_id) || []), { id, name }]));
@@ -1768,11 +1815,11 @@ export function setUserTerritories(userId, territoryIds) {
 }
 
 /**
- * Who a new pipeline ticket belongs to when nobody says: its creator as BD director if they're on BD, and the territory
+ * Who a new pipeline ticket belongs to when nobody says: its creator as BD director if they're one (BD_DIRECTOR_IDS), and the territory
  * its account type maps to, else the creator's only territory.
  */
 export function defaultAssignment(userId, accountType) {
-  const onBd = !!db.prepare("SELECT 1 FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE ut.user_id = ? AND t.name = 'BD'").get(userId);
+  const onBd = !!db.prepare(`SELECT 1 FROM (${BD_DIRECTOR_IDS}) WHERE user_id = ?`).get(userId);
   const byType = { Army: 'Army', 'Air Force': 'USAF/USSF', 'Navy / Marine': 'Navy/USMC' }[accountType];
   const mapped = byType && db.prepare('SELECT id FROM territories WHERE name = ?').get(byType);
   const own = db.prepare('SELECT territory_id FROM user_territories WHERE user_id = ?').all(userId);

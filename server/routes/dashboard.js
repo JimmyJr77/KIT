@@ -1,14 +1,14 @@
 // The dashboards' data: the BD dashboard for one person or a team (see server/bdDashboard.js). The Company dashboard's
 // other figures come from /financials, and the report card from /financials/report-card.
 import { Router } from 'express';
-import { db } from '../db.js';
+import { db, BD_DIRECTOR_IDS } from '../db.js';
 import { bdDashboard, scopeFrom } from '../bdDashboard.js';
 import { focusDirector } from '../focus.js';
 
 const r = Router();
 
-/** Whether someone is a BD director: on the BD team, or the director on any pipeline ticket. */
-const isDirector = (id) => !!db.prepare(`SELECT 1 FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE ut.user_id = ? AND t.name = 'BD'
+/** Whether someone is a BD director: on BD and in its numbers, or the director on any pipeline ticket. */
+const isDirector = (id) => !!db.prepare(`SELECT 1 FROM (${BD_DIRECTOR_IDS}) WHERE user_id = ?
   UNION SELECT 1 FROM tickets WHERE bd_director_id = ?`).get(id, id);
 
 /**

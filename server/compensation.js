@@ -22,7 +22,7 @@
 // month). A director can put their own number on a month instead, or go back to the system's. A projected win is
 // treated as a contract starting that month, spread over the deal's expected term (twelve months when unknown), and
 // earns at the plan's rates like any other, so the page can show what those wins would pay.
-import { db, json, getSetting, setSetting } from './db.js';
+import { db, json, getSetting, setSetting, BD_DIRECTOR_IDS } from './db.js';
 import { inBooks, localToday, bids, isOpen } from './financials.js';
 
 export const SETTINGS_KEY = 'comp_plan';
@@ -183,9 +183,9 @@ const roll = (months) => ({
 });
 const rollProjected = (months) => ({ revenue: sum(months, (m) => m.revenue), bonus: sum(months, (m) => m.bonus) });
 
-/** Everyone on the BD team (active), A–Z by last name. */
+/** The BD directors (active, on BD and in its numbers), A–Z by last name. */
 export const bdMembers = () => db.prepare(`SELECT u.id, u.first_name, u.last_name, u.title FROM users u
-  WHERE u.active = 1 AND u.id IN (SELECT ut.user_id FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE t.name = 'BD')
+  WHERE u.active = 1 AND u.id IN (${BD_DIRECTOR_IDS})
   ORDER BY u.last_name, u.first_name`).all();
 
 const planRows = (year) => db.prepare('SELECT * FROM comp_plans WHERE plan_year = ?').all(year);

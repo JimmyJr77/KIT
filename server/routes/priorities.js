@@ -112,8 +112,11 @@ function allTeamsBoard(date) {
   const cards = Object.entries(teamWeeks).flatMap(([id, week]) => loadCards(Number(id), week));
   const work = Object.entries(teamWeeks).flatMap(([id, week]) => loadWorkLog(Number(id), week));
   // Everyone appears once, with all their teams; their lane holds their cards from every team.
+  // Someone on teams that all leave them off Weekly Priorities (BD Team's switch) has no lane.
   const members = withTeams(db.prepare(`SELECT u.id, u.first_name, u.last_name, u.username, u.title
-    FROM users u WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all());
+    FROM users u WHERE u.active = 1 AND (NOT EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = u.id)
+      OR EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = u.id AND ut.in_priorities = 1))
+    ORDER BY u.last_name, u.first_name`).all());
   const weeks = Object.entries(teamWeeks).map(([id, week]) => [Number(id), week]);
   return {
     team: { id: 'all', name: 'All' }, weekStart, currentWeekStart, teamWeeks, members, cards, work, threads: threadsFor(cards),
@@ -252,7 +255,7 @@ r.get('/', (req, res) => {
   if (!t) return res.status(400).json({ error: 'Unknown team' });
   const weekStart = weekStartFor(req.query.week || localToday(), t.checkin_dow);
   const members = db.prepare(`SELECT u.id, u.first_name, u.last_name, u.username, u.title FROM users u
-    JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = ? WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all(t.id);
+    JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = ? AND ut.in_priorities = 1 WHERE u.active = 1 ORDER BY u.last_name, u.first_name`).all(t.id);
   const cards = loadCards(t.id, weekStart);
   res.json(focusBoard({
     team: t,

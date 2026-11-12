@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Navigate, NavLink, useParams } from 'react-router-dom';
-import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil, Target, Code2 } from 'lucide-react';
+import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil, Target, Code2, Briefcase } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
@@ -17,21 +17,24 @@ import PipedrivePanel from '../components/PipedrivePanel.jsx';
 import NewPipelineTicketsPanel from '../components/NewPipelineTicketsPanel.jsx';
 import KitPipelinePanel from '../components/KitPipelinePanel.jsx';
 import SiteFeedbackPanel from '../components/SiteFeedbackPanel.jsx';
+import BdTeamPanel from '../components/BdTeamPanel.jsx';
 import { TerritoryTags, TerritoryChecklist, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
 import { ledTeams } from './MyTeam.jsx';
 
 const isAdmin = (user) => user.role === 'admin';
 const isDeveloper = (user) => !!user.developer;
+const leadsBd = (user) => isAdmin(user) || ledTeams(user).some((t) => t.name === 'BD');
 
 /**
  * Admin Access is the home for administrative and leadership views, each at /admin/<key>. Admin (access, the directory
  * and site setup) is /admin itself. Each view is for one role: Admin for admins, Team Lead for anyone who leads a team,
- * Developer for people with the Developer role (set on their account). Someone sees only the views for roles they have,
+ * BD Team for admins and BD leads, Developer for people with the Developer role (set on their account). Someone sees only the views for roles they have,
  * and the switcher only when there's more than one. Add a view here as a new leadership title is built out.
  */
 const VIEWS = [
   { key: '', label: 'Admin', icon: ShieldCheck, title: 'Admin Access', subtitle: 'Who can use KIT, the team directory and site setup', can: isAdmin, Page: AdminView },
   { key: 'team-lead', label: 'Team Lead', icon: Target, title: 'Team Lead', subtitle: 'What your team is expected to deliver', can: (u) => ledTeams(u).length > 0, Page: TeamLeadView },
+  { key: 'bd-team', label: 'BD Team', icon: Briefcase, title: 'BD Team', subtitle: 'What each BD team member counts toward: BD numbers, Weekly Priorities and travel', can: leadsBd, Page: BdTeamPanel },
   { key: 'developer', label: 'Developer', icon: Code2, title: 'Developer', subtitle: 'Site feedback to work through', can: isDeveloper, Page: DeveloperView },
 ];
 
