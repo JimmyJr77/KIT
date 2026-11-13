@@ -1,6 +1,6 @@
 // Marketing spend: what was spent, and who or what it was for, as specifically as it's known. An entry can name an
-// event, a pipeline ticket, a person, a territory and an account (organization), or none of them. What's missing is filled
-// in from what's there:
+// event, a pipeline ticket, a person, a territory and an account (organization), or none of them; and the marketing request
+// it answered, whose event and pipeline ticket it then counts toward. What's missing is filled in from what's there:
 //   Person: the one named, else the pipeline ticket's BD director, else (for event spend) split evenly between the people
 //     from the company attending the event. Otherwise nobody: company-wide spend.
 //   Territory: the one named, else the pipeline ticket's, else the person's (when they cover exactly one).
@@ -14,10 +14,15 @@ const sum = (xs, f) => xs.reduce((s, x) => s + (f(x) || 0), 0);
 
 /** Every entry, newest first, with the names of what it links to and its resolved person shares, territory and account. */
 export function spendEntries({ from, to } = {}) {
-  const rows = db.prepare(`SELECT s.*, e.name AS event_name, t.opportunity_title AS ticket_title, t.organization AS ticket_organization,
+  // An entry recorded against a marketing request is for what the request is for: its event, and its pipeline ticket.
+  const rows = db.prepare(`SELECT s.*, COALESCE(s.event_id, q.event_id) AS event_id, COALESCE(s.ticket_id, qt.id) AS ticket_id,
+      s.event_id AS own_event_id, s.ticket_id AS own_ticket_id, COALESCE(q.title, substr(q.details, 1, 80)) AS request_title,
+      e.name AS event_name, t.opportunity_title AS ticket_title, t.organization AS ticket_organization,
       t.bd_director_id AS ticket_director_id, t.territory_id AS ticket_territory_id,
       u.first_name || ' ' || u.last_name AS user_name, tr.name AS territory_name, c.first_name || ' ' || c.last_name AS created_by_name
-    FROM marketing_spend s LEFT JOIN events e ON e.id = s.event_id LEFT JOIN tickets t ON t.id = s.ticket_id
+    FROM marketing_spend s LEFT JOIN event_support_requests q ON q.id = s.request_id
+      LEFT JOIN tickets qt ON qt.id = q.for_ticket_id AND qt.ticket_type = 'bid'
+      LEFT JOIN events e ON e.id = COALESCE(s.event_id, q.event_id) LEFT JOIN tickets t ON t.id = COALESCE(s.ticket_id, qt.id)
       LEFT JOIN users u ON u.id = s.user_id LEFT JOIN territories tr ON tr.id = s.territory_id LEFT JOIN users c ON c.id = s.created_by
     WHERE (@from IS NULL OR s.spent_on >= @from) AND (@to IS NULL OR s.spent_on <= @to)
     ORDER BY s.spent_on DESC, s.id DESC`).all({ from: from || null, to: to || null });

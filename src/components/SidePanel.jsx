@@ -10,6 +10,7 @@ import { X } from 'lucide-react';
 export const PANEL_WIDTH = 'w-[min(100vw,clamp(28rem,36vw,44rem))]';
 export const PANEL_WIDTH_WIDE = 'w-[min(100vw,clamp(36rem,48vw,64rem))]';
 
+const openPanels = []; // every SidePanel on screen, in the order they opened
 const MIN_WIDTH = 320;
 const KEY_STEP = 32;
 const EDGE_GAP = 24;
@@ -94,8 +95,15 @@ export function usePanelResize() {
 export default function SidePanel({ title, subtitle, onClose, onEscape, children, footer, wide, rail, drawer }) {
   const escape = onEscape || onClose;
   const resize = usePanelResize();
+  // Panels can open over one another (a form from a ticket, a scheduler from that form): Escape closes only the top one.
+  const token = useRef(null);
   useEffect(() => {
-    const h = (e) => e.key === 'Escape' && escape();
+    const mine = (token.current = {});
+    openPanels.push(mine);
+    return () => { openPanels.splice(openPanels.indexOf(mine), 1); };
+  }, []);
+  useEffect(() => {
+    const h = (e) => e.key === 'Escape' && openPanels[openPanels.length - 1] === token.current && escape();
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [escape]);

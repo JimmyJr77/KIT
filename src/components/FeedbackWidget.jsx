@@ -1,20 +1,55 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Flag, Home, Send, X } from 'lucide-react';
+import { EyeOff, Flag, Home, Send, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import RaceGame from './RaceGame.jsx';
 
 const PROMPT = 'Tell me how i can improve this site!';
 const REPLY = 'Right away, Michael!';
 const BUBBLE_MS = 3000;
-const CAR_WIDTH = 112; // w-28
+const CAR_WIDTH = 112; // how wide he is on screen at 100% zoom; he's drawn this size at any zoom
 const DRAG_START_PX = 4; // a press that moves less than this is a click, not a drag
 const PARK_KEY = 'kit.kitt.park';
+const HIDDEN_KEY = 'kit.kitt.hidden';
+const HOME_GAP = 24; // his home spot: this far in from the bottom-right corner of the window
 
 /** Where the car was last left, and which way it faced: { x, y, flipped }. Nothing saved means his home spot in the sidebar. */
 const readPark = () => { try { return JSON.parse(localStorage.getItem(PARK_KEY)) || null; } catch { return null; } };
 const writePark = (p) => { try { localStorage.setItem(PARK_KEY, JSON.stringify(p)); } catch { /* private mode */ } };
 const clearPark = () => { try { localStorage.removeItem(PARK_KEY); } catch { /* private mode */ } };
+
+/** Whether he's been hidden, shared with the sidebar's Call KIT button and remembered on this browser. */
+let hiddenNow = (() => { try { return localStorage.getItem(HIDDEN_KEY) === '1'; } catch { return false; } })();
+const hiddenListeners = new Set();
+export function setKittHidden(h) {
+  hiddenNow = !!h;
+  try { if (hiddenNow) localStorage.setItem(HIDDEN_KEY, '1'); else localStorage.removeItem(HIDDEN_KEY); } catch { /* private mode */ }
+  hiddenListeners.forEach((f) => f(hiddenNow));
+}
+export function useKittHidden() {
+  const [h, setH] = useState(hiddenNow);
+  useEffect(() => { hiddenListeners.add(setH); setH(hiddenNow); return () => { hiddenListeners.delete(setH); }; }, []);
+  return h;
+}
+
+/**
+ * How far the browser is zoomed (1 = 100%), read from how much of the window's real width the page thinks it has. That
+ * works in every browser and on any screen density. The width can't be trusted when the page is narrower than its window
+ * for another reason (developer tools docked to the side, or a page shown inside another app): the height gives that
+ * away by coming out lower, and then the zoom is the screen's pixel ratio over whichever whole density (1x, 2x, 3x)
+ * lands nearest the height's answer.
+ */
+const pageZoom = () => {
+  const { innerWidth: iw, innerHeight: ih, outerWidth: ow, outerHeight: oh, devicePixelRatio: dpr } = window;
+  if (!iw || !ih || !ow || !oh) return 1;
+  const byWidth = ow / iw;
+  const byHeight = oh / ih; // a little high, as the window's toolbars count
+  const z = byWidth <= byHeight * 1.02 || !dpr
+    ? byWidth
+    : [1, 2, 3].map((d) => dpr / d).reduce((a, b) => (Math.abs(b - byHeight) < Math.abs(a - byHeight) ? b : a));
+  if (!Number.isFinite(z) || Math.abs(z - 1) < 0.03) return 1;
+  return Math.min(Math.max(z, 0.25), 5); // the range browsers zoom over
+};
 
 /** Keeps the car's top-left corner inside the window. */
 const clamp = (x, y, w, h) => ({
@@ -25,10 +60,12 @@ const clamp = (x, y, w, h) => ({
 /**
  * KITT on every signed-in page. Hovering asks for feedback; clicking opens a short form. What's sent is kept with
  * the page it came from (admins work through it in the Developer section of Admin Access), and KITT answers with a word bubble that goes away on its
- * own. He parks in the sidebar, just above More, until someone drags him somewhere else: he drives the way he's dragged,
- * so pulling him right turns him around, and he stays where he's left, facing that way, between visits. "Send home" on
- * his right-click menu puts him back. The sidebar renders him, and at home he holds his own room there; he is fixed
- * either way, so the sidebar never clips him or his bubbles.
+ * own. He parks in the bottom-right corner of the window until someone drags him somewhere else: he drives the way he's
+ * dragged, so pulling him right turns him around, and he stays where he's left, facing that way, between visits. Wherever
+ * he is, a smaller or zoomed window pulls him back inside it (and he returns to his spot when it grows again). Zooming the
+ * page in or out leaves him the same size on screen. "Send home"
+ * on his right-click menu puts him back in the corner; "Hide KIT" puts him away until the sidebar's Call KIT button
+ * brings him back, driving in from the right.
  */
 export default function FeedbackWidget() {
   const { pathname, search } = useLocation();
@@ -42,6 +79,10 @@ export default function FeedbackWidget() {
   const [menu, setMenu] = useState(false); // the right-click menu
   const [tokens, setTokens] = useState(null); // { tokens, unlimited } for the menu
   const [race, setRace] = useState(false);
+  const hidden = useKittHidden();
+  const [arriving, setArriving] = useState(false); // driving in after Call KIT
+  const wasHidden = useRef(hidden);
+  const [, setViewport] = useState(0); // bumps on resize/zoom so his place is worked out again
   const wrap = useRef(null);
   const [dragging, setDragging] = useState(false);
   const textarea = useRef(null);
@@ -79,15 +120,20 @@ export default function FeedbackWidget() {
   };
   const startRace = () => { setMenu(false); setHover(false); setRace(true); };
   const goHome = () => { setMenu(false); setHover(false); clearPark(); setPark(null); };
+  const hide = () => { setMenu(false); setHover(false); setOpen(false); setKittHidden(true); };
 
-  // A smaller window shouldn't leave him parked off-screen.
+  // Called back from the sidebar: he drives in from the right, so he faces left on the way.
   useEffect(() => {
-    const onResize = () => setPark((p) => {
-      if (!p || !car.current) return p;
-      const { width, height } = car.current.getBoundingClientRect();
-      const c = clamp(p.x, p.y, width, height);
-      return c.x === p.x && c.y === p.y ? p : { ...p, ...c };
-    });
+    if (wasHidden.current && !hidden) {
+      setArriving(true);
+      setPark((p) => { if (!p || !p.flipped) return p; const n = { ...p, flipped: false }; writePark(n); return n; });
+    }
+    wasHidden.current = hidden;
+  }, [hidden]);
+
+  // Resizing or zooming the window re-places him: his saved spot is kept, and he's drawn as close to it as fits.
+  useEffect(() => {
+    const onResize = () => setViewport((n) => n + 1);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
@@ -153,16 +199,18 @@ export default function FeedbackWidget() {
 
   // Bubbles and the form hang off the car (above him, or below when he's parked near the top; towards the side of the
   // screen with more room) without taking any room of their own, so he never shifts to make way for them.
+  if (hidden) return null;
   const flipped = !!park?.flipped;
-  const onLeft = !park || park.x + CAR_WIDTH / 2 < window.innerWidth / 2; // home is on the left
-  const below = !!park && park.y < 240;
-  const showPrompt = hover && !open && !reply && !dragging && !menu && !race;
+  const w = CAR_WIDTH / pageZoom(); // sized against the zoom, so he's the same size on screen however far it's zoomed
+  const img = car.current?.querySelector('img');
+  const h = img?.naturalWidth ? (w * img.naturalHeight) / img.naturalWidth : w / 2;
+  const at = park ? clamp(park.x, park.y, w, h) : null; // home is the bottom-right corner
+  const onLeft = !!at && at.x + w / 2 < window.innerWidth / 2;
+  const below = !!at && at.y < 240;
+  const showPrompt = hover && !open && !reply && !dragging && !menu && !race && !arriving;
   const bubbleProps = { onLeft, below };
-  const style = park ? { left: park.x, top: park.y } : undefined;
+  const style = at ? { left: at.x, top: at.y } : { right: HOME_GAP, bottom: HOME_GAP };
   return (
-    <>
-    {/* At home he has no left or top, so he sits where the sidebar put him, over this stand-in that holds his room. */}
-    {!park && <img src="/kitt.webp" alt="" aria-hidden className="invisible block w-28 shrink-0" />}
     <div ref={wrap} style={style}
       className={`fixed z-50 whitespace-normal text-slate-800 print:hidden ${dragging ? 'select-none' : ''}`}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
@@ -183,6 +231,9 @@ export default function FeedbackWidget() {
                 <Home size={15} className="text-slate-500" /> Send home
               </button>
             )}
+            <button type="button" role="menuitem" onClick={hide} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left font-semibold text-slate-800 hover:bg-slate-100">
+              <EyeOff size={15} className="text-slate-500" /> Hide KIT
+            </button>
           </div>
         )}
         {showPrompt && (
@@ -210,12 +261,12 @@ export default function FeedbackWidget() {
       </div>
       <button ref={car} type="button" onClick={onClick} onContextMenu={openMenu} aria-label="Send site feedback" aria-expanded={open} title={open || dragging || menu ? undefined : PROMPT}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
-        className={`group block touch-none rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}>
-        <img src="/kitt.webp" alt="" draggable={false}
-          className={`block w-28 drop-shadow-md transition-[filter] group-hover:drop-shadow-lg ${flipped ? '-scale-x-100' : ''} ${dragging ? 'drop-shadow-xl' : ''}`} />
+        onAnimationEnd={(e) => { if (e.target === e.currentTarget) setArriving(false); }}
+        className={`group block touch-none rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${dragging ? 'cursor-grabbing' : 'cursor-grab'} ${arriving ? 'animate-kitt-arrive' : ''}`}>
+        <img src="/kitt.webp" alt="" draggable={false} style={{ width: w }}
+          className={`block h-auto max-w-none drop-shadow-md transition-[filter] group-hover:drop-shadow-lg ${flipped ? '-scale-x-100' : ''} ${dragging ? 'drop-shadow-xl' : ''}`} />
       </button>
     </div>
-    </>
   );
 }
 

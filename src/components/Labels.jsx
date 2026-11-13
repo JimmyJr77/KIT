@@ -28,6 +28,30 @@ export function useLabels() {
   return labels || [];
 }
 
+/** The categories tags are shown under, in order. Tags KIT doesn't know a category for are Other. */
+export const TAG_CATEGORIES = [['process', 'Process'], ['source', 'Source'], ['other', 'Other']];
+const categoryName = (key) => TAG_CATEGORIES.find(([k]) => k === key)?.[1] || 'Other';
+/** `labels` in category order, as [{ key, name, labels }], leaving out empty categories. */
+export const byCategory = (labels) => TAG_CATEGORIES.map(([key, name]) => ({ key, name, labels: labels.filter((l) => (l.category || 'other') === key) })).filter((g) => g.labels.length);
+
+// Tags each person has chosen not to show on pipeline cards (BD Pipeline › Settings › Tags on cards), kept in this
+// browser. Hidden tags are still on the ticket: they show when it's opened, and the tag filter still finds them.
+const HIDDEN_KEY = 'kit.pipeline.hiddenTags';
+const readHidden = () => { try { const v = JSON.parse(localStorage.getItem(HIDDEN_KEY)); return Array.isArray(v) ? v.map((x) => String(x).toLowerCase()) : []; } catch { return []; } };
+let hidden = readHidden();
+const hiddenListeners = new Set();
+export function setHiddenCardTags(names) {
+  hidden = [...new Set(names.map((n) => String(n).toLowerCase()))];
+  try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden)); } catch { /* not kept */ }
+  hiddenListeners.forEach((fn) => fn(hidden));
+}
+/** The tag names (lower case) hidden on pipeline cards. */
+export function useHiddenCardTags() {
+  const [value, setValue] = useState(hidden);
+  useEffect(() => { hiddenListeners.add(setValue); setValue(hidden); return () => hiddenListeners.delete(setValue); }, []);
+  return value;
+}
+
 /** One tag, drawn like a Pipedrive label. */
 export function LabelChip({ name, color, onRemove }) {
   const labels = useLabels();
@@ -43,10 +67,12 @@ export function LabelChip({ name, color, onRemove }) {
   );
 }
 
-/** A row of tags, for ticket cards. */
-export function LabelList({ labels, className = '' }) {
-  if (!labels?.length) return null;
-  return <div className={`flex flex-wrap gap-1 ${className}`}>{labels.map((l) => <LabelChip key={l} name={l} />)}</div>;
+/** A row of tags, for ticket cards. With `card` (pipeline cards), tags the viewer has turned off for cards are left out. */
+export function LabelList({ labels, className = '', card = false }) {
+  const off = useHiddenCardTags();
+  const shown = card ? (labels || []).filter((l) => !off.includes(String(l).toLowerCase())) : labels;
+  if (!shown?.length) return null;
+  return <div className={`flex flex-wrap gap-1 ${className}`}>{shown.map((l) => <LabelChip key={l} name={l} />)}</div>;
 }
 
 /**
@@ -95,16 +121,23 @@ export function LabelPicker({ value, onChange, disabled }) {
           onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), setOpen(false))}>
           <input className="input h-8 text-sm" placeholder="Find or make a tag…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (shown.length === 1 && exact) toggle(shown[0].name); else if (!exact) create(); } }} />
-          <ul className="mt-1.5 max-h-56 space-y-0.5 overflow-y-auto">
-            {shown.map((l) => (
-              <li key={l.id}>
-                <button type="button" onClick={() => toggle(l.name)} className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-slate-50">
-                  <span className={`grid h-4 w-4 shrink-0 place-items-center rounded border ${has(l.name) ? 'border-brand-600 bg-brand-600 text-white' : 'border-slate-300'}`}>
-                    {has(l.name) && <Check size={11} />}
-                  </span>
-                  <LabelChip name={l.name} color={l.color} />
-                  {l.pipedrive_id && <span className="ml-auto text-[10px] text-slate-400">Pipedrive</span>}
-                </button>
+          <ul className="mt-1.5 max-h-64 space-y-0.5 overflow-y-auto">
+            {byCategory(shown).map((g) => (
+              <li key={g.key}>
+                <div className="px-1.5 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wide text-slate-400 uppercase">{g.name}</div>
+                <ul className="space-y-0.5">
+                  {g.labels.map((l) => (
+                    <li key={l.id}>
+                      <button type="button" onClick={() => toggle(l.name)} className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-slate-50">
+                        <span className={`grid h-4 w-4 shrink-0 place-items-center rounded border ${has(l.name) ? 'border-brand-600 bg-brand-600 text-white' : 'border-slate-300'}`}>
+                          {has(l.name) && <Check size={11} />}
+                        </span>
+                        <LabelChip name={l.name} color={l.color} />
+                        {l.pipedrive_id && <span className="ml-auto text-[10px] text-slate-400">Pipedrive</span>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               </li>
             ))}
             {!shown.length && !q.trim() && <li className="px-1.5 py-1 text-xs text-slate-400">No tags yet.</li>}
@@ -166,8 +199,56 @@ export function TagFilter({ value, onChange, className = '' }) {
   const labels = useLabels();
   return (
     <div className={className}>
-      <MultiSelect compact options={labels.map((l) => ({ value: l.name, label: l.name, sub: l.pipedrive_id ? 'Pipedrive' : undefined }))}
+      <MultiSelect compact options={labels.map((l) => ({ value: l.name, label: l.name, group: categoryName(l.category), sub: l.pipedrive_id ? 'Pipedrive' : undefined }))}
         value={value} onChange={onChange} placeholder={labels.length ? 'Filter by tag…' : 'No tags yet'} />
+    </div>
+  );
+}
+
+/**
+ * Choose which tags show on pipeline cards, by category: untick a tag, or a whole category, to keep it off the cards.
+ * It's the viewer's own choice, kept in this browser and saved as it changes.
+ */
+export function CardTagSettings() {
+  const labels = useLabels();
+  const off = useHiddenCardTags();
+  const isOff = (l) => off.includes(l.name.toLowerCase());
+  const set = (names, show) => {
+    const lower = names.map((n) => n.toLowerCase());
+    setHiddenCardTags(show ? off.filter((n) => !lower.includes(n)) : [...off, ...lower]);
+  };
+  if (!labels.length) return <p className="text-sm text-slate-400">No tags yet.</p>;
+  return (
+    <div className="space-y-4">
+      <p className="rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
+        Untick a tag to keep it off the cards on the board. It stays on the ticket: you still see it when you open one, and the tag filter still finds it.
+        This is your own view, kept in this browser.
+      </p>
+      {byCategory(labels).map((g) => {
+        const on = g.labels.filter((l) => !isOff(l)).length;
+        return (
+          <section key={g.key} className="rounded-lg border border-slate-200">
+            <label className="flex cursor-pointer items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
+              <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={on === g.labels.length}
+                ref={(el) => { if (el) el.indeterminate = on > 0 && on < g.labels.length; }}
+                onChange={(e) => set(g.labels.map((l) => l.name), e.target.checked)} aria-label={`Show every ${g.name} tag on cards`} />
+              <span className="text-sm font-semibold text-slate-800">{g.name}</span>
+              <span className="ml-auto text-xs text-slate-500">{on} of {g.labels.length} shown</span>
+            </label>
+            <ul className="divide-y divide-slate-100">
+              {g.labels.map((l) => (
+                <li key={l.id}>
+                  <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-slate-50">
+                    <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={!isOff(l)} onChange={(e) => set([l.name], e.target.checked)} />
+                    <LabelChip name={l.name} color={l.color} />
+                    <span className="ml-auto text-xs text-slate-400 tabular-nums">{l.ticket_count} ticket{l.ticket_count === 1 ? '' : 's'}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
     </div>
   );
 }

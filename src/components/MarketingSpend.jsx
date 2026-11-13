@@ -26,7 +26,7 @@ const BREAKDOWNS = [
 
 /**
  * Marketing spend: what was spent and who or what it was for (an account, territory, pipeline ticket, person or event, as
- * specific as it's known), with totals each way. The Marketing team and admins add and edit entries; everyone can see them.
+ * specific as it's known) and the marketing request it answered, with totals each way. The Marketing team and admins add and edit entries; everyone can see them.
  * `entries` false leaves out the list of entries (for the Company dashboard).
  */
 export default function MarketingSpend({ entries: showEntries = true }) {
@@ -111,6 +111,7 @@ function EntryList({ entries, canManage, onEdit }) {
                   <div className="text-xs text-slate-500">{[e.category, e.vendor].filter(Boolean).join(' · ')}</div>
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-600">
+                  {e.request_title && <div>Request: {e.request_title}</div>}
                   {e.event_name && <div>Event: {e.event_name}</div>}
                   {e.ticket_title && <div>Pipeline ticket: {e.ticket_title}</div>}
                   <div className="text-slate-500">{e.shares.length ? `${e.split ? 'Split: ' : ''}${e.shares.map((x) => x.name).join(', ')}` : 'Company-wide'}</div>
@@ -130,7 +131,8 @@ function EntryList({ entries, canManage, onEdit }) {
 function SpendForm({ entry, categories, onClose, onSaved }) {
   const [f, setF] = useState(() => ({
     spent_on: entry?.spent_on || todayIso(), amount: entry?.amount ?? '', description: entry?.description || '', category: entry?.category || '',
-    vendor: entry?.vendor || '', event_id: entry?.event_id || '', ticket_id: entry?.ticket_id || '', user_id: entry?.user_id || '',
+    vendor: entry?.vendor || '', event_id: entry?.own_event_id || '', ticket_id: entry?.own_ticket_id || '', user_id: entry?.user_id || '',
+    request_id: entry?.request_id || '',
     territory_id: entry?.territory_id || '', organization: entry?.organization || '', note: entry?.note || '',
   }));
   const [error, setError] = useState('');
@@ -140,6 +142,9 @@ function SpendForm({ entry, categories, onClose, onSaved }) {
   const users = useApi('/users').data?.users || [];
   const territories = useApi('/territories').data?.territories || [];
   const tickets = useApi('/tickets?scope=all&kind=bid').data?.tickets || [];
+  const requests = useApi('/marketing/requests').data?.requests || [];
+  const request = requests.find((r) => r.id === Number(f.request_id));
+  const requestName = (r) => r.title || (r.event_name ? `Support for ${r.event_name}` : r.details.slice(0, 60));
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const ticket = tickets.find((t) => t.id === Number(f.ticket_id));
   const matches = useMemo(() => (ticketQ ? tickets.filter((t) => !t.archived_at && `${t.opportunity_title} ${t.organization || ''}`.toLowerCase().includes(ticketQ.toLowerCase())).slice(0, 50) : []), [tickets, ticketQ]);
@@ -183,11 +188,21 @@ function SpendForm({ entry, categories, onClose, onSaved }) {
           <Field label="Vendor"><input className="input" value={f.vendor} onChange={set('vendor')} /></Field>
         </div>
 
+        <Field label="Marketing request it answers">
+          <select className="input" value={f.request_id} onChange={set('request_id')}>
+            <option value="">None</option>
+            {requests.map((r) => <option key={r.id} value={r.id}>{requestName(r)}{r.status !== 'accepted' ? ' (not taken yet)' : ''}</option>)}
+          </select>
+          {request && (request.event_name || request.for_ticket) && (
+            <p className="mt-1 text-[11px] text-slate-500">Counts toward {[request.event_name, request.for_ticket?.ticket_type === 'bid' && request.for_ticket.title].filter(Boolean).join(' and ')}, which the request is for.</p>
+          )}
+        </Field>
+
         <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
           <legend className="px-1 text-xs font-medium text-slate-500">Who or what it was for (optional)</legend>
           <Field label="Event">
             <select className="input" value={f.event_id} onChange={set('event_id')}>
-              <option value="">None</option>
+              <option value="">{request?.event_name ? `The request’s: ${request.event_name}` : 'None'}</option>
               {events.map((ev) => <option key={ev.id} value={ev.id}>{ev.name} · {longDate(ev.date_from)}</option>)}
             </select>
           </Field>

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Navigate, NavLink, useParams, useSearchParams } from 'react-router-dom';
-import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil, Target, Code2, Briefcase } from 'lucide-react';
+import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil, Target, Code2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
@@ -23,18 +23,16 @@ import { ledTeams } from './MyTeam.jsx';
 
 const isAdmin = (user) => user.role === 'admin';
 const isDeveloper = (user) => !!user.developer;
-const leadsBd = (user) => isAdmin(user) || ledTeams(user).some((t) => t.name === 'BD');
 
 /**
  * Admin Access is the home for administrative and leadership views, each at /admin/<key>. Admin (access, the directory
  * and site setup) is /admin itself. Each view is for one role: Admin for admins, Team Lead for anyone who leads a team,
- * BD Team for admins and BD leads, Developer for people with the Developer role (set on their account). Someone sees only the views for roles they have,
+ * Developer for people with the Developer role (set on their account). Someone sees only the views for roles they have,
  * and the switcher only when there's more than one. Add a view here as a new leadership title is built out.
  */
 const VIEWS = [
   { key: '', label: 'Admin', icon: ShieldCheck, title: 'Admin Access', subtitle: 'Who can use KIT, the team directory and site setup', can: isAdmin, Page: AdminView },
   { key: 'team-lead', label: 'Team Lead', icon: Target, title: 'Team Lead', subtitle: 'What your team is expected to deliver', can: (u) => leadPages(u).length > 0, Page: TeamLeadView },
-  { key: 'bd-team', label: 'BD Team', icon: Briefcase, title: 'BD Team', subtitle: 'What each BD team member counts toward: BD numbers, Weekly Priorities and travel', can: leadsBd, Page: BdTeamPanel },
   { key: 'developer', label: 'Developer', icon: Code2, title: 'Developer', subtitle: 'Site feedback to work through', can: isDeveloper, Page: DeveloperView },
 ];
 
@@ -43,6 +41,8 @@ export default function AdminAccess() {
   const { user } = useAuth();
   const { view = '' } = useParams();
   const open = VIEWS.filter((v) => v.can(user));
+  // BD Team used to be a view of its own; it's now on BD's Team Lead tab.
+  if (view === 'bd-team') return <Navigate to="/admin/team-lead?team=BD" replace />;
   const current = open.find((v) => v.key === view);
   if (!open.length) return <Navigate to="/settings" replace />;
   if (!current) return <Navigate to={`/admin${open[0].key ? `/${open[0].key}` : ''}`} replace />;
@@ -102,11 +102,12 @@ function AdminView() {
 
 /**
  * What a team's lead sees on the Team Lead view, by team name. Only BD's is built so far: the booking (sales) and
- * qualified pipeline goals for each BD director. These are the only place goals are set; the report card, dashboards,
- * Reports and the BD deck all read them. Add a team here as its lead page takes shape; until then its leads see a note.
+ * qualified pipeline goals for each BD director, then what each BD member counts toward (BD numbers, Weekly Priorities
+ * and travel). These are the only place goals are set; the report card, dashboards, Reports and the BD deck all read
+ * them. Add a team here as its lead page takes shape; until then its leads see a note.
  */
 const LEAD_PAGES = {
-  BD: () => (<><BookingTargetsPanel /><QualifiedTargetsPanel /></>),
+  BD: () => (<><BookingTargetsPanel /><QualifiedTargetsPanel /><BdTeamPanel /></>),
 };
 
 /**

@@ -237,6 +237,7 @@ function LeadItem({ item: it }) {
     return (
       <Row icon={CalendarDays} tint="bg-sky-100 text-sky-700" title={it.event.name}>
         <div>Event · {longDate(it.event.date_from)}{it.event.date_to && it.event.date_to !== it.event.date_from ? ` – ${longDate(it.event.date_to)}` : ''}</div>
+        {it.sourced != null && <div className="text-slate-500">{it.sourced ? 'The lead came out of this event' : 'Tied to this opportunity'}</div>}
       </Row>
     );
   }

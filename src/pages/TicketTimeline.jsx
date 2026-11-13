@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft, Megaphone } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -87,6 +87,12 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
               <CalendarDays size={11} /> {t.event_name}
             </Link>
           )}
+          {(t.events || []).map((e) => (
+            <Link key={e.id} to={`/events?open=${e.id}`} className="flex items-center gap-1 rounded bg-sky-50 px-1.5 text-sky-800 hover:underline"
+              title={e.sourced ? 'This lead came out of this event' : 'An event this opportunity is tied to'}>
+              <CalendarDays size={11} /> {e.name}
+            </Link>
+          ))}
           {t.lost_reason && <span className="rounded bg-red-50 px-1.5 text-red-700" title="Lost reason">{t.lost_reason}</span>}
           {t.probability != null && <span className="rounded bg-slate-100 px-1.5 text-slate-600" title="Deal probability, set by hand (Pipedrive)">{t.probability}% probability</span>}
           <TicketLabels ticket={t} onChanged={refresh} readOnly={!canEdit} />
@@ -99,7 +105,15 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
           {t.ticket_type === 'bid' && (
             <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
               <span className="flex items-center gap-1.5"><Workflow size={14} className="text-brand-600" /> The pursuit left to right: lead, strategy, shaping and milestones.</span>
-              <button type="button" className="btn-primary shrink-0 px-2.5 py-1 text-xs" onClick={() => setProcessOpen(true)}>Process view</button>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => showTool('marketing')} title="Marketing requests, lead source and marketing dollars for this ticket"><Megaphone size={13} /> Marketing</button>
+                <button type="button" className="btn-primary px-2.5 py-1 text-xs" onClick={() => setProcessOpen(true)}>Process view</button>
+              </span>
+            </div>
+          )}
+          {t.ticket_type === 'work' && (
+            <div className="flex justify-end">
+              <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => showTool('marketing')} title="Marketing requests for this ticket"><Megaphone size={13} /> Marketing</button>
             </div>
           )}
           <ViewOnlyNote />

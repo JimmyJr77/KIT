@@ -54,7 +54,7 @@ function fields(b = {}) {
 }
 
 /** KIT's organization row for a name (made if new), so a person's organization is Pipedrive's too. */
-function organizationFor(name) {
+export function organizationFor(name) {
   if (!name) return null;
   return db.prepare('SELECT id FROM organizations WHERE name = ? COLLATE NOCASE LIMIT 1').get(name)?.id
     ?? db.prepare('INSERT INTO organizations (name) VALUES (?)').run(name).lastInsertRowid;

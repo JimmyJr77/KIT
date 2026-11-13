@@ -1707,6 +1707,116 @@ CREATE TABLE IF NOT EXISTS comp_projections (
 );
 `);
 
+// ---- Marketing tracking: lead source tags, what each marketing request is for, the dollars behind it, the opportunities
+// tied to an event, meetings, and the leads Marketing feeds the team.
+
+// Tags KIT keeps for good (they can't be renamed or deleted), in categories: Process (RFI, White Paper, SOW, RFP), Source
+// (the four lead sources, which share one color) and Other, where Google Solution (we're integrating Google, but Google
+// didn't bring the lead) sits with every ordinary tag. They're tags like any other, so a Pipedrive
+// label of the same name takes one over on the next pull and it then syncs both ways.
+addColumn('labels', 'kind', 'TEXT'); // lead | process | solution; null for ordinary tags
+export const LEAD_TAGS = { event: 'Event Lead', google: 'Google Lead', marketing: 'Marketing Lead', bd: 'BD Lead' };
+export const GOOGLE_SOLUTION_TAG = 'Google Solution';
+export const LEAD_TAG_COLOR = 'purple';
+// Process tags say what kind of ask a pursuit is answering. RFI is Pipedrive's label where it has one; the rest are KIT's.
+export const PROCESS_TAGS = ['RFI', 'White Paper', 'SOW', 'RFP'];
+/** The category a tag is shown under: Process, Source (where the lead came from), or Other. */
+export const tagCategory = (kind) => ({ process: 'process', lead: 'source' }[kind] || 'other');
+{
+  const keep = db.prepare(`INSERT INTO main.labels (name, color, position, kind) VALUES (@name, @color, (SELECT COALESCE(MAX(position) + 1, 0) FROM main.labels), @kind)
+    ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, color = CASE WHEN pipedrive_id IS NULL AND excluded.kind != 'process' THEN excluded.color ELSE color END`);
+  PROCESS_TAGS.forEach((name) => keep.run({ name, color: 'gray', kind: 'process' }));
+  Object.values(LEAD_TAGS).forEach((name) => keep.run({ name, color: LEAD_TAG_COLOR, kind: 'lead' }));
+  keep.run({ name: GOOGLE_SOLUTION_TAG, color: 'yellow', kind: 'solution' });
+}
+// Nothing already on a ticket is retagged: these are new options, and people choose which tickets get them.
+
+// A marketing request says what it's for: an event, a pipeline or work ticket (and maybe one of its activities), or both.
+// event_support_requests.ticket_id stays the work ticket Marketing makes when it takes the request.
+addColumn('event_support_requests', 'for_ticket_id', 'INTEGER REFERENCES tickets(id) ON DELETE SET NULL');
+addColumn('event_support_requests', 'activity_id', 'INTEGER REFERENCES ticket_tasks(id) ON DELETE SET NULL');
+addColumn('event_support_requests', 'justification', 'TEXT');
+addColumn('event_support_requests', 'purpose', 'TEXT'); // why we're at the event: brought in from the event's goal
+// Marketing dollars point at the request they answered; through it, at the event and the opportunities.
+addColumn('marketing_spend', 'request_id', 'INTEGER REFERENCES event_support_requests(id) ON DELETE SET NULL');
+db.exec(`
+-- Meetings: who we're meeting, when and where. Usually at an event; sometimes about a pipeline ticket. Everyone met is a CRM contact.
+CREATE TABLE IF NOT EXISTS meetings (
+  id INTEGER PRIMARY KEY,
+  event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+  ticket_id INTEGER REFERENCES tickets(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  meeting_date TEXT NOT NULL,  -- YYYY-MM-DD
+  meeting_time TEXT,           -- HH:MM
+  place TEXT,
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS meetings_event ON meetings(event_id);
+CREATE TABLE IF NOT EXISTS meeting_people (
+  meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  PRIMARY KEY (meeting_id, contact_id)
+);
+-- Who from the company is in the meeting.
+CREATE TABLE IF NOT EXISTS meeting_users (
+  meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (meeting_id, user_id)
+);
+-- Files attached to a meeting: an agenda, a deck, read-aheads.
+CREATE TABLE IF NOT EXISTS meeting_files (
+  id INTEGER PRIMARY KEY,
+  meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  mime_type TEXT,
+  size INTEGER,
+  uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- The opportunities and meetings a marketing request names.
+CREATE TABLE IF NOT EXISTS marketing_request_tickets (
+  request_id INTEGER NOT NULL REFERENCES event_support_requests(id) ON DELETE CASCADE,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  PRIMARY KEY (request_id, ticket_id)
+);
+CREATE TABLE IF NOT EXISTS marketing_request_meetings (
+  request_id INTEGER NOT NULL REFERENCES event_support_requests(id) ON DELETE CASCADE,
+  meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  PRIMARY KEY (request_id, meeting_id)
+);
+-- Pipeline tickets tied to an event. sourced = the ticket came out of the event (the event is where the lead began);
+-- otherwise the event supported an opportunity we already had.
+CREATE TABLE IF NOT EXISTS ticket_events (
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  sourced INTEGER NOT NULL DEFAULT 0,
+  added_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (ticket_id, event_id)
+);
+-- Leads Marketing feeds the team. Someone claims one by putting their name on it, and it becomes a pipeline ticket.
+CREATE TABLE IF NOT EXISTS marketing_leads (
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  organization TEXT,
+  contact TEXT,          -- who to talk to, as free text
+  details TEXT,
+  value REAL,
+  event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  claimed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  claimed_at TEXT,
+  ticket_id INTEGER REFERENCES tickets(id) ON DELETE SET NULL,
+  closed_at TEXT         -- set aside by Marketing without becoming a ticket
+);
+`);
+addColumn('meetings', 'objectives', 'TEXT'); // what we want out of the meeting
+
 /** Whether an admin has stopped people creating pipeline tickets in KIT. Deals pulled from Pipedrive still come in. */
 export const pipelineTicketsClosed = () => getSetting('pipeline_tickets_closed') === '1';
 export const PIPELINE_TICKETS_CLOSED = 'An admin has turned off creating new pipeline tickets.';

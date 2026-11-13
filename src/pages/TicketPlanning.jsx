@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { X, Plus, Trash2, Loader2, Check, Eye, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, Ticket } from 'lucide-react';
+import { X, Plus, Trash2, Loader2, Check, Eye, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, Ticket, Megaphone } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { api } from '../lib/api.js';
@@ -9,10 +9,12 @@ import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine
 import MultiSelect from '../components/MultiSelect.jsx';
 import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, milestoneOf } from '../lib/process.js';
 import { ActivitiesDrawer } from './TicketActivities.jsx';
+import { MarketingDrawer } from './TicketMarketing.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
 /**
- * The menu items along the ticket pane's left edge. Strategy and the win assessment are for pipeline tickets only. Priority
+ * The menu items along the ticket pane's left edge. Strategy and the win assessment are for pipeline tickets only; Marketing
+ * (requests, lead source, dollars) is on pipeline and work tickets. Priority
  * accounts share the `account` ones, under `accountLabel` if they have one; their priority tickets (`accountOnly`) are theirs alone.
  */
 export const PLAN_TOOLS = [
@@ -23,6 +25,7 @@ export const PLAN_TOOLS = [
   { key: 'people', label: 'People', accountLabel: 'CRM', icon: ContactRound, account: true },
   { key: 'process', label: 'Milestones', icon: Workflow, bidOnly: true },
   { key: 'details', label: 'Deal details', icon: ClipboardList, bidOnly: true },
+  { key: 'marketing', label: 'Marketing', icon: Megaphone },
 ];
 
 export function PlanRail({ ticket, active, onSelect, skip = [] }) {
@@ -45,6 +48,7 @@ export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty, activity
   if (tool === 'strategy') return <StrategyDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'process') return <ProcessDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'details') return <DetailsDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
+  if (tool === 'marketing') return <MarketingDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
   if (tool === 'assessment') return <AssessmentDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   return null;
 }

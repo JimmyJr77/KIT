@@ -20,6 +20,7 @@ import { PROCESS_TYPES, DECISIONS, cleanReviews } from '../../src/lib/process.js
 import { NEXT_STEP_SQL } from '../activities.js';
 import { canEditTicket, ownerOnlyMessage } from '../../src/lib/ticketAccess.js';
 import { focusTickets } from '../focus.js';
+import { sourceFromEvent } from '../leads.js';
 
 const r = Router();
 
@@ -238,7 +239,8 @@ r.get('/', (req, res) => {
 /**
  * Create a ticket on its own, without a priority. Body: { ticket_type: 'bid' | 'work', opportunity_title, organization,
  * account_type, pipeline_status, value, bd_director_id, territory_id }. A pipeline ticket left without a director or territory
- * gets the defaults (see defaultAssignment).
+ * gets the defaults (see defaultAssignment). With `source_event_id`, a pipeline ticket came out of that event: it's tied
+ * to it and tagged with its lead sources (see server/leads.js).
  */
 r.post('/', (req, res) => {
   const type = req.body?.ticket_type === 'work' ? 'work' : 'bid';
@@ -256,6 +258,8 @@ r.post('/', (req, res) => {
       @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined, @pipeline_id)`)
     .run({ ...fields, ...assign, ticket_type: type, created_by: req.user.id, pipeline_id: pipeline?.id ?? null }).lastInsertRowid;
   recordWork(req.user, { kind: 'ticket', ticket_id: id, summary: fields.opportunity_title });
+  const eventId = type === 'bid' && Number(req.body?.source_event_id);
+  if (eventId && db.prepare('SELECT 1 FROM events WHERE id = ?').get(eventId)) sourceFromEvent(id, eventId, req.user.id);
   res.json({ ticket: ticketRow(id) });
 });
 
@@ -478,7 +482,10 @@ export function ticketTimeline(id) {
     lost_reason: t.lost_reason ?? null, probability: t.probability ?? null, currency: t.currency ?? null,
     labels: json.parse(t.labels, []), source: t.source ?? null, deal_status: t.deal_status || 'open', won_at: t.won_at ?? null, lost_at: t.lost_at ?? null,
     pipeline_id: t.pipeline_id ?? null, pipedrive_id: t.pipedrive_id ?? null, organization_id: t.organization_id ?? null,
-    lost_reasons: (fieldsOf('deal').find((f) => f.key === 'lost_reason')?.options || []).map((o) => o.label) };
+    lost_reasons: (fieldsOf('deal').find((f) => f.key === 'lost_reason')?.options || []).map((o) => o.label),
+    // The events it's tied to: the ones it came out of first.
+    events: db.prepare(`SELECT e.id, e.name, e.date_from, x.sourced FROM ticket_events x JOIN events e ON e.id = x.event_id
+      WHERE x.ticket_id = ? ORDER BY x.sourced DESC, e.date_from`).all(t.id).map((e) => ({ ...e, sourced: !!e.sourced })) };
   const events = [{ type: 'ticket', at: t.created_at, author: t.first_name ? { id: t.created_by, first_name: t.first_name, last_name: t.last_name } : null }];
 
   // Each new activity (a priority made on the Weekly Priorities board is one too); subtasks aren't events.
@@ -749,6 +756,8 @@ r.get('/:id/process-view', (req, res) => {
     const e = db.prepare('SELECT id, name, date_from, date_to FROM events WHERE id = ?').get(t.event_id);
     if (e) lead.push({ type: 'event', at: e.date_from || t.created_at, event: e });
   }
+  db.prepare(`SELECT e.id, e.name, e.date_from, e.date_to, x.sourced FROM ticket_events x JOIN events e ON e.id = x.event_id WHERE x.ticket_id = ? AND e.id IS NOT ?`)
+    .all(t.id, t.event_id ?? null).forEach(({ sourced, ...e }) => lead.push({ type: 'event', at: e.date_from || t.created_at, event: e, sourced: !!sourced }));
   db.prepare(`SELECT s.*, e.name AS event_name, u.first_name || ' ' || u.last_name AS user_name FROM marketing_spend s
     LEFT JOIN events e ON e.id = s.event_id LEFT JOIN users u ON u.id = s.user_id WHERE s.ticket_id = ? ORDER BY s.spent_on, s.id`).all(t.id)
     .forEach((s) => lead.push({ type: 'spend', at: s.spent_on, spend: { id: s.id, amount: s.amount, description: s.description, category: s.category, vendor: s.vendor, event_name: s.event_name, user_name: s.user_name, note: s.note } }));

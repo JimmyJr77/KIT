@@ -1,13 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, Lightbulb, BookOpenText, MessagesSquare, BadgeDollarSign, LogOut, PanelLeftClose, PanelLeftOpen, MoreHorizontal, Crosshair } from 'lucide-react';
+import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, Lightbulb, BookOpenText, MessagesSquare, BadgeDollarSign, LogOut, PanelLeftClose, PanelLeftOpen, MoreHorizontal, Crosshair, Car } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { hiddenNav } from '../lib/sidebar.js';
 import { fullName, initials } from '../lib/format.js';
 import { ledTeams } from '../pages/MyTeam.jsx';
 import { markOnDark } from '../lib/brand.js';
-import FeedbackWidget from './FeedbackWidget.jsx';
+import FeedbackWidget, { setKittHidden, useKittHidden } from './FeedbackWidget.jsx';
 
 const NAV = [
   { to: '/alerts', label: 'Alerts', icon: Bell },
@@ -191,6 +191,7 @@ export default function Layout() {
   const hidden = new Set(hiddenNav(user));
   const shown = items.filter((n) => n.fixed || !hidden.has(n.to));
   const counts = { '/alerts': unread, '/admin': pendingRequests };
+  const kittHidden = useKittHidden();
 
   return (
     // When printing, drop the sidebar and the fixed-height frame so the page flows across sheets.
@@ -215,11 +216,16 @@ export default function Layout() {
             <Crosshair size={15} className="shrink-0" /> {!collapsed && 'Focus on'}
           </NavLink>
         )}
-        {/* KITT's home spot, just above More. Minimized, he lines up with the edge and reaches out over the page. */}
-        <div className={`flex ${collapsed ? 'justify-start' : 'justify-center'}`}><FeedbackWidget /></div>
         {/* More sits outside the scrolling list, so it's always in view however many pages are shown. */}
         <div className={`space-y-1 border-t border-white/10 pt-2 pb-2 ${collapsed ? 'px-2' : 'px-3'}`}>
           <MoreMenu items={items} counts={counts} collapsed={collapsed} />
+          {/* Hidden from his right-click menu, KITT waits here until he's called back. */}
+          {kittHidden && (
+            <button onClick={() => setKittHidden(false)} title={collapsed ? 'Call KIT' : undefined} aria-label="Call KIT"
+              className={`flex w-full items-center gap-3 rounded-md py-2 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white ${collapsed ? 'justify-center px-0' : 'px-3'}`}>
+              <Car size={18} className="shrink-0" /> {!collapsed && 'Call KIT'}
+            </button>
+          )}
           {shown.filter((n) => n.bottom).map((n) => <NavItem key={n.to} {...n} count={counts[n.to]} collapsed={collapsed} />)}
           <button onClick={toggle} title={collapsed ? 'Expand sidebar' : 'Minimize sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Minimize sidebar'}
             className={`flex items-center gap-3 rounded-md py-2 text-sm text-slate-400 transition hover:bg-white/5 hover:text-white ${collapsed ? 'w-full justify-center px-0' : 'w-full px-3'}`}>
@@ -249,6 +255,8 @@ export default function Layout() {
       <main className="min-w-0 flex-1 overflow-y-auto print:overflow-visible">
         <Outlet />
       </main>
+      {/* KITT drives over every page, parked bottom-right unless he's been moved or hidden. */}
+      <FeedbackWidget />
     </div>
   );
 }

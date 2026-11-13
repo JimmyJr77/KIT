@@ -18,6 +18,12 @@
     82% { opacity: 1; transform: translateY(0) scale(1); }
     100% { opacity: 0; transform: translateY(-4px) scale(0.97); }
   }
+  /* Call KIT: he drives in from past the right edge of the window and eases to a stop where he's parked. */
+  --animate-kitt-arrive: kitt-arrive 1.1s cubic-bezier(0.22, 1, 0.36, 1);
+  @keyframes kitt-arrive {
+    from { transform: translateX(100vw); }
+    to { transform: translateX(0); }
+  }
 }
 
 @utility label { @apply block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1; }

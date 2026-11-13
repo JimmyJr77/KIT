@@ -11,6 +11,7 @@ import MentionTextarea from '../components/MentionTextarea.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { contactName } from './ContactEditor.jsx';
 import { DrawerShell } from './TicketPlanning.jsx';
+import { MarketingButton } from '../components/MarketingRequestForm.jsx';
 
 // Pipedrive's activity types, each with its icon.
 export const TYPE_ICONS = { Call: Phone, Meeting: Users, Task: SquareCheck, Deadline: Clock, Email: Mail, Lunch: Utensils };
@@ -374,6 +375,12 @@ function ActivityEditor({ ticket, activity, comments, types, priorities, onClose
         {activity && (
           <>
             <WeeklyPriority activity={activity} ticket={ticket} onChanged={onChanged} />
+            {ticket.ticket_type !== 'account' && (
+              <section className="flex items-center justify-between gap-2 border-t border-slate-200 pt-4">
+                <span className="text-xs text-slate-500">Need Marketing for this activity?</span>
+                <MarketingButton ticket={ticket} activity={{ id: activity.id, subject: activity.subject }} label="Marketing" />
+              </section>
+            )}
             <section className="border-t border-slate-200 pt-4">
               <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><MessageSquare size={13} /> Comments</h4>
               {ticket.ticket_type !== 'account' && <p className="mb-2 text-[11px] text-slate-400">Comments here also show in the ticket’s history, marked as activity comments.</p>}

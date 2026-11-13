@@ -18,6 +18,15 @@
         "export PATH=$HOME/.nvm/versions/node/v22.17.1/bin:$PATH; npx vite --port 5180 --strictPort"
       ],
       "port": 5180
+    },
+    {
+      "name": "kit-dev-alt",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": [
+        "-c",
+        "export PATH=$HOME/.nvm/versions/node/v22.17.1/bin:$PATH PORT=3002 API_PORT=3002; npx concurrently -n api,web -c blue,green \"node --watch server/index.js\" \"npx vite --port 5175 --strictPort\""
+      ],
+      "port": 5175
     }
   ]
 }

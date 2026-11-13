@@ -1,8 +1,11 @@
-// Events (conferences, industry days, …): details, who's attending, the trips planned for them,
-// and marketing support requests, which the Marketing team turns into work tickets.
+// Events (conferences, industry days, …): details, who's attending, the trips planned for them, the meetings set up
+// there, the opportunities tied to them, and marketing support requests, which the Marketing team turns into work tickets.
 import { Router } from 'express';
-import { db, json } from '../db.js';
-import { marketingTeam, isMarketing, createRequest, acceptRequest } from './marketing.js';
+import { db, json, pipelineTicketsClosed } from '../db.js';
+import { marketingTeam, isMarketing, createRequest, acceptRequest, requestList } from './marketing.js';
+import { meetingList } from './meetings.js';
+import { LEAD_TAGS, addTicketTags, linkTicketEvent, marketingSupported } from '../leads.js';
+import { canEditTicket } from '../../src/lib/ticketAccess.js';
 
 const r = Router();
 
@@ -18,22 +21,25 @@ function eventsOut(rows) {
   const reps = db.prepare(`SELECT r.event_id, u.id, u.first_name, u.last_name, u.title FROM event_reps r
     JOIN users u ON u.id = r.user_id ORDER BY u.last_name, u.first_name`).all();
   const trips = db.prepare('SELECT event_id, COUNT(*) AS n FROM trips WHERE event_id IS NOT NULL GROUP BY event_id').all();
-  const support = db.prepare(`SELECT r.*, q.first_name AS req_first, q.last_name AS req_last, k.first_name AS acc_first, k.last_name AS acc_last,
-      t.opportunity_title AS ticket_title
-    FROM event_support_requests r LEFT JOIN users q ON q.id = r.requested_by LEFT JOIN users k ON k.id = r.accepted_by
-    LEFT JOIN tickets t ON t.id = r.ticket_id ORDER BY r.created_at DESC, r.id DESC`).all();
+  const support = requestList('r.event_id IS NOT NULL');
+  const meetings = meetingList('m.event_id IS NOT NULL');
+  // The pipeline tickets tied to each event: the ones that came out of it first.
+  const tickets = db.prepare(`SELECT x.event_id, x.sourced, t.id, t.opportunity_title AS title, t.organization, t.value, t.deal_status, t.created_by,
+      d.first_name || ' ' || d.last_name AS director
+    FROM ticket_events x JOIN tickets t ON t.id = x.ticket_id LEFT JOIN users d ON d.id = t.bd_director_id
+    WHERE t.archive_set_id IS NULL ORDER BY x.sourced DESC, t.opportunity_title`).all();
+  const spent = db.prepare(`SELECT COALESCE(s.event_id, q.event_id) AS event_id, SUM(s.amount) AS amount FROM marketing_spend s
+    LEFT JOIN event_support_requests q ON q.id = s.request_id GROUP BY 1`).all();
   return rows.map((e) => ({
     ...e,
     location: json.parse(e.location, {}),
     attendees: attendees.filter((a) => a.event_id === e.id).map(({ event_id, ...u }) => ({ ...u, trip: tripOf(e.id, u.id) })),
     reps: reps.filter((a) => a.event_id === e.id).map(({ event_id, ...u }) => u),
     trip_count: trips.find((t) => t.event_id === e.id)?.n || 0,
-    support: support.filter((x) => x.event_id === e.id).map((x) => ({
-      id: x.id, details: x.details, status: x.status, created_at: x.created_at, accepted_at: x.accepted_at,
-      ticket_id: x.ticket_id, ticket_title: x.ticket_title,
-      requested_by: x.req_first ? { id: x.requested_by, first_name: x.req_first, last_name: x.req_last } : null,
-      accepted_by: x.acc_first ? { id: x.accepted_by, first_name: x.acc_first, last_name: x.acc_last } : null,
-    })),
+    support: support.filter((x) => x.event_id === e.id),
+    meetings: meetings.filter((m) => m.event_id === e.id),
+    tickets: tickets.filter((t) => t.event_id === e.id).map(({ event_id, ...t }) => ({ ...t, sourced: !!t.sourced })),
+    marketing_spent: spent.find((x) => x.event_id === e.id)?.amount || 0,
   }));
 }
 const one = (id) => eventsOut(db.prepare('SELECT * FROM events WHERE id = ?').all(id))[0] || null;
@@ -74,7 +80,7 @@ function setReps(eventId, ids) {
 // ---- Marketing support (shared with the Marketing page; see routes/marketing.js)
 
 /** Who gets alerted for a request, and whether the signed-in user can take requests. */
-r.get('/support-team', (req, res) => res.json({ team: marketingTeam(), canTake: isMarketing(req.user) }));
+r.get('/support-team', (req, res) => res.json({ team: marketingTeam(), canTake: isMarketing(req.user), pipelineTicketsClosed: pipelineTicketsClosed() }));
 
 /** Ask Marketing for support at an event. Body: { details }. Everyone on the Marketing team gets an alert. */
 r.post('/:id/support', (req, res) => {
@@ -91,6 +97,33 @@ r.post('/support/:rid/accept', (req, res) => {
   const out = acceptRequest(req.user, req.params.rid, req.body?.title);
   if (out.error) return res.status(out.status).json({ error: out.error, ticket_id: out.ticket_id });
   res.json({ event: out.event_id ? one(out.event_id) : null, ticket_id: out.ticket_id });
+});
+
+// ---- Opportunities: the pipeline tickets tied to an event
+
+/**
+ * Tie a pipeline ticket to the event. Anyone can; it doesn't change the ticket. Body: { sourced }. Saying the ticket came
+ * out of the event (sourced) tags it with its lead sources, so that's for the ticket's owner, Marketing or an admin.
+ */
+r.put('/:id/tickets/:ticketId', (req, res) => {
+  const e = db.prepare('SELECT id FROM events WHERE id = ?').get(req.params.id);
+  const t = db.prepare("SELECT * FROM tickets WHERE id = ? AND ticket_type = 'bid'").get(req.params.ticketId);
+  if (!e || !t) return res.status(404).json({ error: 'Not found' });
+  const sourced = !!req.body?.sourced;
+  if ('sourced' in (req.body || {}) && !canEditTicket(req.user, t) && !isMarketing(req.user)) {
+    return res.status(403).json({ error: 'Only the ticket’s owner, Marketing or an admin can say where a lead came from' });
+  }
+  linkTicketEvent(t.id, e.id, { sourced, userId: req.user.id });
+  if ('sourced' in (req.body || {})) {
+    db.prepare('UPDATE ticket_events SET sourced = ? WHERE ticket_id = ? AND event_id = ?').run(sourced ? 1 : 0, t.id, e.id);
+    if (sourced) addTicketTags(t.id, [LEAD_TAGS.event, marketingSupported(e.id) && LEAD_TAGS.marketing]);
+  }
+  res.json({ event: one(e.id) });
+});
+
+r.delete('/:id/tickets/:ticketId', (req, res) => {
+  db.prepare('DELETE FROM ticket_events WHERE event_id = ? AND ticket_id = ?').run(req.params.id, req.params.ticketId);
+  res.json({ event: one(req.params.id) });
 });
 
 /** scope: upcoming (default, ends today or later) | past | all. Soonest first, past ones most recent first. */
@@ -137,6 +170,12 @@ r.delete('/:id', (req, res) => {
   if (e.created_by !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Only whoever added this event can delete it' });
   db.prepare('DELETE FROM events WHERE id = ?').run(e.id);
   res.json({ ok: true });
+});
+
+r.get('/:id', (req, res) => {
+  const e = one(req.params.id);
+  if (!e) return res.status(404).json({ error: 'Event not found' });
+  res.json({ event: e });
 });
 
 /**

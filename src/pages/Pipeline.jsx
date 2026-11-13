@@ -312,7 +312,7 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           <TicketKindTag ticket={t} />
           <PriorityTag of={t.priority_of} />
-          <LabelList labels={t.labels} />
+          <LabelList labels={t.labels} card />
         </div>
       )}
       <div className="mt-2 flex items-center justify-between gap-2">

@@ -5,6 +5,7 @@ import { StatTile, ChartCard, BarList, StackedColumns, SERIES, compact, fullMone
 import BdDashboard from '../components/BdDashboard.jsx';
 import PriorityAccounts from '../components/PriorityAccounts.jsx';
 import MarketingSpend from '../components/MarketingSpend.jsx';
+import MarketingImpact from '../components/MarketingImpact.jsx';
 import { isBdDirector } from '../lib/bd.js';
 
 /**
@@ -61,10 +62,12 @@ export default function CompanyDashboard() {
       {team === 'all' ? <TeamFinancials team="all" /> : !teamRow ? null : chosen ? (
         <BdDashboard key={`p${chosen.id}${territory}`} director={chosen.id} territory={territory}
           header={(d) => d.isDirector && <PriorityAccounts userId={chosen.id} name={fullName(chosen)} readOnly />}>
+          {team === 'Marketing' && <Titled title="Marketing tracking"><MarketingImpact /></Titled>}
           {team === 'Marketing' && <Titled title="Marketing spend"><MarketingSpend entries={false} /></Titled>}
         </BdDashboard>
       ) : (
         <BdDashboard key={`t${teamRow.id}${territory}`} team={teamRow.id} territory={territory}>
+          {team === 'Marketing' && <Titled title="Marketing tracking"><MarketingImpact /></Titled>}
           {team === 'Marketing' && <Titled title="Marketing spend"><MarketingSpend entries={false} /></Titled>}
           {!isBd && <Titled title={`${team} figures`}><TeamFinancials team={team} /></Titled>}
         </BdDashboard>

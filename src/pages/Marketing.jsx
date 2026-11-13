@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Megaphone, Image as ImageIcon, FileText, Type, Download, Copy, Check, Pencil, Plus, Search, Upload, Ticket, Loader2, Trash2, CalendarDays, Receipt } from 'lucide-react';
+import { Megaphone, Image as ImageIcon, FileText, Type, Download, Copy, Check, Pencil, Plus, Search, Upload, Ticket, Loader2, Trash2, Receipt, Sprout, Route } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ago, fullName, fullStamp, shortDate, todayIso } from '../lib/format.js';
@@ -8,13 +8,19 @@ import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import Avatar from '../components/Avatar.jsx';
 import MarketingSpend from '../components/MarketingSpend.jsx';
+import MarketingLeads from '../components/MarketingLeads.jsx';
+import MarketingImpact, { RequestTies } from '../components/MarketingImpact.jsx';
+import MarketingRequestForm from '../components/MarketingRequestForm.jsx';
+import { fullMoney } from '../components/Charts.jsx';
 
 const TABS = [
   { key: 'brand', label: 'Logos & Images', icon: ImageIcon },
   { key: 'copy', label: 'Text Copy', icon: Type },
   { key: 'files', label: 'Files', icon: FileText },
   { key: 'requests', label: 'Support Requests', icon: Megaphone },
+  { key: 'leads', label: 'Leads', icon: Sprout },
   { key: 'spend', label: 'Spend', icon: Receipt },
+  { key: 'tracking', label: 'Tracking', icon: Route },
 ];
 
 export const fileSize = (n) => (n == null ? '' : n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 ** 2).toFixed(1)} MB`);
@@ -23,7 +29,8 @@ const matches = (q, ...fields) => !q || fields.some((f) => f?.toLowerCase().incl
 
 /**
  * Marketing: logos, images, approved text copy, and files anyone can grab, kept up to date by the Marketing team;
- * plus support requests, which Marketing turns into work tickets.
+ * support requests, which Marketing turns into work tickets; leads Marketing feeds the team; what it spends; and
+ * tracking, which ties the asks to the dollars and the dollars to opportunities.
  */
 export default function Marketing() {
   const [params, setParams] = useSearchParams();
@@ -35,6 +42,7 @@ export default function Marketing() {
   const [requests, setRequests] = useState(null);
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null); // { type: 'asset' | 'copy' | 'request', item?, kind? }
+  const [leadCount, setLeadCount] = useState(null);
 
   const loadAssets = () => api.get('/marketing/assets').then((d) => setAssets(d.assets));
   const loadCopy = () => api.get('/marketing/copy').then((d) => setCopy(d.copy));
@@ -44,6 +52,7 @@ export default function Marketing() {
     loadAssets();
     loadCopy();
     loadRequests();
+    api.get('/marketing/leads').then((d) => setLeadCount(d.leads.filter((l) => !l.claimed_by && !l.ticket_id && !l.closed_at).length));
   }, []);
 
   const canManage = !!meta?.canManage;
@@ -52,19 +61,20 @@ export default function Marketing() {
     copy: copy?.length,
     files: assets?.filter((a) => a.kind === 'file').length,
     requests: requests?.filter((r) => r.status !== 'accepted').length,
+    leads: leadCount,
   };
   const close = () => setOpen(null);
 
-  const addButton = tab === 'spend' ? null : tab === 'requests'
-    ? <button className="btn-primary" onClick={() => setOpen({ type: 'request' })}><Megaphone size={15} /> Request support</button>
-    : canManage && (tab === 'copy'
-      ? <button className="btn-primary" onClick={() => setOpen({ type: 'copy' })}><Plus size={15} /> Add copy</button>
-      : <button className="btn-primary" onClick={() => setOpen({ type: 'asset', kind: tab === 'files' ? 'file' : 'logo' })}><Upload size={15} /> Upload</button>);
+  // The library tabs have their own button for the Marketing team; asking Marketing for support is on every tab, at the far right.
+  const addButton = canManage && (tab === 'copy'
+    ? <button className="btn-primary" onClick={() => setOpen({ type: 'copy' })}><Plus size={15} /> Add copy</button>
+    : ['brand', 'files'].includes(tab) && <button className="btn-primary" onClick={() => setOpen({ type: 'asset', kind: tab === 'files' ? 'file' : 'logo' })}><Upload size={15} /> Upload</button>);
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Marketing" subtitle="Logos, images, approved copy, and files ready to use, a place to ask the Marketing team for help, and what marketing spends.">
+      <PageHeader title="Marketing" subtitle="Logos, images, approved copy, and files ready to use, a place to ask the Marketing team for help, the leads Marketing brings in, and what marketing spends and gets for it.">
         {addButton}
+        <button className="btn-primary" onClick={() => setOpen({ type: 'request' })}><Megaphone size={15} /> Request marketing support</button>
       </PageHeader>
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200">
@@ -74,11 +84,11 @@ export default function Marketing() {
               className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition ${
                 tab === key ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
               <Icon size={15} /> {label}
-              {counts[key] > 0 && <span className={`rounded-full px-1.5 text-[11px] ${key === 'requests' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>{counts[key]}</span>}
+              {counts[key] > 0 && <span className={`rounded-full px-1.5 text-[11px] ${['requests', 'leads'].includes(key) ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>{counts[key]}</span>}
             </button>
           ))}
         </nav>
-        {!['requests', 'spend'].includes(tab) && (
+        {!['requests', 'spend', 'leads', 'tracking'].includes(tab) && (
           <div className="relative mb-2 w-full max-w-xs">
             <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
             <input className="input pl-9" placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -90,7 +100,9 @@ export default function Marketing() {
       {tab === 'files' && assets && <FileList assets={assets.filter((a) => a.kind === 'file' && matches(q, a.title, a.description, a.name))} canManage={canManage} onEdit={(item) => setOpen({ type: 'asset', item })} />}
       {tab === 'copy' && copy && <CopyList copy={copy} q={q} categories={meta?.copyCategories || []} canManage={canManage} onEdit={(item) => setOpen({ type: 'copy', item })} />}
       {tab === 'requests' && requests && <Requests requests={requests} meta={meta} onChanged={loadRequests} />}
+      {tab === 'leads' && <MarketingLeads onCount={setLeadCount} />}
       {tab === 'spend' && <MarketingSpend />}
+      {tab === 'tracking' && <MarketingImpact />}
 
       {open?.type === 'asset' && (
         <AssetForm key={open.item?.id ?? 'new'} asset={open.item} kind={open.kind} kinds={meta?.assetKinds || []} onClose={close}
@@ -101,7 +113,7 @@ export default function Marketing() {
           onSaved={() => { loadCopy(); close(); }} />
       )}
       {open?.type === 'request' && (
-        <RequestForm meta={meta} onClose={close} onSaved={() => { loadRequests(); close(); }} />
+        <MarketingRequestForm onClose={close} onSaved={() => { loadRequests(); close(); }} />
       )}
     </div>
   );
@@ -332,7 +344,7 @@ function Requests({ requests, meta, onChanged }) {
 
       {!shown.length ? (
         <Empty icon={Megaphone}>
-          {filter === 'open' ? 'No open requests.' : filter === 'mine' ? 'You haven’t asked Marketing for anything yet.' : 'No requests yet.'} Need graphics, copy, a one-pager, or event support? Use Request support.
+          {filter === 'open' ? 'No open requests.' : filter === 'mine' ? 'You haven’t asked Marketing for anything yet.' : 'No requests yet.'} Need graphics, copy, a one-pager, or event support? Use Request marketing support, or the Marketing button on any event, ticket or activity.
         </Empty>
       ) : (
         <ul className="max-w-4xl space-y-2">
@@ -343,17 +355,19 @@ function Requests({ requests, meta, onChanged }) {
                   <h3 className="font-semibold text-slate-900">{r.title || (r.event_name ? `Support for ${r.event_name}` : 'Marketing support')}</h3>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
                     {r.category && <span className="chip py-0 text-[11px]">{r.category}</span>}
-                    {r.event_id && (
-                      <button type="button" onClick={() => navigate(`/events?open=${r.event_id}`)} className="flex items-center gap-1 text-sky-700 hover:underline">
-                        <CalendarDays size={12} /> {r.event_name}
-                      </button>
-                    )}
                     {r.due_date && <span className={r.status !== 'accepted' && r.due_date < todayIso() ? 'font-medium text-red-600' : ''}>Needed by {longDate(r.due_date)}</span>}
+                    {r.spent > 0 && <span className="rounded bg-emerald-50 px-1.5 text-emerald-700" title="Marketing dollars recorded against this request">{fullMoney(r.spent)} spent</span>}
                   </div>
                 </div>
                 {STATUS[r.status] || STATUS.open}
               </div>
               <p className="mt-2 text-sm whitespace-pre-wrap text-slate-700">{r.details}</p>
+              {r.justification && <p className="mt-2 text-sm whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Justification:</span> {r.justification}</p>}
+              {r.purpose && <p className="mt-1 text-sm whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Purpose of the event:</span> {r.purpose}</p>}
+              <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-2">
+                <div className="mb-1 text-[10px] font-semibold tracking-wide text-slate-400 uppercase">Tied to</div>
+                <RequestTies request={r} />
+              </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-400">
                   <Avatar user={r.requested_by} size="xs" />
@@ -385,50 +399,6 @@ function Requests({ requests, meta, onChanged }) {
         </ul>
       )}
     </div>
-  );
-}
-
-function RequestForm({ meta, onClose, onSaved }) {
-  const [form, setForm] = useState({ title: '', category: '', due_date: '', details: '' });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const submit = async () => {
-    setBusy(true);
-    setError('');
-    try { await api.post('/marketing/requests', form); onSaved(); } catch (e) { setError(e.message); setBusy(false); }
-  };
-  return (
-    <SidePanel title="Request marketing support" subtitle={meta?.team.length ? `Alerts ${meta.team.map(fullName).join(', ')}` : 'No one is on the Marketing team yet'} onClose={onClose}
-      footer={(
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-red-600">{error}</span>
-          <div className="flex gap-2">
-            <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn-primary" onClick={submit} disabled={busy || !form.title.trim() || !form.details.trim()}>
-              <Megaphone size={15} /> {busy ? 'Sending…' : 'Send request'}
-            </button>
-          </div>
-        </div>
-      )}>
-      <div className="space-y-4">
-        <Field label="Title"><input className="input" autoFocus value={form.title} onChange={(e) => set('title', e.target.value)} placeholder="e.g. One-pager for the Army cloud pitch" /></Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Type of help">
-            <select className="input" value={form.category} onChange={(e) => set('category', e.target.value)}>
-              <option value="">Choose…</option>
-              {(meta?.requestCategories || []).map((c) => <option key={c}>{c}</option>)}
-            </select>
-          </Field>
-          <Field label="Needed by"><input type="date" className="input" min={todayIso()} value={form.due_date} onChange={(e) => set('due_date', e.target.value)} /></Field>
-        </div>
-        <Field label="Details">
-          <textarea className="input min-h-40" value={form.details} onChange={(e) => set('details', e.target.value)}
-            placeholder="What do you need, who's it for, and where will it be used? Link any drafts or examples." />
-        </Field>
-        <p className="text-xs text-slate-500">For help with a specific event, you can also ask from that event on the Events page.</p>
-      </div>
-    </SidePanel>
   );
 }
 

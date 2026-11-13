@@ -3,6 +3,7 @@ import { RotateCcw } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { stamp } from '../lib/format.js';
 import SidePanel from '../components/SidePanel.jsx';
+import { CardTagSettings } from '../components/Labels.jsx';
 import {
   CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, RATING_CREDIT, MUST_HAVE_PENALTY, MAX_PWIN, pwin, weightShares,
 } from '../lib/assessment.js';
@@ -10,12 +11,18 @@ import {
 const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
 const everyArea = (rating, override = {}) => Object.fromEntries(CRITERIA.map((c) => [c.key, { score: override[c.key] ?? rating }]));
 
-/** BD Pipeline settings: PWIN weights and must-have areas for the bid and win assessment, with a way back to the defaults. */
+const TABS = [['pwin', 'PWIN'], ['tags', 'Tags on cards']];
+
+/**
+ * BD Pipeline settings, in tabs: PWIN weights and must-have areas for the bid and win assessment, with a way back to the
+ * defaults; and which tags each person sees on the board's cards.
+ */
 export default function PwinSettings({ onClose, onSaved }) {
   const [saved, setSaved] = useState(null); // what the server has
   const [draft, setDraft] = useState(null); // { weights, gates }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [tab, setTab] = useState('pwin');
   useEffect(() => {
     api.get('/tickets/pwin-weights').then((d) => { setSaved(d); setDraft({ weights: d.weights, gates: d.gates }); });
   }, []);
@@ -59,8 +66,8 @@ export default function PwinSettings({ onClose, onSaved }) {
   ].map(([label, a]) => [label, pwin(a, weights, draft.gates)?.score]) : [];
 
   return (
-    <SidePanel title="BD Pipeline settings" subtitle="PWIN weights and must-have areas" onClose={close}
-      footer={draft && (
+    <SidePanel title="BD Pipeline settings" subtitle={tab === 'pwin' ? 'PWIN weights and must-have areas' : 'The tags you see on the board’s cards'} onClose={close}
+      footer={draft && tab === 'pwin' && (
         <div className="space-y-2">
           {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
           <div className="flex items-center gap-2">
@@ -72,7 +79,15 @@ export default function PwinSettings({ onClose, onSaved }) {
           </div>
         </div>
       )}>
-      {!draft ? <p className="text-sm text-slate-400">Loading…</p> : (
+      <nav className="-mt-1 mb-4 flex gap-1 border-b border-slate-200" role="tablist" aria-label="Settings">
+        {TABS.map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${tab === k ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      {tab === 'tags' ? <CardTagSettings /> : !draft ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className="space-y-4">
           <section className="space-y-2 rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
             <p>
