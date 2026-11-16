@@ -20,6 +20,15 @@
       "port": 5180
     },
     {
+      "name": "kit-web-alt",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": [
+        "-c",
+        "export PATH=$HOME/.nvm/versions/node/v22.17.1/bin:$PATH API_PORT=3002; npx vite --port 5181 --strictPort"
+      ],
+      "port": 5181
+    },
+    {
       "name": "kit-dev-alt",
       "runtimeExecutable": "/bin/sh",
       "runtimeArgs": [

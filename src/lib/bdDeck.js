@@ -167,7 +167,7 @@ export function buildDeck(pptx, r, logos) {
   const g = page(pptx, 'At a glance', `Pipeline figures as of ${prepared}`);
   tiles(pptx, g, TOP + 0.1, 2.35, [
     { label: `Booked, ${r.period}`, big: money(m.bookings.amount), note: m.bookings.target ? `${value(m.bookings)} of ${money(m.bookings.target)} target` : 'No target set' },
-    { label: 'Qualified pipeline', big: money(bd.qualified.value), note: `${bd.qualified.count} PL tickets, Qualified onward` },
+    { label: 'Qualified pipeline', big: money(bd.qualified.value), note: `${bd.qualified.count} PL tickets, Qualified through Awarded` },
     { label: 'Expected, next 4 quarters', big: money(sum(q.map((x) => x.weighted))), note: `PWIN-weighted · ${money(bd.expected.undetermined.value)} undetermined` },
     { label: 'Backlog', big: money(bd.backlog.total), note: `${money(bd.backlog.fundedBacklog)} funded · ${money(bd.backlog.unfundedBacklog)} unfunded` },
   ], { size: 40 });
@@ -217,7 +217,7 @@ export function buildDeck(pptx, r, logos) {
     { ...rankedBars(bd.stages.length), x: LEFT, y: TOP, w: WIDTH, h: BOTTOM - TOP });
 
   // Qualified pipeline by territory and director
-  const qp = page(pptx, 'Qualified pipeline', 'Open pipeline tickets, Qualified onward');
+  const qp = page(pptx, 'Qualified pipeline', 'Open pipeline tickets, Qualified through Awarded');
   [['By territory', bd.qualifiedByTerritory, LEFT], ['By BD director', bd.qualifiedByDirector, 6.93]].forEach(([title, rows, x]) => {
     qp.addText(title, { x, y: TOP - 0.05, w: 5.9, h: 0.35, margin: 0, fontFace: FONT, fontSize: 15, bold: true, color: NAVY });
     if (rows.length) {

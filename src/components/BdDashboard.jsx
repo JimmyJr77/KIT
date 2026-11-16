@@ -201,7 +201,7 @@ function TopMetrics({ top, people, territory }) {
         <YearBasisToggle />
       </SectionHead>
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(12.5rem,1fr))]">
-        <StatTile label="Qualified+ pipeline" value={compact(ql.value)} sub={`${plural(ql.count, 'open PL ticket')}, Qualified onward · ${compact(ql.weighted)} PWIN-adjusted`}>
+        <StatTile label="Qualified+ pipeline" value={compact(ql.value)} sub={`${plural(ql.count, 'open PL ticket')}, Qualified through Awarded · ${compact(ql.weighted)} PWIN-adjusted`}>
           <Meter value={ql.value} target={ql.target} noun={`${top.booked.quarter.label} target`} label="Qualified+ pipeline against this quarter's qualified pipeline target" />
           {ql.yearTarget && ql.yearTarget !== ql.target && <div className="text-[11px] text-slate-500">{compact(ql.yearTarget)} to hold at year end</div>}
           {territory && <div className="mt-1 text-[11px] text-slate-400">Targets are set per BD director, not per territory</div>}
@@ -351,7 +351,7 @@ function BdNumbers({ numbers: n, isTeam }) {
           timeline={<LineChart points={rv.map((x) => x.quarter)} labels={rv.map((x) => shortQuarter(x.quarter))} height={180}
             series={[{ key: 'rev', label: 'Revenue', values: rv.map((x) => x.value) }]} />} />
 
-        <ViewCard className="lg:col-span-2" title="Qualified+ pipeline" subtitle={`Open pipeline tickets from Qualified onward that haven't been awarded: ${compact(ql.stages.reduce((s, x) => s + x.value, 0))} in all`}
+        <ViewCard className="lg:col-span-2" title="Qualified+ pipeline" subtitle={`Open pipeline tickets from Qualified through Awarded, until they're marked won: ${compact(ql.stages.reduce((s, x) => s + x.value, 0))} in all`}
           table={{ columns: [{ key: 'label', label: qualBy === 'stage' ? 'Stage' : qualBy === 'territory' ? 'Territory' : 'BD director' }, { key: 'count', label: 'PL tickets', align: 'right' },
             { key: 'value', label: 'Value', align: 'right', format: fullMoney }, { key: 'weighted', label: 'PWIN-adjusted', align: 'right', format: fullMoney }], rows: qualRows }}
           bar={(

@@ -10,13 +10,14 @@ import { useClickAway } from '../components/UserCombobox.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 
-/** Switches between the BD Pipeline board and the Process view of one ticket. */
+/** Switches between the BD Pipeline board, the Process view of one ticket and the Close to closing (C2C) list. */
 export function PipelineViewToggle() {
   const link = ({ isActive }) => `flex items-center rounded px-3 ${isActive ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`;
   return (
     <nav className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" aria-label="Pipeline view">
       <NavLink to="/pipeline" end className={link}>Pipeline</NavLink>
       <NavLink to="/pipeline/process" className={link}>Process</NavLink>
+      <NavLink to="/pipeline/c2c" className={link} title="Close to closing">C2C</NavLink>
     </nav>
   );
 }
@@ -62,8 +63,8 @@ export default function ProcessView() {
   );
 }
 
-/** Type-to-search across every pipeline ticket, including closed and archived ones. */
-function TicketSearch({ value, onChange }) {
+/** Type-to-search across every pipeline ticket, including closed and archived ones. `skip` leaves out tickets by id. */
+export function TicketSearch({ value, onChange, placeholder = 'Search for a pipeline ticket by opportunity or organization…', skip = null }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState(null);
   const [open, setOpen] = useState(false);
@@ -72,16 +73,16 @@ function TicketSearch({ value, onChange }) {
   useEffect(() => {
     if (!open) return undefined;
     const h = setTimeout(() => {
-      api.get(`/tickets?scope=all&kind=bid&q=${encodeURIComponent(q.trim())}`).then((d) => setResults(d.tickets.slice(0, 15))).catch(() => setResults([]));
+      api.get(`/tickets?scope=all&kind=bid&q=${encodeURIComponent(q.trim())}`).then((d) => setResults(d.tickets.filter((t) => !skip?.has(t.id)).slice(0, 15))).catch(() => setResults([]));
     }, q ? 200 : 0);
     return () => clearTimeout(h);
-  }, [q, open]);
+  }, [q, open, skip]);
   const pick = (t) => { onChange(t); setQ(''); setOpen(false); };
   return (
     <div className="relative w-full max-w-xl" ref={ref}>
       <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
       <input className="input pl-9" value={open ? q : value ? `${value.opportunity_title}${value.organization ? ` · ${value.organization}` : ''}` : q}
-        placeholder="Search for a pipeline ticket by opportunity or organization…" aria-label="Find a pipeline ticket"
+        placeholder={placeholder} aria-label="Find a pipeline ticket"
         onFocus={() => { setOpen(true); setQ(''); }} onChange={(e) => { setQ(e.target.value); setOpen(true); }}
         onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); if (e.key === 'Enter' && results?.[0]) pick(results[0]); }} />
       {open && (

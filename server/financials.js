@@ -1,5 +1,6 @@
 // BD financial figures, shared by the dashboards, the BD report card and the reports. All money is in dollars.
-//   Pipeline: open pipeline tickets, by stage. Qualified pipeline: open pipeline tickets from Qualified onward.
+//   Pipeline: open pipeline tickets, by stage. Qualified pipeline: open pipeline tickets from Qualified through Awarded.
+//     A ticket in Awarded hasn't paid yet, so it counts until it's marked won; then it's a booking, in Delivery.
 //   Projected bookings: each open pipeline ticket's value × its PWIN, by the quarter of its projected win date. Pipeline tickets without a PWIN
 //     count at full value and are reported apart, so it's clear how much of the forecast is PWIN-adjusted.
 //   Bookings: contracts won (delivery programs), on the day they were awarded.
@@ -10,11 +11,12 @@ import { pwin } from '../src/lib/assessment.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
 import { pwinModel } from './routes/tickets.js';
 import { quarterRange } from './forecast.js';
+import { OPEN_STAGES, QUALIFIED_STAGES, reportStager } from './pipelines.js';
 
 export { quarterRange };
 
-export const OPEN_STAGES = ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation'];
-export const QUALIFIED_STAGES = ['Qualified', 'Capture', 'Proposal', 'Under Evaluation'];
+// The stages reports count, kept current as stages change (a stage added as its own step joins them): see pipelines.js.
+export { OPEN_STAGES, QUALIFIED_STAGES };
 export const CLOSED_STAGES = ['Awarded', 'Lost'];
 export const localToday = () => new Date().toLocaleDateString('en-CA');
 /**
@@ -48,10 +50,12 @@ const matches = (t, f) => (!f.director || t.bd_director_id === f.director) && (!
 
 /**
  * Every pipeline ticket still in the books (see inBooks), with its director and territory names and its PWIN (0–1, or null).
+ * Its stage is the one reports count it under: a ticket in a stage blended into a standard one is in that standard stage here.
  */
 export function bids(f = {}) {
   const model = pwinModel();
-  return db.prepare(`SELECT t.id, t.opportunity_title, t.organization, t.pipeline_status, t.deal_status, t.won_at, t.lost_at, t.value, t.bd_director_id, t.territory_id,
+  const stager = reportStager();
+  return db.prepare(`SELECT t.id, t.opportunity_title, t.organization, t.pipeline_id, t.pipeline_status, t.deal_status, t.won_at, t.lost_at, t.value, t.bd_director_id, t.territory_id,
       t.projected_win_date, t.win_date_undetermined, t.assessment, t.created_at, t.done_at,
       d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
     FROM tickets t LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id
@@ -59,14 +63,20 @@ export function bids(f = {}) {
     .filter((t) => matches(t, f))
     .map((t) => {
       const p = pwin(json.parse(t.assessment, {}), model.weights, model.gates);
-      const { assessment, ...rest } = t;
-      return { ...rest, pwin: p ? p.score / 100 : null };
+      const { assessment, pipeline_id, ...rest } = t;
+      return { ...rest, pipeline_status: stager.of(pipeline_id, t.pipeline_status), pwin: p ? p.score / 100 : null };
     });
 }
 // Open means not won or lost (the deal's status, as in Pipedrive), whatever stage it sits in.
 export const isOpen = (t) => (t.deal_status ? t.deal_status === 'open' : !CLOSED_STAGES.includes(t.pipeline_status));
 export const isWon = (t) => (t.deal_status ? t.deal_status === 'won' : t.pipeline_status === 'Awarded');
 export const isLost = (t) => (t.deal_status ? t.deal_status === 'lost' : t.pipeline_status === 'Lost');
+/**
+ * Whether a ticket (with deal_status, won_at and lost_at) had been won or lost by the end of `date`. The stage history
+ * doesn't say: a won ticket stays in the stage it was won from, so past pipeline figures ask this as well.
+ */
+export const closedBy = (t, date) => (t.deal_status === 'won' && (!t.won_at || t.won_at.slice(0, 10) <= date))
+  || (t.deal_status === 'lost' && (!t.lost_at || t.lost_at.slice(0, 10) <= date));
 const weighted = (t) => (t.value || 0) * (t.pwin ?? 1);
 
 /** Value and count in each pipeline stage (open and closed), in stage order; pipeline tickets with no stage last. */
@@ -117,7 +127,7 @@ export function expected(list, count = 4) {
 export const OTHERS = 'Others (not a BD director)';
 const bdDirectorIds = () => new Set(db.prepare(BD_DIRECTOR_IDS).all().map((r) => r.user_id));
 
-/** Qualified pipeline (open, Qualified onward) grouped by `key` (territory or BD director), largest first. */
+/** Qualified pipeline (open, Qualified through Awarded) grouped by `key` (territory or BD director), largest first. */
 export function qualifiedBy(list, key) {
   const groups = new Map();
   const bd = key === 'territory' ? null : bdDirectorIds();
@@ -241,6 +251,7 @@ export function forecastLines(qs = null) {
 /**
  * The pipeline as it stood at the end of each interval between `from` and `to`, from the ticket history.
  * by: stage (open stages) | director | territory (qualified pipeline). interval: week | month | quarter | year.
+ * A ticket counts at a point only if it hadn't been won or lost by then.
  * Only tickets still in the books count, so an archived ticket is gone from past points too, not just today's.
  */
 export function trends({ from, to, interval = 'month', by = 'stage', f = {} }) {
@@ -261,10 +272,12 @@ export function trends({ from, to, interval = 'month', by = 'stage', f = {} }) {
   while (d <= to && points.length < 260) { points.push(d); d = next(d); }
   if (!points.length || points[points.length - 1] < to) points.push(to);
 
-  const history = db.prepare(`SELECT h.*, d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
+  const history = db.prepare(`SELECT h.*, t.deal_status, t.won_at, t.lost_at, d.first_name || ' ' || d.last_name AS director_name, tr.name AS territory_name
     FROM ticket_history h JOIN tickets t ON t.id = h.ticket_id
       LEFT JOIN users d ON d.id = h.bd_director_id LEFT JOIN territories tr ON tr.id = h.territory_id
     WHERE ${inBooks()} ORDER BY h.ticket_id, h.changed_at, h.id`).all();
+  const stager = reportStager();
+  history.forEach((h) => { h.pipeline_status = stager.ofTicket(h.ticket_id, h.pipeline_status); });
   const byTicket = new Map();
   history.forEach((h) => { if (!byTicket.has(h.ticket_id)) byTicket.set(h.ticket_id, []); byTicket.get(h.ticket_id).push(h); });
 
@@ -279,7 +292,7 @@ export function trends({ from, to, interval = 'month', by = 'stage', f = {} }) {
     byTicket.forEach((rows) => {
       let state = null;
       for (const r of rows) { if (r.changed_at <= cutoff) state = r; else break; }
-      if (!state || !matches(state, f)) return;
+      if (!state || !matches(state, f) || closedBy(state, point)) return;
       const counts = by === 'stage' ? OPEN_STAGES.includes(state.pipeline_status) : QUALIFIED_STAGES.includes(state.pipeline_status);
       if (!counts) return;
       const [key, label] = keyOf(state);

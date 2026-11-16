@@ -29,7 +29,7 @@ const touchesReal = (plan) => !!plan && (Object.keys(plan.realDeleted).length > 
 
 /**
  * Production, at startup: take off a sample left from before, as long as nothing real depends on it. If something real
- * does (a real record points at a sample one), it's left hidden and reported, and an admin removes it from Admin Access
+ * does (a real record points at a sample one), it's left hidden and reported, and an admin removes it from Settings › Admin
  * after seeing what goes with it. Returns { removed } or { kept } with the plan, or null when there's nothing to do.
  */
 export function cleanProduction() {

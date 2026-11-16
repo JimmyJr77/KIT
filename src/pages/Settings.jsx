@@ -1,20 +1,91 @@
-import { useState } from 'react';
-import { Check, X, Crosshair } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Check, X, Crosshair, Settings as SettingsIcon, ShieldCheck, Target, Code2 } from 'lucide-react';
 import { useApi } from '../lib/data.js';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { hiddenNav } from '../lib/sidebar.js';
 import { navFor } from '../components/Layout.jsx';
 import PageHeader from '../components/PageHeader.jsx';
+import { PipedrivePullPanel } from '../components/PipedrivePanel.jsx';
+import { AdminView, TeamLeadView, DeveloperView, leadPages } from './AdminAccess.jsx';
+import { ledTeams } from './MyTeam.jsx';
+
+const isAdmin = (user) => user.role === 'admin';
+
+/**
+ * Settings has a tab for each role, kept in the address (?tab=admin): General Settings for everyone, Admin for admins
+ * (access, the directory and site setup), Team Lead for anyone who leads a team (and admins), Site Dev for people with
+ * the Site Dev role (set on their account). Someone sees only the tabs for roles they have, and the switcher only when
+ * there's more than one. The server checks each role again on everything these tabs load and save.
+ */
+const TABS = [
+  { key: 'general', label: 'General Settings', icon: SettingsIcon, subtitle: 'How KIT is connected and configured', can: () => true, Page: GeneralView },
+  { key: 'admin', label: 'Admin', icon: ShieldCheck, subtitle: 'Who can use KIT, the team directory and site setup', can: isAdmin, Page: AdminView },
+  { key: 'team-lead', label: 'Team Lead', icon: Target, subtitle: 'Your team and what it’s expected to deliver', can: (u) => leadPages(u).length > 0, Page: TeamLeadView },
+  { key: 'site-dev', label: 'Site Dev', icon: Code2, subtitle: 'Site feedback to work through', can: (u) => !!u.developer, Page: DeveloperView },
+];
+
+/** The Settings tabs this user can open, General Settings first. */
+export const settingsTabs = (user) => TABS.filter((t) => t.can(user));
+
+/** The address of a Settings tab. */
+export const settingsPath = (key) => (key === 'general' ? '/settings' : `/settings?tab=${key}`);
 
 export default function Settings() {
+  const { user } = useAuth();
+  const [params] = useSearchParams();
+  const tabs = settingsTabs(user);
+  // A tab that isn't this user's (or isn't one at all) shows General Settings.
+  const current = tabs.find((t) => t.key === params.get('tab')) || tabs[0];
+  // Fetched here so the tabs can show what's waiting, whichever one is open: open site feedback for Site Dev, access
+  // requests for admins (counted again when one is handled).
+  const feedback = useApi(tabs.some((t) => t.key === 'site-dev') ? '/feedback' : null);
+  const requests = useApi(isAdmin(user) ? '/users/access-requests' : null);
+  useEffect(() => {
+    window.addEventListener('kit:access-requests', requests.reload);
+    return () => window.removeEventListener('kit:access-requests', requests.reload);
+  }, [requests.reload]);
+  const badges = { admin: requests.data?.pending, 'site-dev': feedback.data?.open };
+  const { Page } = current;
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-8">
-      <PageHeader title="Settings" subtitle="How KIT is connected and configured" />
+    <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-8">
+      <PageHeader title="Settings" subtitle={current.subtitle}>
+        {tabs.length > 1 && (
+          <nav className="flex h-9 max-w-full overflow-x-auto rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" aria-label="Settings tabs">
+            {tabs.map((t) => {
+              const active = t.key === current.key;
+              return (
+                <Link key={t.key} to={settingsPath(t.key)} aria-current={active ? 'page' : undefined}
+                  className={`flex items-center gap-1.5 rounded px-3 whitespace-nowrap ${active ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>
+                  <t.icon size={14} /> {t.label}
+                  {badges[t.key] > 0 && (
+                    <span className={`rounded-full px-1.5 text-[10px] leading-4 font-bold ${active ? 'bg-white text-brand-700' : 'bg-amber-500 text-white'}`}>{badges[t.key]}</span>
+                  )}
+                </Link>
+              );
+            })}
+          </nav>
+        )}
+      </PageHeader>
+      <Page feedback={feedback} />
+    </div>
+  );
+}
+
+/**
+ * What everyone sets for themselves. Members who are neither admins nor team leads also pull their own Pipedrive deals
+ * here; admins and leads pull from their own tabs.
+ */
+function GeneralView() {
+  const { user } = useAuth();
+  return (
+    <>
       <FocusPanel />
       <SidebarPanel />
+      {!isAdmin(user) && !ledTeams(user).length && <PipedrivePullPanel scope="mine" />}
       <IntegrationsPanel />
-    </div>
+    </>
   );
 }
 

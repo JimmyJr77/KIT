@@ -11,6 +11,8 @@ import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import teamRoutes from './routes/teams.js';
 import territoryRoutes from './routes/territories.js';
+import stageRoutes from './routes/stages.js';
+import c2cRoutes from './routes/c2c.js';
 import targetRoutes from './routes/targets.js';
 import objectiveRoutes from './routes/objectives.js';
 import financialRoutes from './routes/financials.js';
@@ -69,6 +71,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', requireAuth, userRoutes);
 app.use('/api/teams', teamRoutes); // GET is public (used by account activation)
 app.use('/api/territories', requireAuth, territoryRoutes);
+app.use('/api/stages', requireAuth, stageRoutes);
+app.use('/api/c2c', requireAuth, c2cRoutes);
 app.use('/api/targets', requireAuth, targetRoutes);
 app.use('/api/objectives', requireAuth, objectiveRoutes);
 app.use('/api/financials', requireAuth, financialRoutes);
@@ -121,7 +125,7 @@ app.use((err, req, res, next) => {
 try {
   const cleaned = cleanProduction();
   if (cleaned?.removed) console.log(`Removed the sample data from production: ${JSON.stringify(cleaned.removed.sample)}`);
-  else if (cleaned?.kept) console.warn(`The sample data is still here, hidden: real records depend on it. Remove it from Admin Access. ${JSON.stringify(cleaned.kept)}`);
+  else if (cleaned?.kept) console.warn(`The sample data is still here, hidden: real records depend on it. Remove it from Settings › Admin. ${JSON.stringify(cleaned.kept)}`);
   else if (ensureSample()) console.log('Loaded the sample data');
 } catch (e) {
   console.error(`Sample data: ${e.message}`);

@@ -12,7 +12,7 @@ const FILTERS = [
 const inFilter = (f, filter) => (filter === 'archived' ? !!f.archived_at : !f.archived_at && (filter === 'done' ? !!f.done_at : !f.done_at));
 
 /**
- * The Developer section of Admin Access: what people sent through the KITT feedback widget, worked like tickets. Check
+ * The Site Dev tab of Settings: what people sent through the KITT feedback widget, worked like tickets. Check
  * one off when it's done, then archive it (one at a time, or every done one at once). Archived ones can come back or be
  * deleted for good. `feedback` is the useApi('/feedback') result, shared with the page so its tab can show the open count.
  */

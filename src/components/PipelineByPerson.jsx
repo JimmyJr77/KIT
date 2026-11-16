@@ -32,7 +32,7 @@ export default function PipelineByPerson({ data, className = '' }) {
   return (
     <ViewCard className={className} initial={one ? 'timeline' : 'table'}
       title={one ? 'Qualified pipeline, week to week' : 'Qualified pipeline by person, week to week'}
-      subtitle="Qualified onward, as it stood at the end of each week. Reads across: the start, each week's change, then this week. 8 and 12 weeks are the change over that span."
+      subtitle="Qualified through Awarded, as it stood at the end of each week. Reads across: the start, each week's change, then this week. 8 and 12 weeks are the change over that span."
       table={{
         columns: [{ key: 'name', label: 'Person' }, { key: 'start', label: `Start ${shortDate(points[start])}`, align: 'right', format: compact },
           ...steps.map((i) => ({ key: `w${i}`, label: shortDate(points[i]), align: 'right', format: delta })),

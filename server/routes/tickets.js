@@ -411,6 +411,25 @@ r.put('/:id/lane', ownerOnly(), (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * Body: { before_id }. Place a pipeline ticket in its stage's priority order on the BD Pipeline board: just above
+ * `before_id` (another open ticket in the same stage of the same pipeline), or last when it's null. The whole column is
+ * renumbered, so tickets nobody had placed keep the order they were shown in.
+ */
+r.put('/:id/board-position', ownerOnly(), (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets are on the board' });
+  const column = db.prepare(`SELECT id FROM tickets WHERE ticket_type = 'bid' AND pipeline_id IS @p AND pipeline_status IS @s AND deal_status = 'open'
+      AND archived_at IS NULL AND archive_set_id IS NULL AND id != @id
+    ORDER BY board_position IS NULL, board_position, id DESC`).all({ p: t.pipeline_id, s: t.pipeline_status, id: t.id }).map((x) => x.id);
+  const before = req.body?.before_id == null ? -1 : column.indexOf(Number(req.body.before_id));
+  if (req.body?.before_id != null && before < 0) return res.status(400).json({ error: 'That ticket isn’t in this stage any more' });
+  column.splice(before < 0 ? column.length : before, 0, t.id);
+  db.transaction(() => column.forEach((id, i) => db.prepare('UPDATE tickets SET board_position = ? WHERE id = ?').run(i + 1, id)))();
+  res.json({ order: column });
+});
+
 /** Move a master ticket to another pipeline stage (null clears it). Used by the BD Pipeline board. */
 r.put('/:id/stage', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);

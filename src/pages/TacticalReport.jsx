@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { shortDate } from '../lib/format.js';
 import { LineChart, StackedColumns, SERIES, compact } from '../components/Charts.jsx';
 import { nameOnLight } from '../lib/brand.js';
-import { tacticalSections, personColumns, totalRow, signed, weekLabel, toneOf, STAGE_COLORS } from '../lib/tactical.js';
+import { tacticalSections, personColumns, totalRow, signed, weekLabel, toneOf, STAGE_COLORS, STAGE_COLOR_OTHER } from '../lib/tactical.js';
 
 const toneClass = (n) => (toneOf(n) > 0 ? 'text-emerald-700' : toneOf(n) < 0 ? 'text-red-700' : '');
 
@@ -16,7 +16,7 @@ export default function TacticalReport({ r }) {
   const { tiles, sections } = tacticalSections(r, team);
   const q = r.qualified;
   const weeks = r.stages.points.map((d) => shortDate(d));
-  const stageSeries = r.stages.series.map((s) => ({ ...s, color: STAGE_COLORS[s.key] }));
+  const stageSeries = r.stages.series.map((s) => ({ ...s, color: STAGE_COLORS[s.key] || STAGE_COLOR_OTHER }));
   const lines = team ? q.people.map((p, i) => ({ key: String(p.id), label: p.name, values: p.values, color: SERIES[i % SERIES.length] }))
     : [{ key: 'me', label: r.scope.label, values: q.total.values, color: SERIES[0] }];
   const cols = personColumns();
@@ -47,7 +47,7 @@ export default function TacticalReport({ r }) {
         <div>
           <h3 className="text-sm font-semibold text-slate-800">Pipeline value by stage, week by week</h3>
           <p className="mb-2 text-[11px] text-slate-500">
-            Qualified onward, as it stood at the end of each week · {compact(r.stages.now)} now, <span className={toneClass(r.stages.change)}>{signed(r.stages.change)}</span> this week
+            Qualified through Awarded, as it stood at the end of each week · {compact(r.stages.now)} now, <span className={toneClass(r.stages.change)}>{signed(r.stages.change)}</span> this week
           </p>
           <StackedColumns categories={weeks} series={stageSeries} height={220} />
         </div>
@@ -82,7 +82,7 @@ export default function TacticalReport({ r }) {
         </div>
         <div>
           <h3 className="text-sm font-semibold text-slate-800">Qualified pipeline by week{team ? ', by person' : ''}</h3>
-          <p className="mb-2 text-[11px] text-slate-500">Qualified onward, as it stood at the end of each week.</p>
+          <p className="mb-2 text-[11px] text-slate-500">Qualified through Awarded, as it stood at the end of each week.</p>
           {q.points.length ? (
             <>
               <LineChart points={q.points} labels={q.points.map((d) => shortDate(d))} series={lines} height={240} />

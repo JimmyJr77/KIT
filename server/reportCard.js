@@ -2,7 +2,8 @@
 // over a quarter or a year. Each has a value, a plain-language detail, and a status: good, watch, or behind
 // (or "none" when there isn't enough to judge). Thresholds are below so they're easy to tune.
 import { db, BD_DIRECTOR_IDS } from './db.js';
-import { bids, contracts, forecastLines, targets, quartersTarget, trailingQuarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES, isOpen, isWon } from './financials.js';
+import { STALL_STAGES, reportStager } from './pipelines.js';
+import { bids, contracts, forecastLines, targets, quartersTarget, trailingQuarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES, isOpen, isWon, closedBy } from './financials.js';
 import { quarterFor, addDays } from '../src/lib/travelCalc.js';
 
 export const THRESHOLDS = {
@@ -62,13 +63,18 @@ const status = (v, { good, watch }, higherIsBetter = true) => {
 function histories(ids) {
   const rows = db.prepare(`SELECT ticket_id, pipeline_status, value, changed_at FROM ticket_history
     WHERE ticket_id IN (SELECT value FROM json_each(?)) ORDER BY ticket_id, changed_at, id`).all(JSON.stringify(ids));
+  const stager = reportStager(); // a stage blended into a standard one counts as that stage
+  rows.forEach((r) => { r.pipeline_status = stager.ofTicket(r.ticket_id, r.pipeline_status); });
   const map = new Map();
   rows.forEach((r) => { if (!map.has(r.ticket_id)) map.set(r.ticket_id, []); map.get(r.ticket_id).push(r); });
   return map;
 }
-// Stalled pursuits are tracked from Qualified through Under Evaluation: prospecting is too early to judge, and awarded is done.
-export const STALL_STAGES = ['Qualified', 'Capture', 'Proposal', 'Under Evaluation'];
-const rank = (s) => ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation', 'Awarded'].indexOf(s);
+// Stalled pursuits are tracked from Qualified through Under Evaluation: prospecting is too early to judge, and an awarded
+// ticket is only waiting to be marked won.
+export { STALL_STAGES };
+const rank = (s) => OPEN_STAGES.indexOf(s);
+// A ticket's history through the stages reports count: any other stage in between isn't a step forward or back.
+const standardSteps = (rows) => rows.filter((r) => rank(r.pipeline_status) >= 0);
 
 /** The report card for one director (`director` = user id) or the whole team (null), over period `p`. */
 export function reportCard(director, p) {
@@ -104,7 +110,7 @@ export function reportCard(director, p) {
   // 2. New qualified pipeline: pipeline tickets that first reached Qualified (or later) during the period.
   const entered = list.filter((tk) => {
     const rows = hist.get(tk.id) || [];
-    const first = rows.find((r) => QUALIFIED_STAGES.includes(r.pipeline_status) || r.pipeline_status === 'Awarded');
+    const first = rows.find((r) => QUALIFIED_STAGES.includes(r.pipeline_status));
     return first && within(first.changed_at);
   });
   const newQualified = {
@@ -119,7 +125,8 @@ export function reportCard(director, p) {
   // what's still to book; for a finished period, the pipeline as it stood when the period began against the whole target.
   const asOf = p.done ? p.start : today;
   const qualifiedValue = sum(list, (tk) => {
-    const st = p.done ? stateOn(tk, p.start) : tk;
+    // Open then (not yet won or lost) and in a qualified stage, Awarded included.
+    const st = closedBy(tk, asOf) ? null : p.done ? stateOn(tk, p.start) : tk;
     return st && QUALIFIED_STAGES.includes(st.pipeline_status) ? st.value : 0;
   });
   const remaining = target ? (p.done ? target : Math.max(target - booked, 0)) : null;
@@ -147,7 +154,7 @@ export function reportCard(director, p) {
   // 5. Pursuit progression: pipeline tickets that moved forward a stage in the period, and open pipeline tickets that have stalled.
   const open = list.filter((tk) => isOpen(tk) && OPEN_STAGES.includes(tk.pipeline_status));
   const advanced = list.filter((tk) => {
-    const rows = hist.get(tk.id) || [];
+    const rows = standardSteps(hist.get(tk.id) || []);
     return rows.some((r, i) => i > 0 && within(r.changed_at) && rank(r.pipeline_status) > rank(rows[i - 1].pipeline_status));
   });
   const stalled = open.filter((tk) => STALL_STAGES.includes(tk.pipeline_status)).map((tk) => {
@@ -237,9 +244,9 @@ export function reportTrends({ weeks = 13, director = null } = {}) {
     for (const r of hist.get(t.id) || []) { if (r.changed_at.slice(0, 10) <= date) state = r; else break; }
     return state;
   };
-  const firstQualified = new Map(all.map((t) => [t.id, (hist.get(t.id) || []).find((r) => QUALIFIED_STAGES.includes(r.pipeline_status) || r.pipeline_status === 'Awarded')?.changed_at?.slice(0, 10)]));
+  const firstQualified = new Map(all.map((t) => [t.id, (hist.get(t.id) || []).find((r) => QUALIFIED_STAGES.includes(r.pipeline_status))?.changed_at?.slice(0, 10)]));
   const advances = new Map(all.map((t) => {
-    const rows = hist.get(t.id) || [];
+    const rows = standardSteps(hist.get(t.id) || []);
     return [t.id, rows.filter((r, i) => i > 0 && rank(r.pipeline_status) > rank(rows[i - 1].pipeline_status)).map((r) => r.changed_at.slice(0, 10))];
   }));
   const targetCache = new Map();
@@ -265,7 +272,7 @@ export function reportTrends({ weeks = 13, director = null } = {}) {
       const booked = sum(deals.filter((d) => within(d.awarded_on)), (d) => d.value);
       out.bookings.push(target ? booked / target : null);
       out.newQualified.push(sum(list.filter((t) => within(firstQualified.get(t.id))), (t) => t.value));
-      const pipeline = sum(list, (t) => { const st = stateOn(t, end); return st && QUALIFIED_STAGES.includes(st.pipeline_status) ? st.value : 0; });
+      const pipeline = sum(list, (t) => { const st = closedBy(t, end) ? null : stateOn(t, end); return st && QUALIFIED_STAGES.includes(st.pipeline_status) ? st.value : 0; });
       out.coverage.push(target ? pipeline / target : null);
       const decided = list.filter((t) => !isOpen(t) && within(closedOn(t)));
       out.winRate.push(decided.length ? decided.filter(isWon).length / decided.length : null);

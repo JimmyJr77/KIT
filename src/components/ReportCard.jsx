@@ -38,7 +38,7 @@ function explain(key, t) {
       assesses: 'Whether we are winning enough work to hit our booking goal.',
       how: 'Contract value awarded in the period ÷ the booking target for the period. While the period is still running, the result is compared with how much of the period has passed (pace), so 50% booked halfway through the quarter is on track.',
       scale: ['At or ahead of pace (100% or more for a finished period)', 'At least 75% of pace', 'Below 75% of pace'],
-      needs: 'Booking targets (Admin Access › Team Lead › Booking targets) and pipeline tickets marked won.',
+      needs: 'Booking targets (Settings › Team Lead › Booking targets) and pipeline tickets marked won.',
     },
     newQualified: {
       assesses: 'Whether we are creating enough future growth opportunity.',
@@ -48,7 +48,7 @@ function explain(key, t) {
     },
     coverage: {
       assesses: 'Whether there is enough qualified opportunity to reach the goal.',
-      how: 'Qualified pipeline (open pipeline tickets from Qualified onward) ÷ the target still to book. For a finished period, the pipeline as it stood when the period began ÷ the full target. Shows "Met" once the target is reached.',
+      how: 'Qualified pipeline (open pipeline tickets from Qualified through Awarded, until won) ÷ the target still to book. For a finished period, the pipeline as it stood when the period began ÷ the full target. Shows "Met" once the target is reached.',
       scale: [`${t.coverage.good}× or more`, `${t.coverage.watch}× to ${t.coverage.good}×`, `Under ${t.coverage.watch}×`],
       needs: 'Pipeline stages and values on pipeline tickets, and booking targets.',
     },

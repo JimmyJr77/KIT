@@ -7,7 +7,7 @@ import { fileSize, stamp } from '../lib/format.js';
 
 const when = (iso) => stamp(iso.slice(0, 19).replace('T', ' '));
 
-/** Admin Access: back up everything in KIT into the backup archive, and open the archive to restore from one. */
+/** Settings › Admin: back up everything in KIT into the backup archive, and open the archive to restore from one. */
 export default function BackupPanel() {
   const status = useApi('/backup');
   const [busy, setBusy] = useState(false);

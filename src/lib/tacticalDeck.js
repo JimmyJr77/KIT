@@ -3,7 +3,7 @@
 // is the cheat sheet of tickets behind each number, in two columns; a long week carries on rather than cutting anything.
 // Takes a PptxGenJS instance, the report (GET /financials/tactical) and the Knexus name mark; works in the browser and Node.
 import { shortDate, todayIso } from './format.js';
-import { tacticalSections, personColumns, totalRow, signed, weekLabel, compact, toneOf, STAGE_COLORS } from './tactical.js';
+import { tacticalSections, personColumns, totalRow, signed, weekLabel, compact, toneOf, STAGE_COLORS, STAGE_COLOR_OTHER } from './tactical.js';
 
 const FONT = 'Calibri';
 const INK = '0F172A';
@@ -118,7 +118,7 @@ export function buildTacticalDeck(pptx, r, logos) {
   });
   const st = r.stages;
   s.addText('Pipeline value by stage, week by week', { x: LEFT, y: BODY_Y, w: WIDTH, h: 0.3, margin: 0, fontFace: FONT, fontSize: 14, bold: true, color: NAVY });
-  s.addText(`Qualified onward at each week's end · ${compact(st.now)} now, ${signed(st.change)} this week`,
+  s.addText(`Qualified through Awarded at each week's end · ${compact(st.now)} now, ${signed(st.change)} this week`,
     { x: LEFT, y: BODY_Y + 0.3, w: WIDTH, h: 0.24, margin: 0, fontFace: FONT, fontSize: 10.5, color: MUTED });
   const weeks = st.points.map((d) => shortDate(d));
   const tableW = 3.3;
@@ -126,7 +126,7 @@ export function buildTacticalDeck(pptx, r, logos) {
   if (st.points.length) {
     s.addChart(pptx.ChartType.bar, st.series.map((x) => ({ name: x.label, labels: weeks, values: x.values })), {
       ...chartText, x: LEFT, y: BODY_Y + 0.6, w: chartW, h: BODY_BOTTOM - BODY_Y - 0.6,
-      barDir: 'col', barGrouping: 'stacked', barGapWidthPct: 45, chartColors: st.series.map((x) => hex(STAGE_COLORS[x.key])),
+      barDir: 'col', barGrouping: 'stacked', barGapWidthPct: 45, chartColors: st.series.map((x) => hex(STAGE_COLORS[x.key] || STAGE_COLOR_OTHER)),
       showLegend: true, legendPos: 'b', catAxisLabelFontSize: weeks.length > 20 ? 8 : 10,
     });
   }

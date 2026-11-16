@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Tag, Plus, Check, X } from 'lucide-react';
+import { Tag, Plus, Check, X, Star } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useClickAway } from './UserCombobox.jsx';
 import MultiSelect from './MultiSelect.jsx';
@@ -51,6 +51,12 @@ export function useHiddenCardTags() {
   useEffect(() => { hiddenListeners.add(setValue); setValue(hidden); return () => hiddenListeners.delete(setValue); }, []);
   return value;
 }
+
+// The Priority tag (a ticket on someone's priority tickets) isn't a real tag, but it's hidden the same way, under a
+// key no tag name can take (tag names are stored lower case, without the leading colons).
+export const PRIORITY_TAG_KEY = '::priority';
+/** Whether the viewer has kept the Priority tag off pipeline cards. */
+export const usePriorityTagHidden = () => useHiddenCardTags().includes(PRIORITY_TAG_KEY);
 
 /** One tag, drawn like a Pipedrive label. */
 export function LabelChip({ name, color, onRemove }) {
@@ -217,13 +223,22 @@ export function CardTagSettings() {
     const lower = names.map((n) => n.toLowerCase());
     setHiddenCardTags(show ? off.filter((n) => !lower.includes(n)) : [...off, ...lower]);
   };
-  if (!labels.length) return <p className="text-sm text-slate-400">No tags yet.</p>;
   return (
     <div className="space-y-4">
       <p className="rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
         Untick a tag to keep it off the cards on the board. It stays on the ticket: you still see it when you open one, and the tag filter still finds it.
         This is your own view, kept in this browser.
       </p>
+      <section className="rounded-lg border border-slate-200">
+        <label className="flex cursor-pointer items-center gap-2 px-3 py-2 hover:bg-slate-50">
+          <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={!off.includes(PRIORITY_TAG_KEY)} onChange={(e) => set([PRIORITY_TAG_KEY], e.target.checked)} />
+          <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-px text-[11px] font-semibold text-amber-800">
+            <Star size={10} className="fill-amber-500 text-amber-500" /> Priority
+          </span>
+          <span className="ml-auto text-xs text-slate-400">On someone’s priority tickets</span>
+        </label>
+      </section>
+      {!labels.length && <p className="text-sm text-slate-400">No tags yet.</p>}
       {byCategory(labels).map((g) => {
         const on = g.labels.filter((l) => !isOff(l)).length;
         return (

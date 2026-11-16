@@ -87,7 +87,7 @@ export function SupportSection({ event, onUpdated }) {
         <span className={`text-[11px] ${error ? 'text-red-600' : note ? 'text-emerald-700' : 'text-slate-400'}`}>
           {error || note || (team && (team.team.length
             ? `Alerts ${team.team.map(fullName).join(', ')}`
-            : 'No one is on the Marketing team yet. An admin can assign people to it under Admin Access.'))}
+            : 'No one is on the Marketing team yet. An admin can assign people to it under Settings › Admin.'))}
         </span>
         <MarketingButton eventId={event.id} className="btn shrink-0 px-2.5 py-1 text-xs"
           onSaved={(r) => { setNote(r.notified ? `Sent to ${r.notified} ${r.notified === 1 ? 'person' : 'people'} on the Marketing team.` : 'Saved, but no one is on the Marketing team to alert yet.'); reload(event, onUpdated); }} />

@@ -73,7 +73,7 @@ export function PipedrivePull({ scope, status }) {
         live anyway, and everything is pulled every night; pull here to be sure your deals are current now.
       </p>
       {s && !s.configured && <NotSetUp admin={false} server={s.server} />}
-      {s?.configured && !s.pulling && <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{s.pulling_blocked} An admin sets the sync in Admin Access.</p>}
+      {s?.configured && !s.pulling && <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{s.pulling_blocked} An admin sets the sync in Settings › Admin.</p>}
       {last && !s?.running && (
         <Result ok={last.ok}>
           <div className="flex items-center gap-1.5 font-medium">
@@ -85,7 +85,7 @@ export function PipedrivePull({ scope, status }) {
             <>
               <div className="mt-0.5 text-xs">{summary(last.result) || 'Nothing changed.'}</div>
               {last.result.accountsCreated?.length > 0 && (
-                <div className="mt-1 text-xs">New accounts, waiting to be activated and on no team yet (set their teams in Admin Access): {last.result.accountsCreated.join(', ')}</div>
+                <div className="mt-1 text-xs">New accounts, waiting to be activated and on no team yet (set their teams in Settings › Admin): {last.result.accountsCreated.join(', ')}</div>
               )}
             </>
           ) : <div className="mt-0.5 text-xs">{last.error}</div>}
@@ -132,8 +132,8 @@ export function PipedrivePullPanel({ scope }) {
 // ---- Admins: sending to Pipedrive
 
 const KINDS = [
-  { key: 'deals', label: 'Deals', hint: 'New pipeline tickets become deals and tickets deleted for good delete their deal; title, value, stage, won / lost, lost reason, probability, expected close date, owner, organization, Account and every custom field' },
-  { key: 'labels', label: 'Tags', hint: 'Pipedrive’s labels only; tags made in KIT stay in KIT' },
+  { key: 'deals', label: 'Deals', hint: 'New pipeline tickets become deals and tickets deleted for good delete their deal; title, value, stage, won / lost, lost reason, probability, expected close date, owner, organization, Account and every custom field; stages added in KIT and set to sync, and synced stages renamed or deleted in KIT' },
+  { key: 'labels', label: 'Tags', hint: 'A deal’s tags; a tag made in KIT becomes a Pipedrive label the first time it’s on a deal' },
   { key: 'notes', label: 'Notes', hint: 'Comments added in KIT, and Pipedrive notes edited, pinned or deleted in KIT' },
   { key: 'activities', label: 'Activities', hint: 'Added, edited or deleted in KIT' },
   { key: 'files', label: 'Files', hint: 'Uploads go as files; linked documents as a note with the link' },
@@ -145,7 +145,8 @@ const KINDS = [
   { key: 'projects', label: 'Projects', hint: 'A contract’s overview, status, phase, dates, labels, plan (tasks and activities), notes and documents, on its Pipedrive project' },
 ];
 const SENT = {
-  deals: 'deal', dealsAdded: 'new deal', dealsLinked: ['deal linked by its title', 'deals linked by their titles'], dealsDeleted: 'deleted deal', labels: ['deal’s tags', 'deals’ tags'], notesAdded: 'new note', notesUpdated: 'edited note', notesDeleted: 'deleted note',
+  stagesAdded: 'new stage', stagesRenamed: 'renamed stage', stagesDeleted: 'deleted stage',
+  deals: 'deal', dealsAdded: 'new deal', dealsLinked: ['deal linked by its title', 'deals linked by their titles'], dealsDeleted: 'deleted deal', labels: ['deal’s tags', 'deals’ tags'], labelsAdded: 'new label', notesAdded: 'new note', notesUpdated: 'edited note', notesDeleted: 'deleted note',
   activitiesAdded: ['new activity', 'new activities'], activitiesUpdated: ['edited activity', 'edited activities'], activitiesDeleted: ['deleted activity', 'deleted activities'],
   filesAdded: 'file', filesDeleted: 'deleted file', project_filesDeleted: 'deleted project file', productsAdded: 'new product', productsUpdated: 'changed product', productsDeleted: 'removed product',
   catalogProductsAdded: 'new catalog product', installmentsAdded: 'new installment', installmentsUpdated: 'changed installment', installmentsDeleted: 'removed installment',
@@ -214,6 +215,13 @@ function Preview({ p }) {
         <Section title="Deals to delete" count={n(p.dealsRemove)} note="their tickets were deleted for good in KIT">
           {p.dealsRemove.items.map((d) => <Item key={d.pipedrive_id} title={d.title || `Deal ${d.pipedrive_id}`}>deleted in Pipedrive</Item>)}
           {more(p.dealsRemove)}
+        </Section>
+      )}
+      {p.stages && (
+        <Section title="Stages" count={n(p.stages.add) + n(p.stages.edit) + n(p.stages.remove)} note="Pipedrive puts a new stage last in its pipeline; drag it into place there">
+          {p.stages.add.items.map((s) => <Item key={s.id} title={s.text}>added to {s.pipeline}</Item>)}
+          {p.stages.edit.items.map((s) => <Item key={s.id} title={s.from}>renamed {s.text} in {s.pipeline}</Item>)}
+          {p.stages.remove.items.map((s) => <Item key={s.pipedrive_id} title={s.text}>deleted, if Pipedrive has no deals in it</Item>)}
         </Section>
       )}
       {p.deals && (

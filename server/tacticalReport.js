@@ -1,14 +1,14 @@
 // The Tactical Meeting Report: one week of pipeline movement, for the BD team or one BD director.
-//   Qualified pipeline value by stage (Qualified onward; Prospecting isn't measured), week by week, for the whole scope;
+//   Qualified pipeline value by stage (Qualified through Awarded, until won; Prospecting isn't measured), week by week, for the whole scope;
 //   and the qualified pipeline week by week, by person
 //   (both as they stood at each week's end, from the ticket history).
-//   What moved that week: won (into Awarded), lost, moved forward (left to right on the board), downgraded (moved back a
+//   What moved that week: won, lost, moved forward (left to right on the board), downgraded (moved back a
 //   stage), removed from the board (archived here or in Pipedrive, or deleted in Pipedrive), and next steps completed.
 // The week runs Monday to Sunday. The week's numbers come for the whole scope and for each person (by BD director). Each
 // list names its tickets, so the report carries its own cheat sheet.
 import { db } from './db.js';
 import { trends, localToday, inBooks, QUALIFIED_STAGES } from './financials.js';
-import { listPipelines } from './pipelines.js';
+import { listPipelines, reportStager } from './pipelines.js';
 import { directors } from './reportCard.js';
 import { weekStartFor } from './routes/priorities.js';
 import { addDays } from '../src/lib/travelCalc.js';
@@ -27,7 +27,9 @@ export const mondayOf = (date) => weekStartFor(date, 1);
  * With `inBooksOnly`, tickets archived since are left out (as on the dashboard).
  */
 export function weekMoves({ keep = () => true, from, to, inBooksOnly = false }) {
-  const order = new Map(listPipelines().map((p) => [p.id, p.statuses.filter((x) => x !== 'Awarded' && x !== 'Lost')]));
+  // A stage blended into a standard one counts as that stage, so going into or out of it from that stage isn't a move.
+  const stager = reportStager();
+  const order = new Map(listPipelines().map((p) => [p.id, p.statuses.filter((x) => x !== 'Lost' && stager.of(p.id, x) === x)]));
   const list = db.prepare(`SELECT t.id, t.opportunity_title, t.organization, t.pipeline_id, t.pipeline_status, t.value, t.bd_director_id,
       t.deal_status, t.won_at, t.lost_at, t.lost_reason, t.archived_at, t.pipedrive_archived_at, t.pipedrive_deleted_at,
       d.first_name || ' ' || d.last_name AS director
@@ -49,7 +51,7 @@ export function weekMoves({ keep = () => true, from, to, inBooksOnly = false }) 
       removed.push({ ...base, stage: t.pipeline_status, on: removedOn,
         how: t.pipedrive_deleted_at ? 'Deleted in Pipedrive' : t.pipedrive_archived_at ? 'Archived in Pipedrive' : 'Archived in KIT' });
     }
-    const h = hist.get(t.id) || [];
+    const h = (hist.get(t.id) || []).map((r) => ({ ...r, pipeline_status: stager.of(t.pipeline_id, r.pipeline_status) }));
     const first = h.findIndex((r, i) => i > 0 && within(r.changed_at) && r.pipeline_status !== h[i - 1].pipeline_status);
     const won = t.deal_status === 'won' && within(t.won_at);
     const lost = t.deal_status === 'lost' && within(t.lost_at);
@@ -59,7 +61,7 @@ export function weekMoves({ keep = () => true, from, to, inBooksOnly = false }) 
     const closedAt = won ? t.won_at : lost ? t.lost_at : null;
     const before = closedAt ? [...h].reverse().find((r) => r.changed_at < closedAt && !['Awarded', 'Lost'].includes(r.pipeline_status))?.pipeline_status ?? null
       : first > 0 ? h[first - 1].pipeline_status : [...h].reverse().find((r) => day(r.changed_at) < from)?.pipeline_status ?? null;
-    const after = [...h].reverse().find((r) => day(r.changed_at) <= to)?.pipeline_status ?? t.pipeline_status;
+    const after = [...h].reverse().find((r) => day(r.changed_at) <= to)?.pipeline_status ?? stager.of(t.pipeline_id, t.pipeline_status);
     const stages = order.get(t.pipeline_id ?? null) || [];
     const a = stages.indexOf(before);
     const b = stages.indexOf(after);
@@ -103,7 +105,7 @@ function qualifiedByWeek(to, weeks, director) {
 }
 
 /**
- * Pipeline value in each stage from Qualified onward at each week's end (Sundays), the last point being the end of the
+ * Pipeline value in each stage from Qualified through Awarded (until won) at each week's end (Sundays), the last point being the end of the
  * report week. Prospecting isn't measured here.
  */
 function stagesByWeek(to, weeks, director) {

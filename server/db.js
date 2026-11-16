@@ -872,7 +872,7 @@ addColumn('tickets', 'source', 'TEXT');          // where the deal came from (Pi
 addColumn('tickets', 'custom_fields', 'TEXT');   // JSON array of { name, value }: Pipedrive custom fields, and any others
 db.exec(`
 -- Pipelines beyond KIT's own, each with its own stages, made to match Pipedrive's pipelines when they're synced.
--- A ticket with no pipeline_id is on KIT's own pipeline (PIPELINE_STATUSES).
+-- A ticket with no pipeline_id is on KIT's own pipeline, whose stages are the pipeline_stages rows with no pipeline_id.
 CREATE TABLE IF NOT EXISTS pipelines (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -882,7 +882,7 @@ CREATE TABLE IF NOT EXISTS pipelines (
 );
 CREATE TABLE IF NOT EXISTS pipeline_stages (
   id INTEGER PRIMARY KEY,
-  pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+  pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE CASCADE, -- null: a stage of KIT's own pipeline
   name TEXT NOT NULL,
   position INTEGER NOT NULL DEFAULT 0,
   pipedrive_id INTEGER UNIQUE
@@ -890,6 +890,61 @@ CREATE TABLE IF NOT EXISTS pipeline_stages (
 CREATE INDEX IF NOT EXISTS pipeline_stages_pipeline ON pipeline_stages(pipeline_id, position);
 `);
 addColumn('tickets', 'pipeline_id', 'INTEGER REFERENCES pipelines(id) ON DELETE SET NULL');
+// Stages can be added, renamed, moved and deleted in KIT (BD Pipeline › Settings › Stages) as well as in Pipedrive.
+// position is the order KIT shows them in; pipedrive_order is where Pipedrive had the stage at the last pull, and
+// pipedrive_name the name it has there (a stage renamed in KIT differs until the rename is sent). A stage made in KIT has
+// no pipedrive_id until it's sent, and one deleted in KIT waits in stage_deletes until it's deleted in Pipedrive.
+addColumn('pipeline_stages', 'pipedrive_order', 'INTEGER');
+addColumn('pipeline_stages', 'pipedrive_name', 'TEXT');
+// Two choices made for a stage added in KIT (see routes/stages.js and pipelines.js):
+//   sync: whether it goes to Pipedrive as a stage of that pipeline with the next send. Off (the default for a stage made
+//     in KIT), it's KIT's own: tickets in it stay, in Pipedrive, in the stage they were in.
+//   reports_as: how reports count tickets in it. A standard stage's name blends them into that stage; 'own' makes the
+//     stage a step of its own in the reports; null leaves them out (as with any stage Pipedrive has that isn't standard).
+addColumn('pipeline_stages', 'sync', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('pipeline_stages', 'reports_as', 'TEXT');
+// Where a pipeline ticket sits in its stage's column when the BD Pipeline board is sorted by priority order: lowest
+// first, tickets nobody has placed (null) after them, newest first. It's the board's own order, shared by everyone, and
+// has nothing to do with anyone's priority tickets or the weekly priorities.
+addColumn('tickets', 'board_position', 'INTEGER');
+// KIT's own pipeline keeps its stages here too (pipeline_id null), so they can be added to, renamed, moved and deleted like
+// any other's. Databases from before that had pipeline_id NOT NULL: the table is rebuilt once to allow it.
+if (db.prepare('PRAGMA table_info(pipeline_stages)').all().find((c) => c.name === 'pipeline_id')?.notnull) {
+  db.pragma('foreign_keys = OFF');
+  db.transaction(() => {
+    db.exec(`CREATE TABLE pipeline_stages_new (
+      id INTEGER PRIMARY KEY,
+      pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      pipedrive_id INTEGER UNIQUE,
+      pipedrive_order INTEGER,
+      pipedrive_name TEXT,
+      sync INTEGER NOT NULL DEFAULT 1,
+      reports_as TEXT
+    );
+    INSERT INTO pipeline_stages_new (id, pipeline_id, name, position, pipedrive_id, pipedrive_order, pipedrive_name, sync, reports_as)
+      SELECT id, pipeline_id, name, position, pipedrive_id, pipedrive_order, pipedrive_name, sync, reports_as FROM pipeline_stages;
+    DROP TABLE pipeline_stages;
+    ALTER TABLE pipeline_stages_new RENAME TO pipeline_stages;
+    CREATE INDEX IF NOT EXISTS pipeline_stages_pipeline ON pipeline_stages(pipeline_id, position);`);
+  })();
+  db.pragma('foreign_keys = ON');
+}
+// KIT's own pipeline starts with the standard stages (Lost isn't a stage: it's how a ticket closes).
+if (!db.prepare('SELECT 1 FROM pipeline_stages WHERE pipeline_id IS NULL').get()) {
+  ['Prospecting', 'Qualified', 'Capture', 'Proposal', 'Under Evaluation', 'Awarded']
+    .forEach((name, i) => db.prepare('INSERT INTO pipeline_stages (pipeline_id, name, position, sync) VALUES (NULL, ?, ?, 0)').run(name, i));
+}
+db.exec(`
+UPDATE pipeline_stages SET pipedrive_order = position WHERE pipedrive_order IS NULL AND pipedrive_id IS NOT NULL;
+UPDATE pipeline_stages SET pipedrive_name = name WHERE pipedrive_name IS NULL AND pipedrive_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS stage_deletes (
+  pipedrive_id INTEGER PRIMARY KEY,
+  name TEXT,
+  deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
 // Accounts the Pipedrive sync made for deal owners with no KIT account: they exist so tickets can name them, and the
 // person claims the account (sets a password) by activating with that email.
 addColumn('users', 'pending_activation', 'INTEGER NOT NULL DEFAULT 0');
@@ -904,7 +959,7 @@ addColumn('ticket_comments', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('ticket_files', 'pipedrive_note_id', 'INTEGER');
 db.exec(`
 -- Tags (Pipedrive's deal labels), each with its color. Tickets keep the names they carry in tickets.labels. Labels from
--- Pipedrive have a pipedrive_id; ones made in KIT don't, and stay in KIT.
+-- Pipedrive have a pipedrive_id; ones made in KIT don't until one is on a deal sent to Pipedrive, which makes it a label there.
 CREATE TABLE IF NOT EXISTS labels (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -983,11 +1038,11 @@ CREATE TABLE IF NOT EXISTS race_times (
 );
 CREATE INDEX IF NOT EXISTS race_times_track ON race_times(track, ms);
 `);
-// Site feedback works like a ticket in the Developer section of Admin Access: checked off when done, then archived.
+// Site feedback works like a ticket on the Site Dev tab of Settings: checked off when done, then archived.
 addColumn('site_feedback', 'done_at', 'TEXT');
 addColumn('site_feedback', 'done_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 addColumn('site_feedback', 'archived_at', 'TEXT');
-// Developers work the site feedback (the Developer section of Admin Access). Separate from role, so an admin or a
+// Developers work the site feedback (the Site Dev tab of Settings). Separate from role, so an admin or a
 // member can also be one.
 addColumn('users', 'developer', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('ticket_contacts', 'is_primary', 'INTEGER NOT NULL DEFAULT 0'); // the deal's main contact person
@@ -1715,6 +1770,8 @@ CREATE TABLE IF NOT EXISTS comp_projections (
 // didn't bring the lead) sits with every ordinary tag. They're tags like any other, so a Pipedrive
 // label of the same name takes one over on the next pull and it then syncs both ways.
 addColumn('labels', 'kind', 'TEXT'); // lead | process | solution; null for ordinary tags
+// 1 once a tag's label was deleted in Pipedrive: it stays a KIT tag and is never sent back as a new label.
+addColumn('labels', 'pipedrive_gone', 'INTEGER NOT NULL DEFAULT 0');
 export const LEAD_TAGS = { event: 'Event Lead', google: 'Google Lead', marketing: 'Marketing Lead', bd: 'BD Lead' };
 export const GOOGLE_SOLUTION_TAG = 'Google Solution';
 export const LEAD_TAG_COLOR = 'purple';
@@ -1797,6 +1854,16 @@ CREATE TABLE IF NOT EXISTS ticket_events (
   added_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (ticket_id, event_id)
+);
+-- The Close to closing (C2C) list on the BD Pipeline: every ticket that reaches Under Evaluation joins it, and others are
+-- added by hand. A ticket stays on it when its deal closes. status is the hand-set standing (on_track, off_up, off_steady,
+-- off_down); note_id is the note the row shows (null: the latest).
+CREATE TABLE IF NOT EXISTS c2c_tickets (
+  ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+  status TEXT,
+  note_id INTEGER REFERENCES ticket_comments(id) ON DELETE SET NULL,
+  added_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 -- Leads Marketing feeds the team. Someone claims one by putting their name on it, and it becomes a pipeline ticket.
 CREATE TABLE IF NOT EXISTS marketing_leads (

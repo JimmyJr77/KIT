@@ -4,7 +4,6 @@
 export const HIDEABLE_NAV = [
   '/alerts', '/dashboard', '/playbook', '/reports', '/events', '/travel', '/priorities', '/tickets', '/pipeline',
   '/delivery', '/closed-deals', '/compensation', '/crm', '/solutions', '/marketing', '/retros', '/lessons',
-  '/member', '/my-team', '/admin',
 ];
 
 /** Only known paths, once each. */

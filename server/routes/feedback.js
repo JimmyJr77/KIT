@@ -1,5 +1,5 @@
 // Site feedback from the KITT widget in the corner of every page: anyone signed in can send a suggestion or report an
-// issue. Developers work it like tickets in the Developer section of Admin Access: check one off when it's done, then
+// issue. Developers work it like tickets on the Site Dev tab of Settings: check one off when it's done, then
 // archive it (archived ones can be brought back or deleted for good).
 import { Router } from 'express';
 import { db } from '../db.js';

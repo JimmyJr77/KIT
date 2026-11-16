@@ -40,6 +40,11 @@ export function fieldsOf(entity) {
   return db.prepare('SELECT * FROM pipedrive_fields WHERE entity = ? AND active = 1 ORDER BY position, name').all(entity)
     .map((f) => ({ ...f, options: json.parse(f.options, null), custom: !!f.custom, important: !!f.important }));
 }
+/** Replace a field's options with Pipedrive's current list (after KIT adds one), so it's usable before the next pull. */
+export function saveOptions(entity, key, options) {
+  db.prepare('UPDATE pipedrive_fields SET options = ? WHERE entity = ? AND key = ?')
+    .run(json.str(options.map((o) => ({ id: o.id, label: o.label, ...(o.color ? { color: o.color } : {}) }))), entity, key);
+}
 export const fieldByKey = (entity, key) => fieldsOf(entity).find((f) => f.key === key) || null;
 export const fieldByName = (entity, name) => fieldsOf(entity).find((f) => f.name === name) || null;
 /** The deal's custom fields, apart from Account (which is the territory). */

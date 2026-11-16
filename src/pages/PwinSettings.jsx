@@ -4,6 +4,7 @@ import { api } from '../lib/api.js';
 import { stamp } from '../lib/format.js';
 import SidePanel from '../components/SidePanel.jsx';
 import { CardTagSettings } from '../components/Labels.jsx';
+import StageSettings from '../components/StageSettings.jsx';
 import {
   CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, RATING_CREDIT, MUST_HAVE_PENALTY, MAX_PWIN, pwin, weightShares,
 } from '../lib/assessment.js';
@@ -11,13 +12,14 @@ import {
 const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
 const everyArea = (rating, override = {}) => Object.fromEntries(CRITERIA.map((c) => [c.key, { score: override[c.key] ?? rating }]));
 
-const TABS = [['pwin', 'PWIN'], ['tags', 'Tags on cards']];
+const TABS = [['pwin', 'PWIN'], ['tags', 'Tags on cards'], ['layout', 'Layout'], ['stages', 'Stages']];
+const SUBTITLES = { pwin: 'PWIN weights and must-have areas', tags: 'The tags you see on the board’s cards', layout: 'How wide the board’s tickets are', stages: 'The board’s columns' };
 
 /**
  * BD Pipeline settings, in tabs: PWIN weights and must-have areas for the bid and win assessment, with a way back to the
- * defaults; and which tags each person sees on the board's cards.
+ * defaults; which tags each person sees on the board's cards; and the stages of the board's current `pipeline`.
  */
-export default function PwinSettings({ onClose, onSaved }) {
+export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChanged, cardWidth, onCardWidth }) {
   const [saved, setSaved] = useState(null); // what the server has
   const [draft, setDraft] = useState(null); // { weights, gates }
   const [busy, setBusy] = useState(false);
@@ -66,7 +68,7 @@ export default function PwinSettings({ onClose, onSaved }) {
   ].map(([label, a]) => [label, pwin(a, weights, draft.gates)?.score]) : [];
 
   return (
-    <SidePanel title="BD Pipeline settings" subtitle={tab === 'pwin' ? 'PWIN weights and must-have areas' : 'The tags you see on the board’s cards'} onClose={close}
+    <SidePanel title="BD Pipeline settings" subtitle={SUBTITLES[tab]} onClose={close}
       footer={draft && tab === 'pwin' && (
         <div className="space-y-2">
           {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
@@ -87,7 +89,7 @@ export default function PwinSettings({ onClose, onSaved }) {
           </button>
         ))}
       </nav>
-      {tab === 'tags' ? <CardTagSettings /> : !draft ? <p className="text-sm text-slate-400">Loading…</p> : (
+      {tab === 'tags' ? <CardTagSettings /> : tab === 'layout' ? <LayoutSettings value={cardWidth} onChange={onCardWidth} /> : tab === 'stages' ? <StageSettings pipeline={pipeline} onChanged={onStagesChanged} /> : !draft ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className="space-y-4">
           <section className="space-y-2 rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
             <p>
@@ -175,5 +177,38 @@ export default function PwinSettings({ onClose, onSaved }) {
         </div>
       )}
     </SidePanel>
+  );
+}
+
+// The board's ticket widths (Pipeline.jsx sizes its columns by these keys).
+const CARD_WIDTHS = [['narrow', 'Narrow'], ['medium', 'Medium'], ['wide', 'Wide'], ['fit', 'Adjust to window']];
+const WIDTH_HINTS = {
+  narrow: 'More stages on screen at once; long titles wrap sooner.',
+  medium: 'Between the two.',
+  wide: 'The most room on each ticket.',
+  fit: 'Every stage shares the window, however many there are. Tickets get thinner as stages are added, and the board doesn’t scroll sideways.',
+};
+
+/** The viewer's own choice of how wide the board's tickets are, kept in this browser and applied as it's picked. */
+function LayoutSettings({ value, onChange }) {
+  return (
+    <div className="space-y-4">
+      <p className="rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
+        How wide the tickets on the board are. At a set width the board scrolls left and right when the stages don’t all fit. This is your own view, kept in this browser.
+        To tuck a stage away, use the arrows at the top of its column: it becomes a thin lane you can still drop tickets on, and opens again when you click it.
+      </p>
+      <fieldset className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+        <legend className="sr-only">Ticket width</legend>
+        {CARD_WIDTHS.map(([key, label]) => (
+          <label key={key} className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5 hover:bg-slate-50">
+            <input type="radio" name="card-width" className="mt-0.5 h-4 w-4 accent-brand-600" checked={value === key} onChange={() => onChange(key)} />
+            <span>
+              <span className="text-sm font-medium text-slate-800">{label}</span>
+              <span className="block text-xs text-slate-500">{WIDTH_HINTS[key]}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+    </div>
   );
 }

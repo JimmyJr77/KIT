@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from './lib/auth.jsx';
 import Layout from './components/Layout.jsx';
 import ProcessingScanner from './components/ProcessingScanner.jsx';
@@ -15,21 +15,37 @@ import Crm from './pages/Crm.jsx';
 import TechnicalSolutions from './pages/TechnicalSolutions.jsx';
 import Delivery from './pages/Delivery.jsx';
 import Marketing from './pages/Marketing.jsx';
-import Settings from './pages/Settings.jsx';
-import AdminAccess from './pages/AdminAccess.jsx';
-import MyTeam from './pages/MyTeam.jsx';
-import MemberAccess from './pages/MemberAccess.jsx';
+import Settings, { settingsTabs, settingsPath } from './pages/Settings.jsx';
 import Reports from './pages/Reports.jsx';
 import Archive from './pages/Archive.jsx';
 import Backups from './pages/Backups.jsx';
 import DoneTickets from './pages/DoneTickets.jsx';
 import ProcessView from './pages/ProcessView.jsx';
+import CloseToClosing from './pages/CloseToClosing.jsx';
 import ClosedDeals from './pages/ClosedDeals.jsx';
 import LessonsLearned from './pages/LessonsLearned.jsx';
 import Retros from './pages/Retros.jsx';
 import RetroBoard from './pages/RetroBoard.jsx';
 import Playbook from './pages/Playbook.jsx';
 import Compensation from './pages/Compensation.jsx';
+
+/**
+ * Admin Access, My team and Member Access were pages of their own and are now tabs of Settings. Their old addresses
+ * (in alerts, bookmarks and shared links) go to the matching tab: /admin to the first role tab this user has, as it
+ * did before, /admin/team-lead (keeping ?team=) and /my-team to Team Lead, /admin/developer to Site Dev.
+ */
+function OldAdminLink() {
+  const { user } = useAuth();
+  const { view = '' } = useParams();
+  const [params] = useSearchParams();
+  if (view === 'team-lead' || view === 'bd-team') {
+    const team = view === 'bd-team' ? 'BD' : params.get('team');
+    return <Navigate to={`${settingsPath('team-lead')}${team ? `&team=${encodeURIComponent(team)}` : ''}`} replace />;
+  }
+  if (view === 'developer') return <Navigate to={settingsPath('site-dev')} replace />;
+  const tabs = settingsTabs(user);
+  return <Navigate to={settingsPath((tabs[1] || tabs[0]).key)} replace />;
+}
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -60,6 +76,7 @@ export default function App() {
           <Route path="/tickets/done" element={<DoneTickets />} />
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/pipeline/process" element={<ProcessView />} />
+          <Route path="/pipeline/c2c" element={<CloseToClosing />} />
           <Route path="/delivery" element={<Delivery />} />
           <Route path="/closed-deals" element={<ClosedDeals />} />
           <Route path="/crm" element={<Crm />} />
@@ -71,11 +88,11 @@ export default function App() {
           <Route path="/retros" element={<Retros />} />
           <Route path="/retros/:id" element={<RetroBoard />} />
           <Route path="/settings" element={<Settings />} />
-          <Route path="/admin" element={<AdminAccess />} />
-          <Route path="/admin/:view" element={<AdminAccess />} />
+          <Route path="/admin" element={<OldAdminLink />} />
+          <Route path="/admin/:view" element={<OldAdminLink />} />
           <Route path="/backups" element={<Backups />} />
-          <Route path="/my-team" element={<MyTeam />} />
-          <Route path="/member" element={<MemberAccess />} />
+          <Route path="/my-team" element={<Navigate to="/settings?tab=team-lead" replace />} />
+          <Route path="/member" element={<Navigate to="/settings" replace />} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="*" element={<Navigate to="/priorities" replace />} />
         </Route>

@@ -1,11 +1,10 @@
 import { useState } from 'react';
-import { Navigate, NavLink, useParams, useSearchParams } from 'react-router-dom';
-import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil, Target, Code2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
 import { fullName, stamp, fullStamp } from '../lib/format.js';
-import PageHeader from '../components/PageHeader.jsx';
 import { TeamTags, AddTeamSelect } from '../components/TeamPicker.jsx';
 import ProfileFields from '../components/ProfileFields.jsx';
 import SidePanel from '../components/SidePanel.jsx';
@@ -13,71 +12,20 @@ import Avatar from '../components/Avatar.jsx';
 import BookingTargetsPanel, { QualifiedTargetsPanel } from '../components/BookingTargets.jsx';
 import SampleDataPanel from '../components/SampleDataPanel.jsx';
 import BackupPanel from '../components/BackupPanel.jsx';
-import PipedrivePanel from '../components/PipedrivePanel.jsx';
+import PipedrivePanel, { PipedrivePullPanel } from '../components/PipedrivePanel.jsx';
 import NewPipelineTicketsPanel from '../components/NewPipelineTicketsPanel.jsx';
 import KitPipelinePanel from '../components/KitPipelinePanel.jsx';
 import SiteFeedbackPanel from '../components/SiteFeedbackPanel.jsx';
 import BdTeamPanel from '../components/BdTeamPanel.jsx';
 import { TerritoryTags, TerritoryChecklist, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
-import { ledTeams } from './MyTeam.jsx';
+import { ledTeams, TeamRoster } from './MyTeam.jsx';
 
 const isAdmin = (user) => user.role === 'admin';
-const isDeveloper = (user) => !!user.developer;
 
-/**
- * Admin Access is the home for administrative and leadership views, each at /admin/<key>. Admin (access, the directory
- * and site setup) is /admin itself. Each view is for one role: Admin for admins, Team Lead for anyone who leads a team,
- * Developer for people with the Developer role (set on their account). Someone sees only the views for roles they have,
- * and the switcher only when there's more than one. Add a view here as a new leadership title is built out.
- */
-const VIEWS = [
-  { key: '', label: 'Admin', icon: ShieldCheck, title: 'Admin Access', subtitle: 'Who can use KIT, the team directory and site setup', can: isAdmin, Page: AdminView },
-  { key: 'team-lead', label: 'Team Lead', icon: Target, title: 'Team Lead', subtitle: 'What your team is expected to deliver', can: (u) => leadPages(u).length > 0, Page: TeamLeadView },
-  { key: 'developer', label: 'Developer', icon: Code2, title: 'Developer', subtitle: 'Site feedback to work through', can: isDeveloper, Page: DeveloperView },
-];
-
-/** The views for the roles someone has (sent to Settings if none), with a switcher between them. */
-export default function AdminAccess() {
-  const { user } = useAuth();
-  const { view = '' } = useParams();
-  const open = VIEWS.filter((v) => v.can(user));
-  // BD Team used to be a view of its own; it's now on BD's Team Lead tab.
-  if (view === 'bd-team') return <Navigate to="/admin/team-lead?team=BD" replace />;
-  const current = open.find((v) => v.key === view);
-  if (!open.length) return <Navigate to="/settings" replace />;
-  if (!current) return <Navigate to={`/admin${open[0].key ? `/${open[0].key}` : ''}`} replace />;
-  return <AdminHub views={open} current={current} />;
-}
-
-function AdminHub({ views, current }) {
-  // Fetched here so the Developer tab can show how many are open, whichever view is showing. Developers only.
-  const feedback = useApi(views.some((v) => v.key === 'developer') ? '/feedback' : null);
-  const badges = { developer: feedback.data?.open };
-  const link = ({ isActive }) => `flex items-center gap-1.5 rounded px-3 whitespace-nowrap ${isActive ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`;
-  const { Page } = current;
-  return (
-    <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-8">
-      <PageHeader title={current.title} subtitle={current.subtitle}>
-        {views.length > 1 && (
-          <nav className="flex h-9 max-w-full overflow-x-auto rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" aria-label="Admin Access views">
-            {views.map((v) => (
-              <NavLink key={v.key} to={`/admin${v.key ? `/${v.key}` : ''}`} end className={link}>
-                <v.icon size={14} /> {v.label}
-                {badges[v.key] > 0 && (
-                  <span className={`rounded-full px-1.5 text-[10px] leading-4 font-bold ${v.key === current.key ? 'bg-white text-brand-700' : 'bg-amber-500 text-white'}`}>{badges[v.key]}</span>
-                )}
-              </NavLink>
-            ))}
-          </nav>
-        )}
-      </PageHeader>
-      <Page feedback={feedback} />
-    </div>
-  );
-}
+// The Admin, Team Lead and Site Dev tabs of Settings (see Settings.jsx, which decides who sees which).
 
 /** Access requests from the sign-in page, approved accounts, the team directory, and site setup. */
-function AdminView() {
+export function AdminView() {
   const approved = useApi('/users/approved');
   const users = useApi('/users');
   const teams = useApi('/teams');
@@ -101,10 +49,10 @@ function AdminView() {
 }
 
 /**
- * What a team's lead sees on the Team Lead view, by team name. Only BD's is built so far: the booking (sales) and
+ * What a team's lead sets on the Team Lead tab, by team name, under the team's people. Only BD's is built so far: the booking (sales) and
  * qualified pipeline goals for each BD director, then what each BD member counts toward (BD numbers, Weekly Priorities
  * and travel). These are the only place goals are set; the report card, dashboards, Reports and the BD deck all read
- * them. Add a team here as its lead page takes shape; until then its leads see a note.
+ * them. Add a team here as its lead page takes shape.
  */
 const LEAD_PAGES = {
   BD: () => (<><BookingTargetsPanel /><QualifiedTargetsPanel /><BdTeamPanel /></>),
@@ -114,7 +62,7 @@ const LEAD_PAGES = {
  * The teams whose lead page someone can open: the teams they lead, or every team for an admin (`teams`, from /teams;
  * until it loads, BD stands in so admins aren't sent away).
  */
-function leadPages(user, teams = null) {
+export function leadPages(user, teams = null) {
   const led = ledTeams(user);
   if (!isAdmin(user)) return led;
   if (teams?.length) return teams;
@@ -123,14 +71,17 @@ function leadPages(user, teams = null) {
 
 /**
  * One page per team, with a tab for each when there's more than one. The open team is in the address (?team=BD), so a
- * reload or a shared link comes back to it.
+ * reload or a shared link comes back to it. A team's lead gets its people first (who's on it, and who leads it), then
+ * the team's goals, and last the pull of the team's Pipedrive deals. An admin who doesn't lead the team sees its goals only.
  */
-function TeamLeadView() {
+export function TeamLeadView() {
   const { user } = useAuth();
   const teams = useApi(isAdmin(user) ? '/teams' : null).data?.teams;
   const led = leadPages(user, teams);
+  const mine = ledTeams(user);
   const [params, setParams] = useSearchParams();
   const team = led.find((t) => t.name === params.get('team')) || led.find((t) => t.name === 'BD') || led[0];
+  const leads = mine.some((t) => t.id === team.id);
   const Page = LEAD_PAGES[team.name];
   const pick = (t) => setParams((p) => { p.set('team', t.name); return p; }, { replace: true });
   return (
@@ -146,13 +97,15 @@ function TeamLeadView() {
         </div>
       )}
       <h2 className="-mb-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">{team.name} team lead</h2>
-      {Page ? <Page /> : <div className="panel text-sm text-slate-500">Nothing on the {team.name} team lead page yet.</div>}
+      {leads && <TeamRoster key={team.id} team={team} />}
+      {Page ? <Page /> : !leads && <div className="panel text-sm text-slate-500">Nothing on the {team.name} team lead page yet.</div>}
+      {mine.length > 0 && <PipedrivePullPanel scope="team" />}
     </>
   );
 }
 
 /** Site feedback from KITT, as tickets to check off and archive. */
-function DeveloperView({ feedback }) {
+export function DeveloperView({ feedback }) {
   return <SiteFeedbackPanel feedback={feedback} />;
 }
 
@@ -403,7 +356,7 @@ function DirectoryPanel({ approved, users, teams, territories, onError }) {
         {users.data && !shown.length && <li className="px-3 py-6 text-center text-sm text-slate-400">No one matches.</li>}
       </ul>
       {editing && <EditAccountPanel user={editing} territories={territories} onClose={() => setEditing(null)} onSaved={async () => {
-        // Your own roles decide which Admin Access views you see, so pick up the change right away.
+        // Your own roles decide which Settings tabs you see, so pick up the change right away.
         if (editing.id === me.id) setUser((await api.get('/auth/me')).user);
         setEditing(null); users.reload(); approved.reload();
       }} />}
@@ -456,7 +409,7 @@ function EditAccountPanel({ user, territories, onClose, onSaved }) {
             <input type="checkbox" className="size-4 accent-brand-600" checked={form.developer} onChange={(e) => setForm({ ...form, developer: e.target.checked })} />
             Site Dev
           </label>
-          <p className="mt-1 text-xs text-slate-500">Site Dev members see the Developer section of Admin Access and work through site feedback.</p>
+          <p className="mt-1 text-xs text-slate-500">Site Dev members see the Site Dev tab of Settings and work through site feedback.</p>
         </div>
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         <button type="submit" className="hidden" />

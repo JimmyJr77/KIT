@@ -50,7 +50,7 @@ export function TeamTags({ teams = [], value = [], roles = {}, onRemove, onSetRo
         );
       })}
       {siteDev && (
-        <span className={DEV} title="Site Dev: sees the Developer page of Admin Access and works through site feedback">
+        <span className={DEV} title="Site Dev: sees the Site Dev tab of Settings and works through site feedback">
           <Code2 size={12} /> {SITE_DEV}
           {onRemoveSiteDev && (
             <button type="button" onClick={onRemoveSiteDev} aria-label={`Remove ${SITE_DEV}`} className="-mr-0.5 opacity-60 hover:opacity-100"><X size={12} /></button>

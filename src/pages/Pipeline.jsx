@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp, Star, Trophy } from 'lucide-react';
+// With the board in priority order a ticket is dropped on another ticket (to go just above it) as well as on a column.
+const CARD = 'card:';
+const cardFirst = (args) => { const hits = pointerWithin(args); const cards = hits.filter((h) => String(h.id).startsWith(CARD)); return cards.length ? cards : hits; };
+import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp, Star, Trophy, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullName, fullStamp, ticketKind } from '../lib/format.js';
@@ -13,11 +16,18 @@ import MultiSelect from '../components/MultiSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel, { PIPELINE_CLOSED_HINT } from './NewTicketPanel.jsx';
 import PwinSettings from './PwinSettings.jsx';
-import { LabelList, TagFilter, byTags } from '../components/Labels.jsx';
+import { LabelList, TagFilter, byTags, usePriorityTagHidden } from '../components/Labels.jsx';
 import { PipelineViewToggle } from './ProcessView.jsx';
 import NextStepBadge from '../components/NextStepBadge.jsx';
 
 const NO_STAGE = '__none__';
+// How wide the board's columns (and so its tickets) are: each person's own choice, in the board's settings, kept in this
+// browser. Narrow, medium and wide are fixed widths, and the board scrolls sideways for what doesn't fit; "fit" shares the
+// window among the columns instead, however thin that makes them.
+const COLUMN_CLASS = { narrow: 'w-52 shrink-0', medium: 'w-60 shrink-0', wide: 'w-[17rem] shrink-0', fit: 'min-w-0 flex-1 basis-0' };
+const savedWidth = () => { try { const v = localStorage.getItem('kit.pipeline.cardWidth'); return COLUMN_CLASS[v] ? v : 'wide'; } catch { return 'wide'; } };
+// Stages each person has minimized (a thin lane with its name written down it), by pipeline, kept in this browser.
+const savedMinimized = () => { try { const v = JSON.parse(localStorage.getItem('kit.pipeline.minimized')); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
 const money = (n) => usd(n).replace('.00', '');
 // Won and lost deals aren't on the board, as in Pipedrive: Closed deals lists them (and won ones are contracts in Delivery).
 import { isClosed } from '../lib/lanes.js';
@@ -29,6 +39,8 @@ import { canEditTicket } from '../lib/ticketAccess.js';
 // it. The board opens on next task due, descending. Cards missing the value sorted on (no next task, no value) go to the bottom either way, and
 // ties go by last entry, most recent first.
 const SORTS = {
+  // The board's own order, set by dragging tickets up and down their column. Nothing to do with priority tickets.
+  priority: { label: 'Priority order', dir: 'asc', of: (t) => t.board_position ?? null, words: ['Highest priority first', 'Lowest priority first'] },
   next: { label: 'Next task due', dir: 'asc', of: (t) => (t.next_step?.due_date ? `${t.next_step.due_date} ${t.next_step.due_time || '99:99'}` : null), words: ['Soonest first', 'Latest first'] },
   activity: { label: 'Last entry', dir: 'desc', of: (t) => t.last_activity || null, words: ['Oldest first', 'Most recent first'] },
   created: { label: 'Date created', dir: 'desc', of: (t) => t.created_at || null, words: ['Oldest first', 'Newest first'] },
@@ -42,7 +54,8 @@ const compareOn = (key, dir) => (a, b) => {
   const c = typeof x === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { sensitivity: 'base', numeric: true });
   return dir === 'asc' ? c : -c;
 };
-const compareBy = ({ key, dir }) => (a, b) => compareOn(key, dir)(a, b) || compareOn('activity', 'desc')(a, b);
+// Ties go by last entry, except in priority order, where tickets nobody has placed go newest first (as the server numbers them).
+const compareBy = ({ key, dir }) => (a, b) => compareOn(key, dir)(a, b) || (key === 'priority' ? b.id - a.id : compareOn('activity', 'desc')(a, b));
 const savedSort = () => {
   try {
     const v = JSON.parse(localStorage.getItem('kit.pipeline.sort.v3'));
@@ -66,6 +79,14 @@ export default function Pipeline() {
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [cardWidth, setCardWidthState] = useState(savedWidth);
+  const setCardWidth = (v) => { setCardWidthState(v); try { localStorage.setItem('kit.pipeline.cardWidth', v); } catch { /* not kept */ } };
+  const [minimized, setMinimized] = useState(savedMinimized);
+  const toggleMinimized = (key) => setMinimized((xs) => {
+    const next = xs.includes(key) ? xs.filter((k) => k !== key) : [...xs, key];
+    try { localStorage.setItem('kit.pipeline.minimized', JSON.stringify(next)); } catch { /* not kept */ }
+    return next;
+  });
   const [sort, setSortState] = useState(savedSort);
   const setSort = (v) => {
     setSortState(v);
@@ -134,19 +155,37 @@ export default function Pipeline() {
     return none.length ? [{ key: NO_STAGE, label: 'No stage', tickets: none }, ...cols] : cols;
   }, [shown, stages, pipeline?.key, sort]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const ranking = sort.key === 'priority'; // tickets are dragged up and down their column to set the order
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
 
   const onDragEnd = async ({ active, over }) => {
     setDragId(null);
     if (!over) return;
     const t = tickets.find((x) => x.id === active.id);
-    const stage = over.id === NO_STAGE ? null : over.id;
-    if (!t || (t.pipeline_status || null) === stage) return;
+    if (!t) return;
+    // Dropped on a ticket (priority order only): into that ticket's column, just above it. Dropped on a column: at its end.
+    const onCard = String(over.id).startsWith(CARD) ? Number(String(over.id).slice(CARD.length)) : null;
+    if (onCard === t.id) return;
+    const column = onCard != null ? columns.find((c) => c.tickets.some((x) => x.id === onCard)) : columns.find((c) => c.key === over.id);
+    if (!column) return;
+    const stage = column.key === NO_STAGE ? null : column.key;
+    const stageMoved = (t.pipeline_status || null) !== stage;
+    if (!stageMoved && !ranking) return;
+    // The column as it will show, and from that the ticket that follows this one in priority order (reversed when the board is).
+    const shown = column.tickets.filter((x) => x.id !== t.id);
+    shown.splice(onCard != null ? shown.findIndex((x) => x.id === onCard) : shown.length, 0, t);
+    const ranked = sort.dir === 'asc' ? shown : [...shown].reverse();
+    const before_id = ranked[ranked.indexOf(t) + 1]?.id ?? null;
     const prev = tickets;
-    setTickets((xs) => xs.map((x) => (x.id === t.id ? { ...x, pipeline_status: stage, last_activity: new Date().toISOString().slice(0, 19).replace('T', ' ') } : x)));
+    const place = new Map(ranking ? ranked.map((x, i) => [x.id, i + 1]) : []);
+    setTickets((xs) => xs.map((x) => ({
+      ...x, ...(place.has(x.id) ? { board_position: place.get(x.id) } : {}),
+      ...(x.id === t.id && stageMoved ? { pipeline_status: stage, last_activity: new Date().toISOString().slice(0, 19).replace('T', ' ') } : {}),
+    })));
     setError('');
     try {
-      await api.put(`/tickets/${t.id}/stage`, { pipeline_status: stage });
+      if (stageMoved) await api.put(`/tickets/${t.id}/stage`, { pipeline_status: stage });
+      if (ranking) { await api.put(`/tickets/${t.id}/board-position`, { before_id }); load(); }
     } catch (e) {
       setTickets(prev);
       setError(`Couldn’t move “${t.opportunity_title}”: ${e.message}`);
@@ -211,18 +250,21 @@ export default function Pipeline() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
-        <DndContext sensors={sensors} collisionDetection={pointerWithin}
+        <DndContext sensors={sensors} collisionDetection={ranking ? cardFirst : pointerWithin}
           onDragStart={({ active }) => setDragId(active.id)} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
-          <div className="flex h-full min-h-96 items-stretch gap-3">
+          {/* At a set width the board scrolls sideways for the columns that don't fit; fitted to the window, they share it. */}
+          <div className={`flex h-full min-h-96 items-stretch gap-3 ${cardWidth === 'fit' ? '' : 'w-max min-w-full'}`}>
             {columns.map((c) => <Column key={c.key} column={c} onOpen={(id) => { setOpenStep(undefined); setOpenId(id); }}
               onOpenStep={(t) => { setOpenStep(t.next_step?.id ?? null); setOpenId(t.id); }} dragId={dragId} now={now}
-              onWon={c.key === lastStage ? markWon : null} />)}
+              onWon={c.key === lastStage ? markWon : null} width={cardWidth} ranking={ranking}
+              minimized={minimized.includes(`${pipeline?.key}|${c.key}`)} onMinimize={() => toggleMinimized(`${pipeline?.key}|${c.key}`)} />)}
           </div>
           <DragOverlay>{dragging && <TicketCard ticket={dragging} now={now} overlay />}</DragOverlay>
         </DndContext>
       </div>
 
-      {settingsOpen && <PwinSettings onClose={() => setSettingsOpen(false)} onSaved={load} />}
+      {settingsOpen && <PwinSettings onClose={() => setSettingsOpen(false)} onSaved={load} pipeline={pipeline} cardWidth={cardWidth} onCardWidth={setCardWidth}
+        onStagesChanged={() => { meta.reload({ quiet: true }); load(); }} />}
 
       {creating && (
         <NewTicketPanel bidOnly pipeline={pipeline} onClose={() => setCreating(false)}
@@ -234,23 +276,44 @@ export default function Pipeline() {
   );
 }
 
-function Column({ column, onOpen, onOpenStep, dragId, now, onWon }) {
+function Column({ column, onOpen, onOpenStep, dragId, now, onWon, width = 'wide', minimized, onMinimize, ranking }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.key });
   const total = column.tickets.reduce((s, t) => s + (t.value || 0), 0);
   const closed = !!onWon; // the last stage: a deal here is marked won from its card
+  // Minimized: a thin lane with the stage's name written down it and no cards. It still takes a drop, and opens only when clicked.
+  if (minimized) {
+    return (
+      <section ref={setNodeRef} aria-label={`${column.label} stage`} className="flex w-11 shrink-0">
+        <button type="button" onClick={onMinimize} aria-expanded={false} aria-label={`Show the ${column.label} stage (${column.tickets.length} tickets)`} title={`Show ${column.label}`}
+          className={`flex w-full flex-col items-center gap-2 rounded-xl border py-2.5 transition ${
+            isOver ? 'border-brand-500 bg-brand-50/60 ring-2 ring-brand-100' : 'border-slate-200 bg-slate-100/70 hover:border-slate-300 hover:bg-slate-100'}`}>
+          <ChevronsRight size={15} className="shrink-0 text-slate-400" />
+          <span className="shrink-0 rounded-full bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200 tabular-nums">{column.tickets.length}</span>
+          <span className={`min-h-0 truncate text-sm font-semibold [writing-mode:vertical-rl] ${column.key === NO_STAGE ? 'text-slate-500 italic' : 'text-slate-800'}`}>{column.label}</span>
+          {total > 0 && <span className="shrink-0 text-xs font-medium text-emerald-700 tabular-nums [writing-mode:vertical-rl]">{money(total)}</span>}
+        </button>
+      </section>
+    );
+  }
   return (
     <section ref={setNodeRef} aria-label={`${column.label} stage`}
-      className={`flex min-w-40 flex-1 basis-0 flex-col rounded-xl border transition ${
+      className={`flex ${COLUMN_CLASS[width] || COLUMN_CLASS.wide} flex-col rounded-xl border transition ${
         isOver ? 'border-brand-500 bg-brand-50/60 ring-2 ring-brand-100' : closed ? 'border-slate-200 bg-slate-100/70' : 'border-slate-200 bg-white/70'}`}>
       <header className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-3 py-2.5">
         <div className="flex items-baseline gap-1.5">
           <h2 className={`text-sm font-semibold ${column.key === NO_STAGE ? 'text-slate-500 italic' : 'text-slate-800'}`}>{column.label}</h2>
           <span className="text-xs text-slate-400">{column.tickets.length}</span>
         </div>
-        <span className="text-xs font-medium text-emerald-700 tabular-nums">{total ? money(total) : ''}</span>
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="truncate text-xs font-medium text-emerald-700 tabular-nums">{total ? money(total) : ''}</span>
+          {onMinimize && (
+            <button type="button" onClick={onMinimize} aria-expanded aria-label={`Minimize the ${column.label} stage`} title="Minimize this stage"
+              className="shrink-0 self-center rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><ChevronsLeft size={14} /></button>
+          )}
+        </span>
       </header>
       <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-2">
-        {column.tickets.map((t) => <DraggableTicket key={t.id} ticket={t} onOpen={onOpen} onOpenStep={onOpenStep} hidden={dragId === t.id} now={now} onWon={onWon} />)}
+        {column.tickets.map((t) => <DraggableTicket key={t.id} ticket={t} onOpen={onOpen} onOpenStep={onOpenStep} hidden={dragId === t.id} now={now} onWon={onWon} ranking={ranking} />)}
         {!column.tickets.length && (
           <p className={`rounded-lg border-2 border-dashed px-3 py-6 text-center text-xs ${isOver ? 'border-brand-500 text-brand-600' : 'border-slate-200 text-slate-400'}`}>
             {isOver ? 'Drop here' : 'No tickets'}
@@ -262,13 +325,17 @@ function Column({ column, onOpen, onOpenStep, dragId, now, onWon }) {
 }
 
 /** A pipeline ticket on the board. Its owner (or an admin) drags it to another stage or marks it won; others just open it. */
-function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now, onWon: won }) {
+function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now, onWon: won, ranking }) {
   const { user } = useAuth();
   const canEdit = canEditTicket(user, ticket);
   const onWon = canEdit ? won : null;
   const { attributes, listeners, setNodeRef } = useDraggable({ id: ticket.id, disabled: !canEdit });
+  // In priority order, another ticket dropped on this one goes just above it: a line shows where.
+  const drop = useDroppable({ id: `${CARD}${ticket.id}`, disabled: !ranking });
+  const above = ranking && drop.isOver && !hidden;
   return (
-    <div ref={setNodeRef} {...attributes} {...listeners} onClick={() => onOpen(ticket.id)} className={hidden ? 'opacity-30' : ''}>
+    <div ref={(el) => { setNodeRef(el); drop.setNodeRef(el); }} {...attributes} {...listeners} onClick={() => onOpen(ticket.id)}
+      className={`${hidden ? 'opacity-30' : ''} ${above ? 'relative before:absolute before:inset-x-0 before:-top-1.5 before:h-1 before:rounded-full before:bg-brand-500' : ''}`}>
       <TicketCard ticket={ticket} now={now} onOpenStep={onOpenStep} />
       {onWon && (
         <button type="button" onClick={(e) => { e.stopPropagation(); onWon(ticket); }} onPointerDown={(e) => e.stopPropagation()}
@@ -302,6 +369,7 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
   const owner = t.owner_first_name ? { id: t.created_by, first_name: t.owner_first_name, last_name: t.owner_last_name } : null;
   const days = daysSince(t.last_activity, now);
   const { bar, counter } = activityTimer(days);
+  const priorityOff = usePriorityTagHidden(); // the viewer's own choice, in the board's settings
   const idle = `${Math.floor(days)} day${Math.floor(days) === 1 ? '' : 's'} since last activity (${fullStamp(t.last_activity)})`;
   return (
     <div className={`relative cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pr-10 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${overlay ? 'w-60 rotate-2 shadow-xl' : ''} ${className}`}>
@@ -309,9 +377,9 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
       <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
       <div className="mt-0.5 h-4 truncate text-xs text-slate-500">{[t.organization, t.account_type].filter(Boolean).join(' · ')}</div>
       {(t.ticket_type === 'work' || t.priority_of || t.labels?.length > 0) && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 empty:hidden">
           <TicketKindTag ticket={t} />
-          <PriorityTag of={t.priority_of} />
+          {!priorityOff && <PriorityTag of={t.priority_of} />}
           <LabelList labels={t.labels} card />
         </div>
       )}

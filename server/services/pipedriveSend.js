@@ -15,7 +15,7 @@ import {
   kitChanges, snapshotOf, same, dealTracked, TASK_TRACKED, CONTACT_TRACKED, ORG_TRACKED, PRODUCT_TRACKED, INSTALLMENT_TRACKED, ACTIVITY_TYPES, uploadDir,
   DIRECTIONS, pipedriveConfigured, deletedIds, dealsGone, filesGone, fileHold, FILE_HOLD_AT,
 } from './pipedrive.js';
-import { fieldByKey, fieldByName, fieldValue, labelIds, withCustom, customKeyOf, customDealFields, ACCOUNT_FIELD } from './pipedriveFields.js';
+import { fieldByKey, fieldByName, fieldValue, labelIds, saveOptions, withCustom, customKeyOf, customDealFields, ACCOUNT_FIELD } from './pipedriveFields.js';
 import { projectView, taskView, projectActivityView, PROJECT_TRACKED, DTASK_TRACKED, DACT_TRACKED, PROJECT_STATUS_OF } from './pipedriveProjects.js';
 import { noteConflict } from './pipedriveConflicts.js';
 
@@ -147,6 +147,27 @@ const DFILE_SQL = `SELECT f.*, p.pipedrive_project_id AS project_id, p.ticket_id
   WHERE p.id IN (SELECT value FROM json_each(@pids)) AND f.pipedrive_id IS NULL AND f.pipedrive_detached = 0`;
 
 /** With `auto`, followers and people only on deals where they changed. Deletions go either way. */
+/**
+ * A deal's changed fields, less its stage while the ticket sits in a stage that's KIT's own (made in KIT and not set to
+ * sync): there's nowhere in Pipedrive to move the deal to, so it stays in the stage it was in there.
+ */
+function sendable(t, fields) {
+  if (!fields.includes('pipeline_status')) return fields;
+  const own = db.prepare('SELECT 1 FROM pipeline_stages WHERE pipeline_id = ? AND name = ? AND pipedrive_id IS NULL AND sync = 0').get(t.pipeline_id, t.pipeline_status);
+  return own ? fields.filter((f) => f !== 'pipeline_status') : fields;
+}
+
+/** Stages KIT has added (and set to sync), renamed or deleted on Pipedrive's pipelines since Pipedrive last had them. */
+function stagePlan() {
+  const rows = db.prepare(`SELECT s.*, p.name AS pipeline, p.pipedrive_id AS pd_pipeline FROM pipeline_stages s JOIN pipelines p ON p.id = s.pipeline_id
+    WHERE p.pipedrive_id IS NOT NULL ORDER BY p.position, s.position, s.id`).all();
+  return {
+    add: rows.filter((s) => !s.pipedrive_id && s.sync).map((s) => ({ id: s.id, text: s.name, pipeline: s.pipeline })), // only the ones set to sync
+    edit: rows.filter((s) => s.pipedrive_id && s.pipedrive_name != null && s.name !== s.pipedrive_name).map((s) => ({ id: s.id, text: s.name, from: s.pipedrive_name, pipeline: s.pipeline })),
+    remove: db.prepare('SELECT pipedrive_id, name AS text FROM stage_deletes').all(),
+  };
+}
+
 function plan(kinds, scope, { auto = false } = {}) {
   const tickets = ticketsIn(scope);
   const ids = json.str(tickets.map((t) => t.id));
@@ -163,11 +184,14 @@ function plan(kinds, scope, { auto = false } = {}) {
   const tracked = dealTracked();
 
   if (on('deals')) {
-    out.deals = tickets.map((t) => ({ ticket_id: t.id, title: t.opportunity_title, fields: kitChanges(withCustom(t), tracked) }))
+    out.deals = tickets.map((t) => ({ ticket_id: t.id, title: t.opportunity_title, fields: sendable(t, kitChanges(withCustom(t), tracked)) }))
       .filter((d) => d.fields.length).map((d) => ({ ...d, changes: changeList(withCustom(tickets.find((t) => t.id === d.ticket_id)), d.fields) }));
     // New and deleted tickets are deals to make and to delete.
     out.dealsNew = newDealTickets(scope).map((t) => ({ ticket_id: t.id, title: t.title, pipeline: t.pipeline }));
     out.dealsRemove = everyDeal(scope) ? db.prepare("SELECT kind, pipedrive_id, title FROM pipedrive_deletes WHERE kind = 'deal' AND send = 1").all() : [];
+    // Stages go with the deals too: a deal can only be moved to a stage Pipedrive has.
+    const stages = stagePlan();
+    if (stages.add.length || stages.edit.length || stages.remove.length) out.stages = stages;
   }
   if (on('labels')) out.labels = tickets.filter((t) => t.labels_pending).map((t) => ({ ticket_id: t.id, title: t.opportunity_title, labels: json.parse(t.labels, []) }));
   if (on('notes')) {
@@ -402,6 +426,7 @@ function byKey(out) {
   const put = (key, kind, item) => m.set(key, [...(m.get(key) || []), [kind, item]]);
   ['deals', 'labels', 'dealsNew'].forEach((k) => (out[k] || []).forEach((x) => put(x.ticket_id, k, x)));
   (out.dealsRemove || []).forEach((d) => put(`d${d.kind}${d.pipedrive_id}`, 'deals', d));
+  if (out.stages) put('stages', 'stages', out.stages);
   ['notes', 'activities', 'files', 'products', 'installments'].forEach((k) => {
     [...(out[k]?.add || []), ...(out[k]?.edit || [])].forEach((x) => put(x.ticket_id, k, x));
     (out[k]?.remove || []).forEach((d) => put(`d${d.kind}${d.pipedrive_id}`, k, d));
@@ -427,6 +452,7 @@ function without(out, gone) {
   const keepDelete = (d) => !gone.has(`d${d.kind}${d.pipedrive_id}`);
   ['deals', 'labels', 'followers', 'dealsNew'].forEach((k) => { if (out[k]) out[k] = out[k].filter(keep); });
   if (out.dealsRemove) out.dealsRemove = out.dealsRemove.filter(keepDelete);
+  if (gone.has('stages')) delete out.stages;
   ['notes', 'activities', 'files', 'products', 'installments'].forEach((k) => {
     if (!out[k]) return;
     ['add', 'edit'].forEach((x) => { if (out[k][x]) out[k][x] = out[k][x].filter(keep); });
@@ -552,6 +578,70 @@ export async function createProject(programId) {
  * Send what `plan` found. Alongside what was sent, conflicts, skips and errors, `troubled` names what didn't fully go
  * (a deal's ticket id, "p"/"o" and a person's/organization's id, or a deletion), so auto-send can leave it be until it changes.
  */
+/**
+ * Make Pipedrive's stages match what KIT changed: a stage made in KIT is made in its pipeline there (Pipedrive puts it
+ * last: its API takes no position), a renamed one renamed, and a deleted one deleted, unless Pipedrive has deals in it
+ * (then it stays, and the next pull brings it back to KIT). `skip` takes a line for anything left undone.
+ */
+/**
+ * Makes Pipedrive deal labels of the KIT-made tags among these names, and links each tag to its label. A label Pipedrive
+ * already has under that name is used as it is. Tags whose label was deleted in Pipedrive stay KIT's. Returns how many were made.
+ */
+async function sendNewLabels(names) {
+  const rows = db.prepare(`SELECT id, name, color FROM labels WHERE pipedrive_id IS NULL AND pipedrive_gone = 0
+    AND name IN (SELECT value FROM json_each(?))`).all(json.str(names));
+  if (!rows.length) return 0;
+  const FIELD = 'dealFields/label_ids'; // the v2 API's name for the deal's Label field
+  const options = async () => (await call(FIELD, {}, { v2: true })).data?.options || [];
+  const optionFor = (list, l) => list.find((o) => String(o.label).trim().toLowerCase() === l.name.toLowerCase());
+  let theirs = await options();
+  const fresh = rows.filter((l) => !optionFor(theirs, l));
+  if (fresh.length) {
+    // Adding options only ever adds: no label Pipedrive has is changed. With the tag's color if Pipedrive takes one here.
+    const post = (body) => call(`${FIELD}/options`, {}, { method: 'POST', v2: true, body });
+    await post(fresh.map((l) => ({ label: l.name, color: l.color }))).catch(() => post(fresh.map((l) => ({ label: l.name }))));
+    theirs = await options();
+  }
+  rows.forEach((l) => {
+    const o = optionFor(theirs, l);
+    if (o) db.prepare('UPDATE labels SET pipedrive_id = ?, color = ? WHERE id = ?').run(o.id, o.color || l.color, l.id);
+  });
+  saveOptions('deal', 'label', theirs);
+  return fresh.filter((l) => optionFor(theirs, l)).length;
+}
+
+export async function sendStages(skip = () => {}) {
+  const n = { stagesAdded: 0, stagesRenamed: 0, stagesDeleted: 0 };
+  const plan = stagePlan();
+  const theirs = plan.add.length ? await allCursor('stages', {}, { v2: true }) : [];
+  for (const a of plan.add) {
+    const s = db.prepare('SELECT s.*, p.pipedrive_id AS pd_pipeline FROM pipeline_stages s JOIN pipelines p ON p.id = s.pipeline_id WHERE s.id = ?').get(a.id);
+    if (!s || s.pipedrive_id || !s.sync) continue;
+    // One Pipedrive already has under that name in the pipeline (and KIT has no stage for) is this stage.
+    const match = theirs.find((x) => x.pipeline_id === s.pd_pipeline && !x.is_deleted && String(x.name).trim().toLowerCase() === s.name.toLowerCase()
+      && !db.prepare('SELECT 1 FROM pipeline_stages WHERE pipedrive_id = ?').get(x.id));
+    const made = match || (await call('stages', {}, { method: 'POST', v2: true, body: { name: s.name, pipeline_id: s.pd_pipeline } })).data;
+    db.prepare('UPDATE pipeline_stages SET pipedrive_id = ?, pipedrive_name = ?, pipedrive_order = ? WHERE id = ?').run(made.id, made.name ?? s.name, made.order_nr ?? null, s.id);
+    if (!match) n.stagesAdded += 1;
+  }
+  for (const e of plan.edit) {
+    const s = db.prepare('SELECT * FROM pipeline_stages WHERE id = ?').get(e.id);
+    if (!s?.pipedrive_id || s.name === s.pipedrive_name) continue;
+    await call(`stages/${s.pipedrive_id}`, {}, { method: 'PATCH', v2: true, body: { name: s.name } });
+    db.prepare('UPDATE pipeline_stages SET pipedrive_name = ? WHERE id = ?').run(s.name, s.id);
+    n.stagesRenamed += 1;
+  }
+  for (const d of plan.remove) {
+    const inIt = (await call('deals', { stage_id: d.pipedrive_id, limit: 1 }, { v2: true })).data || [];
+    if (inIt.length) skip(`Stage ${d.text}: Pipedrive has deals in it, so it wasn't deleted there. It comes back to KIT with the next pull.`);
+    else {
+      try { await call(`stages/${d.pipedrive_id}`, {}, { method: 'DELETE', v2: true }); n.stagesDeleted += 1; } catch (err) { if (!notFound(err)) throw err; }
+    }
+    db.prepare('DELETE FROM stage_deletes WHERE pipedrive_id = ?').run(d.pipedrive_id);
+  }
+  return n;
+}
+
 async function send({ out, tickets }, phase) {
   const sent = {};
   const count = (k, n = 1) => { sent[k] = (sent[k] || 0) + n; };
@@ -596,6 +686,12 @@ async function send({ out, tickets }, phase) {
         db.prepare('UPDATE organizations SET pipedrive_snapshot = ?, pipedrive_pending = 0 WHERE id = ?').run(snapshotOf(next, ORG_TRACKED), row.id);
       }, `o${o.id}`);
     }
+  }
+
+  // Stages before deals, so a deal moved to a new stage finds it.
+  if (out.stages) {
+    phase('Sending stages');
+    await attempt('Stages', async () => { Object.entries(await sendStages((text) => skip('stages', text))).forEach(([k, v]) => { if (v) count(k, v); }); }, 'stages');
   }
 
   const accountField = fieldByName('deal', ACCOUNT_FIELD);
@@ -649,7 +745,7 @@ async function send({ out, tickets }, phase) {
         db.prepare('UPDATE tickets SET pipedrive_snapshot = ?, pipeline_status = ? WHERE id = ?').run(snapshotOf(view, tracked), status, t.id);
         const fresh = db.prepare('SELECT * FROM tickets WHERE id = ?').get(t.id);
         ticketById.set(t.id, fresh);
-        const fields = kitChanges(withCustom(fresh), tracked);
+        const fields = sendable(fresh, kitChanges(withCustom(fresh), tracked));
         if (fields.length) out.deals = [...(out.deals || []), { ticket_id: t.id, title: t.opportunity_title, fields }];
         if (fresh.labels_pending && out.labels) out.labels.push({ ticket_id: t.id, title: t.opportunity_title, labels: json.parse(fresh.labels, []) });
       }, t.id);
@@ -733,13 +829,18 @@ async function send({ out, tickets }, phase) {
     }
   }
 
-  // Tags: only Pipedrive's own labels go; tags made in KIT stay in KIT (adding one would change every deal's label list).
+  // Tags: a tag made in KIT becomes a Pipedrive label the first time it's on a deal being sent.
   for (const l of out.labels || []) {
     phase('Sending tags');
     const t = ticketById.get(l.ticket_id);
     await attempt(`Tags on ${t.opportunity_title}`, async () => {
+      // If Pipedrive won't take a new label, the labels it has still go, and the ticket stays waiting so the error keeps showing.
+      let failed = null;
+      const made = await sendNewLabels(json.parse(t.labels, [])).catch((e) => { failed = e; return 0; });
+      if (made) count('labelsAdded', made);
       const ids = db.prepare('SELECT pipedrive_id FROM labels WHERE pipedrive_id IS NOT NULL AND name IN (SELECT value FROM json_each(?))').all(t.labels || '[]').map((x) => x.pipedrive_id);
       await call(`deals/${t.pipedrive_id}`, {}, { method: 'PATCH', body: { label_ids: ids }, v2: true });
+      if (failed) throw new Error(`new label not made in Pipedrive (${failed.message})`);
       db.prepare('UPDATE tickets SET labels_pending = 0 WHERE id = ?').run(t.id);
       count('labels');
     }, t.id);

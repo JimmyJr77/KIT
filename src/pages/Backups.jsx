@@ -61,7 +61,7 @@ function BackupsPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-8">
       <PageHeader title="Backup archive" subtitle="Every backup of KIT kept on the server. Restore KIT from one, download it to keep somewhere else, or delete it.">
-        <Link to="/admin" className="btn"><ArrowLeft size={15} /> Admin Access</Link>
+        <Link to="/settings?tab=admin" className="btn"><ArrowLeft size={15} /> Admin settings</Link>
         <button type="button" className="btn-primary" onClick={backup} disabled={!s || working}>
           {busy === 'backup' || s?.running === 'backup' ? <Loader2 size={15} className="animate-spin" /> : <DatabaseBackup size={15} />} Back up now
         </button>

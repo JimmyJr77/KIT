@@ -1,11 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, ShieldCheck, UserRound, UsersRound, FileChartColumn, Lightbulb, BookOpenText, MessagesSquare, BadgeDollarSign, LogOut, PanelLeftClose, PanelLeftOpen, MoreHorizontal, Crosshair, Car } from 'lucide-react';
+import { LayoutDashboard, FolderArchive, CalendarDays, Plane, ListChecks, Ticket, SquareKanban, ContactRound, Blocks, Megaphone, BriefcaseBusiness, Bell, Settings, FileChartColumn, Lightbulb, BookOpenText, MessagesSquare, BadgeDollarSign, LogOut, PanelLeftClose, PanelLeftOpen, MoreHorizontal, Crosshair, Car } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { hiddenNav } from '../lib/sidebar.js';
 import { fullName, initials } from '../lib/format.js';
-import { ledTeams } from '../pages/MyTeam.jsx';
 import { markOnDark } from '../lib/brand.js';
 import FeedbackWidget, { setKittHidden, useKittHidden } from './FeedbackWidget.jsx';
 
@@ -30,19 +29,14 @@ const NAV = [
 ];
 
 /**
- * Every sidebar page this user can open, in sidebar order: the main list, then Settings and the access pages at the
- * bottom (`bottom: true`). Settings can't be hidden; the rest can, from Settings (see lib/sidebar.js).
+ * Every sidebar page this user can open, in sidebar order: the main list, then Settings at the bottom
+ * (`bottom: true`), which also holds the Admin, Team Lead and Site Dev tabs. Settings can't be hidden; the rest can,
+ * from Settings (see lib/sidebar.js).
  */
-export function navFor(user) {
-  const isAdmin = user.role === 'admin';
-  const led = ledTeams(user).length;
+export function navFor() {
   return [
     ...NAV,
     { to: '/settings', label: 'Settings', icon: Settings, bottom: true, fixed: true },
-    ...(!isAdmin && !led ? [{ to: '/member', label: 'Member Access', icon: UserRound, bottom: true }] : []),
-    ...(led > 0 ? [{ to: '/my-team', label: led === 1 ? 'My team' : 'My teams', icon: UsersRound, bottom: true }] : []),
-    // Admin Access holds the Admin, Team Lead and Developer views; it shows for anyone with one of those roles.
-    ...(isAdmin || led > 0 || user.developer ? [{ to: '/admin', label: 'Admin Access', icon: ShieldCheck, bottom: true }] : []),
   ];
 }
 
@@ -64,7 +58,7 @@ function useUnreadAlerts() {
   return count;
 }
 
-/** Access requests waiting on an admin; refreshed like alerts, and when Admin Access handles one. */
+/** Access requests waiting on an admin; refreshed like alerts, and when Settings › Admin handles one. Shown on Settings. */
 function usePendingRequests(isAdmin) {
   const { pathname } = useLocation();
   const [count, setCount] = useState(0);
@@ -190,7 +184,7 @@ export default function Layout() {
   const items = navFor(user);
   const hidden = new Set(hiddenNav(user));
   const shown = items.filter((n) => n.fixed || !hidden.has(n.to));
-  const counts = { '/alerts': unread, '/admin': pendingRequests };
+  const counts = { '/alerts': unread, '/settings': pendingRequests };
   const kittHidden = useKittHidden();
 
   return (

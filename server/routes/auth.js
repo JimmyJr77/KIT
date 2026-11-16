@@ -47,7 +47,7 @@ r.post('/register', (req, res) => {
   }
 });
 
-// Anyone can ask for access from the sign-in page; admins see it under Admin Access.
+// Anyone can ask for access from the sign-in page; admins see it under Settings › Admin.
 // A light per-address limit keeps the open form from being flooded.
 const recentRequests = new Map();
 r.post('/request-access', (req, res) => {

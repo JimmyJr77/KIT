@@ -92,7 +92,7 @@ export function parseTerm(text) {
 }
 
 /** The deal's term field, parsed, from its custom fields JSON. */
-const termFromFields = (customFields) => {
+export const termFromFields = (customFields) => {
   const f = json.parse(customFields, []).find((x) => TERM_FIELD.test(x.name || '') && !POP_END_FIELD.test(x.name || '') && x.value);
   return { months: f ? parseTerm(f.value) : null, text: f?.value || null };
 };

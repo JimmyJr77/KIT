@@ -24,7 +24,7 @@ import {
 } from './pipedriveFields.js';
 import { readProjects, writeProjects } from './pipedriveProjects.js';
 import { holdConflicts } from './pipedriveConflicts.js';
-import { listPipelines, KIT_STAGES } from '../pipelines.js';
+import { listPipelines, KIT_STAGES, refreshReportStages } from '../pipelines.js';
 
 const API = process.env.PIPEDRIVE_API_URL || 'https://api.pipedrive.com/v1';
 // Pipedrive calls it the API token; either name works. Stray spaces or quotes from pasting are ignored.
@@ -247,7 +247,7 @@ export function productView(p) {
 }
 export const installmentView = (i) => ({ description: i.description || null, amount: i.amount ?? 0, billing_date: i.billing_date || null });
 
-// ---- Which way the sync runs. An admin chooses in Admin Access. Whenever Pipedrive → KIT is part of it, live updates
+// ---- Which way the sync runs. An admin chooses in Settings › Admin. Whenever Pipedrive → KIT is part of it, live updates
 // (Pipedrive's webhooks, see pipedriveLive.js) are on; they're registered and removed to match.
 //   to_kit        one way, Pipedrive → KIT: pulls and live updates run, nothing is sent
 //   to_pipedrive  one way, KIT → Pipedrive: changes go out on their own, nothing is pulled (not even live updates)
@@ -303,7 +303,7 @@ export function runJob(label, work, done) {
  * `by` is who asked ({ id, name }), or null for the nightly pull.
  */
 export function startPull(scope, by = null) {
-  if (!pullsAllowed()) throw new Error(`${pullsBlockedReason()} Change the sync in Admin Access to pull.`);
+  if (!pullsAllowed()) throw new Error(`${pullsBlockedReason()} Change the sync in Settings › Admin to pull.`);
   const live = scope.kind === 'deals';
   const key = scope.kind === 'all' ? 'pipedrive_last_sync' : live ? 'pipedrive_last_live' : scope.kind === 'projects' ? 'pipedrive_last_projects' : `pipedrive_last_pull_${by.id}`;
   const label = scope.kind === 'all' ? 'full pull' : live ? `live update (${plural(scope.dealIds.length, 'deal')})` : scope.kind === 'projects' ? 'projects refresh'
@@ -595,15 +595,51 @@ function write({ users, pipelines, stages, deals, persons, organizations, partic
     pipelineIds.set(p.id, row?.id ?? db.prepare('INSERT INTO pipelines (name, position, pipedrive_id) VALUES (?, ?, ?)').run(p.name, position, p.id).lastInsertRowid);
     if (!row) tally('pipelines');
   });
+  // Stages follow Pipedrive's: matched by id, else a stage made in KIT under the same name in that pipeline; added when
+  // Pipedrive has a new one and deleted when it's gone there. What KIT changed and hasn't sent yet stays: a stage it
+  // made, renamed (unless Pipedrive renamed it too) or deleted. The order is KIT's (Pipedrive's API can't be told where
+  // a stage goes) until someone reorders the stages in Pipedrive: then it's Pipedrive's again.
   const stageNames = new Map(stages.map((s) => [s.id, s.name]));
-  stages.forEach((s) => {
-    const pipelineId = pipelineIds.get(s.pipeline_id);
-    if (!pipelineId) return;
-    const row = db.prepare('SELECT id FROM pipeline_stages WHERE pipedrive_id = ?').get(s.id);
-    if (row) db.prepare('UPDATE pipeline_stages SET name = ?, position = ?, pipeline_id = ? WHERE id = ?').run(s.name, s.order_nr, pipelineId, row.id);
-    else db.prepare('INSERT INTO pipeline_stages (pipeline_id, name, position, pipedrive_id) VALUES (?, ?, ?, ?)').run(pipelineId, s.name, s.order_nr, s.id);
-  });
+  const stageDeleted = new Set(db.prepare('SELECT pipedrive_id FROM stage_deletes').all().map((x) => x.pipedrive_id));
   db.prepare('DELETE FROM pipeline_stages WHERE pipedrive_id IS NOT NULL AND pipedrive_id NOT IN (SELECT value FROM json_each(?))').run(json.str(stages.map((s) => s.id)));
+  db.prepare('DELETE FROM stage_deletes WHERE pipedrive_id NOT IN (SELECT value FROM json_each(?))').run(json.str(stages.map((s) => s.id)));
+  const byOrder = (a, b) => (a.order_nr ?? 0) - (b.order_nr ?? 0) || a.id - b.id;
+  [...pipelineIds].forEach(([pdPipeline, pipelineId]) => {
+    const theirs = stages.filter((s) => s.pipeline_id === pdPipeline && !stageDeleted.has(s.id)).sort(byOrder);
+    const before = db.prepare('SELECT * FROM pipeline_stages WHERE pipeline_id = ? ORDER BY position, id').all(pipelineId);
+    // Reordered in Pipedrive: the stages both sides knew at the last pull now sit in a different order there.
+    const known = new Set(before.filter((r) => r.pipedrive_id && r.pipedrive_order != null).map((r) => r.pipedrive_id));
+    const was = before.filter((r) => known.has(r.pipedrive_id)).sort((a, b) => a.pipedrive_order - b.pipedrive_order || a.id - b.id).map((r) => r.pipedrive_id);
+    const reordered = was.join() !== theirs.filter((s) => known.has(s.id)).map((s) => s.id).join();
+    const order = before.map((r) => r.id); // KIT's order, as stage row ids
+    let last = null; // the row of the stage just before, in Pipedrive's order
+    theirs.forEach((s) => {
+      let row = before.find((r) => r.pipedrive_id === s.id) || db.prepare('SELECT * FROM pipeline_stages WHERE pipedrive_id = ?').get(s.id) // moved from another pipeline
+        || before.find((r) => !r.pipedrive_id && r.name.toLowerCase() === String(s.name).toLowerCase());
+      if (row) {
+        const renamedHere = row.pipedrive_id && row.pipedrive_name != null && row.name !== row.pipedrive_name && s.name === row.pipedrive_name;
+        const name = renamedHere ? row.name : s.name;
+        db.prepare('UPDATE pipeline_stages SET name = ?, pipeline_id = ?, pipedrive_id = ?, pipedrive_name = ?, pipedrive_order = ?, sync = 1 WHERE id = ?').run(name, pipelineId, s.id, s.name, s.order_nr ?? null, row.id);
+        stageNames.set(s.id, name);
+      } else {
+        row = { id: db.prepare('INSERT INTO pipeline_stages (pipeline_id, name, position, pipedrive_id, pipedrive_name, pipedrive_order) VALUES (?, ?, 0, ?, ?, ?)')
+          .run(pipelineId, s.name, s.id, s.name, s.order_nr ?? null).lastInsertRowid };
+      }
+      // A stage new to this pipeline goes right after the one before it in Pipedrive.
+      if (!order.includes(row.id)) order.splice(last == null ? 0 : order.indexOf(last) + 1, 0, row.id);
+      last = row.id;
+    });
+    const mine = new Set(theirs.map((s) => db.prepare('SELECT id FROM pipeline_stages WHERE pipedrive_id = ?').get(s.id).id));
+    const here = db.prepare('SELECT id FROM pipeline_stages WHERE pipeline_id = ?').all(pipelineId).map((r) => r.id);
+    // Pipedrive's order when it was changed there; a stage KIT made and hasn't sent keeps its place after the stage it followed.
+    const final = (reordered ? (() => {
+      const out = [...mine];
+      order.filter((id) => !mine.has(id)).forEach((id) => { const prev = order[order.indexOf(id) - 1]; out.splice(prev == null ? 0 : out.indexOf(prev) + 1, 0, id); });
+      return out;
+    })() : order).filter((id) => here.includes(id));
+    final.forEach((id, i) => db.prepare('UPDATE pipeline_stages SET position = ? WHERE id = ?').run(i, id));
+  });
+  refreshReportStages();
 
   // ---- Deal fields: territories follow the Account field's options (matched by option, else by name or the name KIT used
   // to give it, renamed and ordered as in Pipedrive, added when Pipedrive has a new one; KIT-only territories are left alone).
@@ -623,13 +659,13 @@ function write({ users, pipelines, stages, deals, persons, organizations, partic
     territories.set(String(o.id), id);
   });
   // Pipedrive's labels, with their colors. A KIT tag with the same name becomes that label. A label gone from Pipedrive
-  // becomes a KIT-only tag (nothing is deleted).
+  // becomes a KIT-only tag (nothing is deleted), marked so sending never makes it a label again.
   (labelField?.options || []).forEach((o, i) => {
     const row = db.prepare('SELECT id FROM labels WHERE pipedrive_id = ?').get(o.id) || db.prepare('SELECT id FROM labels WHERE name = ? COLLATE NOCASE').get(o.label);
-    if (row) db.prepare('UPDATE labels SET name = ?, color = ?, position = ?, pipedrive_id = ? WHERE id = ?').run(o.label, o.color || 'gray', i, o.id, row.id);
+    if (row) db.prepare('UPDATE labels SET name = ?, color = ?, position = ?, pipedrive_id = ?, pipedrive_gone = 0 WHERE id = ?').run(o.label, o.color || 'gray', i, o.id, row.id);
     else db.prepare('INSERT INTO labels (name, color, position, pipedrive_id) VALUES (?, ?, ?, ?)').run(o.label, o.color || 'gray', i, o.id);
   });
-  if (labelField) db.prepare('UPDATE labels SET pipedrive_id = NULL WHERE pipedrive_id IS NOT NULL AND pipedrive_id NOT IN (SELECT value FROM json_each(?))').run(json.str((labelField.options || []).map((o) => o.id)));
+  if (labelField) db.prepare('UPDATE labels SET pipedrive_id = NULL, pipedrive_gone = 1 WHERE pipedrive_id IS NOT NULL AND pipedrive_id NOT IN (SELECT value FROM json_each(?))').run(json.str((labelField.options || []).map((o) => o.id)));
   const kitOnly = new Set(db.prepare('SELECT name FROM labels WHERE pipedrive_id IS NULL').all().map((l) => l.name.toLowerCase()));
 
   // ---- Organizations
