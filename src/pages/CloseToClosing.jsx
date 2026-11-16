@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, Search, ArrowUp, ArrowDown } from 'lucide-react';
+import { X, Search, ArrowUp, ArrowDown, Printer } from 'lucide-react';
 import { api } from '../lib/api.js';
-import { fullName, shortDate, stamp } from '../lib/format.js';
-import { usd } from '../lib/travelCalc.js';
+import { fullName, shortDate, stamp, todayIso } from '../lib/format.js';
+import { usd, quarterFor } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import { MentionText } from '../components/MentionTextarea.jsx';
 import { TagFilter, byTags, LabelList } from '../components/Labels.jsx';
@@ -38,8 +38,15 @@ const SORTS = {
   name: { label: 'Name', dir: 'asc', of: (r) => r.title.trim().toLowerCase() || null },
   added: { label: 'Date added', dir: 'desc', of: (r) => r.added_at || null },
   close: { label: 'Est. close date', dir: 'asc', of: (r) => r.close_date || null },
+  value: { label: 'Value', dir: 'desc', of: (r) => (r.value == null ? null : Number(r.value)) },
   status: { label: 'Status', dir: 'asc', of: (r) => (r.closed ? 5 : STATUS_RANK[r.status] ?? 4) },
 };
+/** This calendar quarter and the three after it: ["2026 Q4", "2027 Q1", …]. */
+function comingQuarters(today = todayIso()) {
+  const [y, m] = today.split('-').map(Number);
+  const first = y * 4 + Math.floor((m - 1) / 3);
+  return [0, 1, 2, 3].map((i) => `${Math.floor((first + i) / 4)} Q${((first + i) % 4) + 1}`);
+}
 const compareBy = ({ key, dir }) => (a, b) => {
   const x = SORTS[key].of(a);
   const y = SORTS[key].of(b);
@@ -75,18 +82,43 @@ export default function CloseToClosing() {
   // A column heading sorts by it; clicking the one already sorted on reverses it.
   const sortOn = (key) => setSort(sort.key === key ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: SORTS[key].dir });
 
+  const [quarter, setQuarter] = useState(''); // '' for every ticket, or a quarter its est. close date must fall in
+  const quarters = useMemo(() => comingQuarters(), []);
+
   const sorted = useMemo(() => {
     const words = q.trim().toLowerCase();
-    return (rows || []).filter((r) => !words || `${r.title} ${r.organization || ''}`.toLowerCase().includes(words)).filter(byTags(tags)).sort(compareBy(sort));
-  }, [rows, q, tags, sort]);
+    return (rows || []).filter((r) => !words || `${r.title} ${r.organization || ''}`.toLowerCase().includes(words)).filter(byTags(tags))
+      .filter((r) => !quarter || quarterFor(r.close_date) === quarter).sort(compareBy(sort));
+  }, [rows, q, tags, sort, quarter]);
   const listed = useMemo(() => new Set((rows || []).map((r) => r.ticket_id)), [rows]);
   const open = sorted.filter((r) => !r.closed);
   const openRow = openId && rows?.find((r) => r.ticket_id === openId);
 
+  // Printed, the table goes on landscape sheets, in the order and with the filters the page has now.
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = '@media print { @page { size: letter landscape; margin: 0.4in; } }';
+    document.head.appendChild(style);
+    return () => style.remove();
+  }, []);
+  const narrowed = [q.trim() && `matching “${q.trim()}”`, tags.length && `tagged ${tags.join(', ')}`, quarter && `closing ${quarter}`].filter(Boolean);
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
+    <div className="flex h-full flex-col print:block print:h-auto">
+      {/* The printed sheet's heading: what's listed, how it's narrowed and ordered, and when it was printed. */}
+      <div className="hidden print:mb-3 print:block">
+        <div className="flex items-baseline justify-between gap-4">
+          <h1 className="text-lg font-bold text-slate-900">Close to closing</h1>
+          <span className="text-[10px] text-slate-500">{new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}</span>
+        </div>
+        <p className="text-[10px] text-slate-600">
+          {sorted.length} {sorted.length === 1 ? 'opportunity' : 'opportunities'} · {open.length} open · {money(open.reduce((s, r) => s + (r.value || 0), 0))}
+          {narrowed.length > 0 && ` · ${narrowed.join(', ')}`} · sorted by {SORTS[sort.key].label.toLowerCase()}, {sort.dir === 'asc' ? 'ascending' : 'descending'}
+        </p>
+      </div>
+      <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4 print:hidden">
         <PageHeader title="Close to closing" subtitle="Every ticket in Under Evaluation, plus any you add. A ticket stays here when its deal closes.">
+          <button type="button" className="btn h-9 py-0" onClick={() => window.print()} disabled={!rows} title="Print the list as it's ordered and narrowed now, or save it as a PDF"><Printer size={15} /> Print</button>
           <PipelineViewToggle />
         </PageHeader>
         <div className="flex flex-wrap items-center gap-4">
@@ -111,25 +143,29 @@ export default function CloseToClosing() {
               {sort.dir === 'asc' ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
             </button>
           </div>
+          <select className="input h-[38px] w-48 py-0" aria-label="Show tickets expected to close in" title="Narrow the list by est. close date" value={quarter} onChange={(e) => setQuarter(e.target.value)}>
+            <option value="">All close dates</option>
+            {quarters.map((k, i) => <option key={k} value={k}>{k}{i === 0 ? ' (current)' : ''}</option>)}
+          </select>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-          <table className="w-full min-w-[68rem] table-fixed text-left text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+      <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6 print:overflow-visible print:bg-white print:p-0">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white print:overflow-visible print:rounded-none print:border-0">
+          <table className="w-full min-w-[68rem] table-fixed text-left text-sm print:min-w-0 print:text-[10px]">
+            <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold tracking-wide text-slate-500 uppercase print:border-slate-400 print:text-[8px]">
               <tr>
-                <th className="w-[22%] px-4 py-2.5"><SortHead k="name" sort={sort} onSort={sortOn}>Opportunity</SortHead></th>
-                <th className="w-28 px-3 py-2.5 text-right">Value</th>
-                <th className="w-24 px-3 py-2.5">Duration</th>
-                <th className="w-36 px-3 py-2.5">Category</th>
-                <th className="w-36 px-3 py-2.5 whitespace-nowrap"><SortHead k="close" sort={sort} onSort={sortOn}>Est. Close Date</SortHead></th>
-                <th className="w-52 px-3 py-2.5"><SortHead k="status" sort={sort} onSort={sortOn}>Status</SortHead></th>
-                <th className="px-3 py-2.5">Notes</th>
-                <th className="w-9" />
+                <th className="w-[22%] px-4 py-2.5 print:w-[23%] print:px-1.5 print:py-1"><SortHead k="name" sort={sort} onSort={sortOn}>Opportunity</SortHead></th>
+                <th className="w-28 px-3 py-2.5 text-right print:w-[9%] print:px-1.5 print:py-1"><SortHead k="value" sort={sort} onSort={sortOn}>Value</SortHead></th>
+                <th className="w-24 px-3 py-2.5 print:w-[7%] print:px-1.5 print:py-1">Duration</th>
+                <th className="w-36 px-3 py-2.5 print:w-[11%] print:px-1.5 print:py-1">Category</th>
+                <th className="w-36 px-3 py-2.5 whitespace-nowrap print:w-[10%] print:px-1.5 print:py-1"><SortHead k="close" sort={sort} onSort={sortOn}>Est. Close Date</SortHead></th>
+                <th className="w-52 px-3 py-2.5 print:w-[13%] print:px-1.5 print:py-1"><SortHead k="status" sort={sort} onSort={sortOn}>Status</SortHead></th>
+                <th className="px-3 py-2.5 print:px-1.5 print:py-1">Notes</th>
+                <th className="w-9 print:hidden" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 print:divide-slate-300">
               {rows === null && <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
               {rows?.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">Nothing is in Under Evaluation yet. Add a ticket with the search above.</td></tr>}
               {rows?.length > 0 && !sorted.length && <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No tickets on the list match.</td></tr>}
@@ -142,9 +178,11 @@ export default function CloseToClosing() {
       </div>
 
       {/* In the pane, any comment or note can be picked as the one its row shows; the one showing is outlined. */}
+      <div className="print:hidden">
       {openId && <TicketTimeline key={openId} ticketId={openId} onClose={() => { setOpenId(null); load(); }} onChanged={load}
         notePick={openRow && { shownId: shownNote(openRow)?.id ?? null, pickedId: openRow.note_id,
           onPick: (id) => run(() => api.put(`/c2c/${openId}`, { note_id: id })) }} />}
+      </div>
     </div>
   );
 }
@@ -166,32 +204,32 @@ function Row({ row: r, selected, onOpen, run }) {
   const stop = (e) => e.stopPropagation();
   return (
     <tr onClick={onOpen} className={`cursor-pointer align-top transition ${selected ? 'bg-brand-50/60' : 'hover:bg-slate-50'}`}>
-      <td className="px-4 py-3">
+      <td className="px-4 py-3 print:px-1.5 print:py-1.5">
         <button type="button" className="text-left font-semibold text-slate-900 hover:text-brand-700">{r.title}</button>
-        <div className="mt-0.5 text-xs text-slate-500">{[r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · ')}</div>
-        <LabelList labels={r.labels} className="mt-1.5" />
+        <div className="mt-0.5 text-xs text-slate-500 print:text-[8px]">{[r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · ')}</div>
+        <LabelList labels={r.labels} className="mt-1.5 print:mt-1 print:origin-top-left print:scale-[0.8]" />
       </td>
-      <td className="px-3 py-3 text-right font-medium whitespace-nowrap text-emerald-700 tabular-nums">{money(r.value)}</td>
-      <td className="px-3 py-3 text-slate-700" onClick={r.can_edit ? stop : undefined}><Duration row={r} run={run} /></td>
-      <td className="px-3 py-3 text-slate-700">
-        {outcome ? <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${outcome.tone}`} title={r.outcome === 'awarded' ? undefined : `Was in ${r.stage}`}>{outcome.label}</span> : r.stage || '—'}
+      <td className="px-3 py-3 print:px-1.5 print:py-1.5 text-right font-medium whitespace-nowrap text-emerald-700 tabular-nums">{money(r.value)}</td>
+      <td className="px-3 py-3 print:px-1.5 print:py-1.5 text-slate-700" onClick={r.can_edit ? stop : undefined}><Duration row={r} run={run} /></td>
+      <td className="px-3 py-3 print:px-1.5 print:py-1.5 text-slate-700">
+        {outcome ? <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-semibold ring-1 print:px-1.5 print:py-0.5 print:text-[8px] ${outcome.tone}`} title={r.outcome === 'awarded' ? undefined : `Was in ${r.stage}`}>{outcome.label}</span> : r.stage || '—'}
       </td>
-      <td className="px-3 py-3 whitespace-nowrap text-slate-700">{closeDate(r.close_date)}</td>
-      <td className="px-3 py-3" onClick={stop}>
-        {r.closed || !r.can_edit ? (
-          <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap ring-1 ${status?.tone || UNSET}`}
-            title={r.closed ? 'The deal is closed' : 'Only the ticket’s owner or an admin sets the status'}>{status?.label || 'Not set'}</span>
-        ) : (
+      <td className="px-3 py-3 print:px-1.5 print:py-1.5 whitespace-nowrap text-slate-700">{closeDate(r.close_date)}</td>
+      <td className="px-3 py-3 print:px-1.5 print:py-1.5" onClick={stop}>
+        {/* On paper, and for anyone who can't set it, the status is a plain pill. */}
+        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 print:inline-block print:px-1.5 print:py-0.5 print:text-[8px] ${r.closed || !r.can_edit ? 'inline-block whitespace-nowrap' : 'hidden'} ${status?.tone || UNSET}`}
+          title={r.closed ? 'The deal is closed' : 'Only the ticket’s owner or an admin sets the status'}>{status?.label || 'Not set'}</span>
+        {!r.closed && r.can_edit && (
           <select aria-label={`Status of ${r.title}`} value={r.status || ''}
             onChange={(e) => run(() => api.put(`/c2c/${r.ticket_id}`, { status: e.target.value || null }))}
-            className={`max-w-full cursor-pointer rounded-full border-0 py-1 pr-7 pl-2.5 text-xs font-semibold ring-1 ${status?.tone || UNSET}`}>
+            className={`max-w-full cursor-pointer rounded-full border-0 py-1 pr-7 pl-2.5 text-xs font-semibold ring-1 print:hidden ${status?.tone || UNSET}`}>
             <option value="">Not set</option>
             {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
           </select>
         )}
       </td>
-      <td className="px-3 py-3"><Notes row={r} /></td>
-      <td className="py-3 pr-2" onClick={stop}>
+      <td className="px-3 py-3 print:px-1.5 print:py-1.5"><Notes row={r} /></td>
+      <td className="py-3 pr-2 print:hidden" onClick={stop}>
         {!r.evaluating && (
           <button type="button" aria-label={`Take ${r.title} off the list`} title="Take off this list"
             onClick={() => confirm(`Take “${r.title}” off Close to closing? The ticket itself isn’t changed.`) && run(() => api.del(`/c2c/${r.ticket_id}`))}
@@ -205,11 +243,11 @@ function Row({ row: r, selected, onOpen, run }) {
 /** The note a row shows: the latest, unless another is picked in the ticket's pane. Notes are written on the ticket. */
 function Notes({ row: r }) {
   const shown = shownNote(r);
-  if (!shown) return <div className="text-sm text-slate-400">No notes yet</div>;
+  if (!shown) return <div className="text-sm text-slate-400 print:text-[9px]">No notes yet</div>;
   return (
     <div className="space-y-1">
-      <div className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700" title={shown.body}><MentionText text={shown.body} /></div>
-      <div className="text-[11px] text-slate-400">{[shown.author && fullName(shown.author), stamp(shown.created_at), shown.updated_at && 'edited'].filter(Boolean).join(' · ')}</div>
+      <div className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700 print:line-clamp-6 print:text-[9px]" title={shown.body}><MentionText text={shown.body} /></div>
+      <div className="text-[11px] text-slate-400 print:text-[7px] print:text-slate-500">{[shown.author && fullName(shown.author), stamp(shown.created_at), shown.updated_at && 'edited'].filter(Boolean).join(' · ')}</div>
     </div>
   );
 }
