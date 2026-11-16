@@ -30,9 +30,10 @@ const eventKey = (e) => `${e.type}-${e.activity?.id ?? e.comment?.id ?? e.file?.
  * Right-hand pane with everything that has happened on a master ticket, newest first.
  * `focus` ("c-12" for a comment) scrolls to and highlights one item; `activityId` opens that activity in the Activity pane;
  * `initialTool` opens the pane on one of its tools (strategy, process…). A pipeline ticket's Process view opens over the pane
- * and closing it returns here.
+ * and closing it returns here. `notePick` ({ shownId, pickedId, onPick }), from the Close to closing list, lets a comment or
+ * note be picked as the one the ticket's row shows there, and outlines the one showing.
  */
-export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, onClose, onChanged }) {
+export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, onClose, onChanged, notePick = null }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [tool, setTool] = useState(activityId !== undefined ? 'activities' : initialTool); // a pane off the left edge
@@ -124,7 +125,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
             {t.ticket_type === 'bid' && (canEdit || t.deal_status !== 'open') && <OutcomeBar ticket={t} onChanged={refresh} />}
           </fieldset>
           <Composer ticketId={t.id} onPosted={refresh} canUpload={canEdit} />
-          <Feed data={data} onChanged={refresh} onOpenActivity={showActivity} />
+          <Feed data={data} onChanged={refresh} onOpenActivity={showActivity} notePick={notePick} />
         </div>
       )}
     </SidePanel>
@@ -145,7 +146,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
 }
 
 /** The filter chips and the events under them, newest first. */
-function Feed({ data, onChanged, onOpenActivity }) {
+function Feed({ data, onChanged, onOpenActivity, notePick }) {
   const [filter, setFilter] = useState('all');
   const test = FILTERS.find(([k]) => k === filter)[2];
   return (
@@ -162,7 +163,7 @@ function Feed({ data, onChanged, onOpenActivity }) {
         })}
       </div>
       <ol className="relative space-y-4 before:absolute before:top-2 before:bottom-2 before:left-[15px] before:w-px before:bg-slate-200">
-        {data.events.filter(test).map((e) => <Event key={eventKey(e)} event={e} ticket={data.ticket} onChanged={onChanged} onOpenActivity={onOpenActivity} />)}
+        {data.events.filter(test).map((e) => <Event key={eventKey(e)} event={e} ticket={data.ticket} onChanged={onChanged} onOpenActivity={onOpenActivity} notePick={notePick} />)}
       </ol>
     </>
   );
@@ -275,7 +276,7 @@ function EditBox({ initial, onSave, onCancel }) {
   );
 }
 
-function Event({ event: e, ticket, onChanged, onOpenActivity }) {
+function Event({ event: e, ticket, onChanged, onOpenActivity, notePick }) {
   const { user } = useAuth();
   const [replying, setReplying] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -296,6 +297,9 @@ function Event({ event: e, ticket, onChanged, onOpenActivity }) {
   // A Pipedrive note from anyone but the ticket owner reads as a plain comment here; it keeps its pin only while pinned, so it can be unpinned.
   const isNote = e.type === 'comment' && e.comment.kind === 'note' && isOwner;
   const canPin = e.type === 'comment' && e.comment.kind === 'note' && (isOwner || e.comment.pinned) && canEditTicket(user, ticket);
+  // On the Close to closing list: this comment or note can be the one the ticket's row shows.
+  const pickable = !!notePick && e.type === 'comment' && !e.comment.parent_id && ['comment', 'note'].includes(e.comment.kind);
+  const shownInList = pickable && notePick.shownId === e.comment.id;
   const pin = async () => { await api.put(`/tickets/comments/${e.comment.id}/pin`, { pinned: !e.comment.pinned }); onChanged(); };
 
   return (
@@ -339,11 +343,18 @@ function Event({ event: e, ticket, onChanged, onOpenActivity }) {
                     <Pin size={11} /> {e.comment.pinned ? 'Pinned' : 'Pin'}
                   </button>
                 )}
+                {pickable && (
+                  <button type="button" onClick={() => notePick.onPick(notePick.pickedId === e.comment.id ? null : e.comment.id)} aria-pressed={shownInList}
+                    title={notePick.pickedId === e.comment.id ? 'Picked for Close to closing. Click to go back to showing the latest note.' : shownInList ? 'Showing in Close to closing as the latest note. Click to keep it there.' : 'Show this note in Close to closing'}
+                    className={`ml-1 inline-flex items-center rounded px-1 text-[11px] ${shownInList ? 'bg-brand-100 font-medium text-brand-800' : 'text-slate-400 hover:text-slate-700'}`}>
+                    {shownInList ? 'Shown in C2C' : 'Show in C2C'}
+                  </button>
+                )}
               </Meta>
               {editing
                 ? <EditBox initial={post.body} onSave={save} onCancel={() => setEditing(false)} />
                 : (
-                  <p className={`mt-1.5 rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap text-slate-800 ${about ? 'border-l-4 border-violet-500 bg-violet-50 ring-1 ring-violet-200' : isOwner || isNote ? 'bg-amber-50 ring-1 ring-amber-300' : 'bg-white ring-1 ring-slate-200'}`}>
+                  <p className={`mt-1.5 rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap text-slate-800 ${shownInList ? 'outline-2 outline-offset-2 outline-brand-500 ' : ''}${about ? 'border-l-4 border-violet-500 bg-violet-50 ring-1 ring-violet-200' : isOwner || isNote ? 'bg-amber-50 ring-1 ring-amber-300' : 'bg-white ring-1 ring-slate-200'}`}>
                     <MentionText text={post.body} />
                   </p>
                 )}

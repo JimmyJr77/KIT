@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Pencil, X, Search, ArrowUp, ArrowDown } from 'lucide-react';
+import { X, Search, ArrowUp, ArrowDown } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName, shortDate, stamp } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import { MentionText } from '../components/MentionTextarea.jsx';
-import { TagFilter, byTags } from '../components/Labels.jsx';
+import { TagFilter, byTags, LabelList } from '../components/Labels.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import { PipelineViewToggle, TicketSearch } from './ProcessView.jsx';
 
@@ -28,6 +28,8 @@ const OUTCOMES = {
 const UNSET = 'bg-white text-slate-500 ring-slate-300';
 /** "18 mo", "5 yr", or the deal's own wording when it can't be read as months. */
 const duration = (r) => (r.term_months ? (r.term_months % 12 === 0 ? `${r.term_months / 12} yr` : `${r.term_months} mo`) : r.term_text || '—');
+/** The note a row shows: the one picked for it, else its latest. */
+const shownNote = (r) => r.notes.find((n) => n.id === r.note_id) || r.notes[0] || null;
 const closeDate = (iso) => (iso ? shortDate(iso, { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
 // Ways to order the table. `dir` is the direction each starts in; rows missing the value sorted on go to the bottom either
 // way, and ties go by name. Status runs On-Track down to Off-Track Trending Down, then not set, then Closed.
@@ -79,6 +81,7 @@ export default function CloseToClosing() {
   }, [rows, q, tags, sort]);
   const listed = useMemo(() => new Set((rows || []).map((r) => r.ticket_id)), [rows]);
   const open = sorted.filter((r) => !r.closed);
+  const openRow = openId && rows?.find((r) => r.ticket_id === openId);
 
   return (
     <div className="flex h-full flex-col">
@@ -131,14 +134,17 @@ export default function CloseToClosing() {
               {rows?.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">Nothing is in Under Evaluation yet. Add a ticket with the search above.</td></tr>}
               {rows?.length > 0 && !sorted.length && <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No tickets on the list match.</td></tr>}
               {sorted.map((r) => (
-                <Row key={r.ticket_id} row={r} selected={openId === r.ticket_id} onOpen={() => setOpenId(r.ticket_id)} run={run} onError={setError} />
+                <Row key={r.ticket_id} row={r} selected={openId === r.ticket_id} onOpen={() => setOpenId(r.ticket_id)} run={run} />
               ))}
             </tbody>
           </table>
         </div>
       </div>
 
-      {openId && <TicketTimeline key={openId} ticketId={openId} onClose={() => { setOpenId(null); load(); }} onChanged={load} />}
+      {/* In the pane, any comment or note can be picked as the one its row shows; the one showing is outlined. */}
+      {openId && <TicketTimeline key={openId} ticketId={openId} onClose={() => { setOpenId(null); load(); }} onChanged={load}
+        notePick={openRow && { shownId: shownNote(openRow)?.id ?? null, pickedId: openRow.note_id,
+          onPick: (id) => run(() => api.put(`/c2c/${openId}`, { note_id: id })) }} />}
     </div>
   );
 }
@@ -154,7 +160,7 @@ function SortHead({ k, sort, onSort, children }) {
   );
 }
 
-function Row({ row: r, selected, onOpen, run, onError }) {
+function Row({ row: r, selected, onOpen, run }) {
   const status = r.closed ? CLOSED : STATUS[r.status];
   const outcome = OUTCOMES[r.outcome];
   const stop = (e) => e.stopPropagation();
@@ -163,9 +169,10 @@ function Row({ row: r, selected, onOpen, run, onError }) {
       <td className="px-4 py-3">
         <button type="button" className="text-left font-semibold text-slate-900 hover:text-brand-700">{r.title}</button>
         <div className="mt-0.5 text-xs text-slate-500">{[r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · ')}</div>
+        <LabelList labels={r.labels} className="mt-1.5" />
       </td>
       <td className="px-3 py-3 text-right font-medium whitespace-nowrap text-emerald-700 tabular-nums">{money(r.value)}</td>
-      <td className="px-3 py-3 text-slate-700" title={r.term_text || undefined}>{duration(r)}</td>
+      <td className="px-3 py-3 text-slate-700" onClick={r.can_edit ? stop : undefined}><Duration row={r} run={run} /></td>
       <td className="px-3 py-3 text-slate-700">
         {outcome ? <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${outcome.tone}`} title={r.outcome === 'awarded' ? undefined : `Was in ${r.stage}`}>{outcome.label}</span> : r.stage || '—'}
       </td>
@@ -183,7 +190,7 @@ function Row({ row: r, selected, onOpen, run, onError }) {
           </select>
         )}
       </td>
-      <td className="px-3 py-3" onClick={stop}><Notes row={r} run={run} onError={onError} /></td>
+      <td className="px-3 py-3"><Notes row={r} /></td>
       <td className="py-3 pr-2" onClick={stop}>
         {!r.evaluating && (
           <button type="button" aria-label={`Take ${r.title} off the list`} title="Take off this list"
@@ -195,65 +202,36 @@ function Row({ row: r, selected, onOpen, run, onError }) {
   );
 }
 
-/** The note a row shows (the latest unless another is picked), with Add and Edit. Notes save to the ticket itself. */
-function Notes({ row: r, run, onError }) {
-  const [draft, setDraft] = useState(null); // { id: note being edited, or null for a new one, body }
-  const [busy, setBusy] = useState(false);
-  const shown = r.notes.find((n) => n.id === r.note_id) || r.notes[0] || null;
-  const label = (n) => `${stamp(n.created_at)}${n.author ? ` · ${fullName(n.author)}` : ''}: ${n.body.replace(/\s+/g, ' ').slice(0, 50)}`;
+/** The note a row shows: the latest, unless another is picked in the ticket's pane. Notes are written on the ticket. */
+function Notes({ row: r }) {
+  const shown = shownNote(r);
+  if (!shown) return <div className="text-sm text-slate-400">No notes yet</div>;
+  return (
+    <div className="space-y-1">
+      <div className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700" title={shown.body}><MentionText text={shown.body} /></div>
+      <div className="text-[11px] text-slate-400">{[shown.author && fullName(shown.author), stamp(shown.created_at), shown.updated_at && 'edited'].filter(Boolean).join(' · ')}</div>
+    </div>
+  );
+}
 
-  const save = async () => {
-    const body = draft.body.trim();
-    if (!body || busy) return;
-    setBusy(true);
-    onError('');
-    try {
-      if (draft.id) await api.put(`/tickets/comments/${draft.id}`, { body });
-      else {
-        await api.post(`/tickets/${r.ticket_id}/comments`, { body, kind: 'comment' });
-        if (r.note_id) await api.put(`/c2c/${r.ticket_id}`, { note_id: null }); // a new note is the latest: show it
-      }
-      setDraft(null);
-      await run(() => api.get('/c2c'));
-    } catch (e) { onError(e.message); } finally { setBusy(false); }
+/** The contract's length. Its owner (or an admin) clicks to type it, as on the deal: "12 months", "1 base + 4 option years". It saves to the ticket. */
+function Duration({ row: r, run }) {
+  const [text, setText] = useState(null); // null: not editing
+  if (!r.can_edit) return <span title={r.term_text || undefined}>{duration(r)}</span>;
+  const save = () => {
+    const next = text.trim();
+    setText(null);
+    if (next !== (r.term_text || '')) run(() => api.put(`/c2c/${r.ticket_id}`, { duration: next }));
   };
-
-  if (draft) {
+  if (text === null) {
     return (
-      <div className="space-y-1.5">
-        <textarea autoFocus className="input min-h-20 text-sm" value={draft.body} placeholder="Write a note. It saves to the ticket."
-          aria-label={draft.id ? 'Edit note' : 'New note'} onChange={(e) => setDraft({ ...draft, body: e.target.value })}
-          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save(); if (e.key === 'Escape') setDraft(null); }} />
-        <div className="flex gap-1.5">
-          <button type="button" className="btn-primary px-2.5 py-1 text-xs" disabled={busy || !draft.body.trim()} onClick={save}>{draft.id ? 'Save' : 'Add note'}</button>
-          <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => setDraft(null)}>Cancel</button>
-        </div>
-      </div>
+      <button type="button" onClick={() => setText(r.term_text || '')} title={`${r.term_text ? `${r.term_text}. ` : ''}Click to edit: it saves to the ticket`}
+        className="-mx-1.5 w-full rounded px-1.5 py-0.5 text-left hover:bg-white hover:ring-1 hover:ring-slate-300">{duration(r)}</button>
     );
   }
   return (
-    <div className="space-y-1.5">
-      {shown ? (
-        <>
-          <div className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700" title={shown.body}><MentionText text={shown.body} /></div>
-          <div className="text-[11px] text-slate-400">{[shown.author && fullName(shown.author), stamp(shown.created_at), shown.updated_at && 'edited'].filter(Boolean).join(' · ')}</div>
-        </>
-      ) : <div className="text-sm text-slate-400">No notes yet</div>}
-      <div className="flex flex-wrap items-center gap-1.5">
-        <button type="button" className="btn px-2 py-0.5 text-xs" onClick={() => setDraft({ id: null, body: '' })}><Plus size={12} /> Add</button>
-        {shown && (
-          <button type="button" className="btn px-2 py-0.5 text-xs" disabled={!shown.mine} onClick={() => setDraft({ id: shown.id, body: shown.body })}
-            title={shown.mine ? 'Edit this note' : 'Only the person who wrote a note can edit it'}><Pencil size={12} /> Edit</button>
-        )}
-        {r.notes.length > 1 && (
-          <select aria-label={`Note shown for ${r.title}`} value={r.note_id || ''} title="Which note this row shows"
-            onChange={(e) => run(() => api.put(`/c2c/${r.ticket_id}`, { note_id: Number(e.target.value) || null }))}
-            className="input h-6 w-44 max-w-full min-w-0 py-0 pr-6 pl-2 text-xs">
-            <option value="">Latest note</option>
-            {r.notes.map((n) => <option key={n.id} value={n.id}>{label(n)}</option>)}
-          </select>
-        )}
-      </div>
-    </div>
+    <input autoFocus className="input -mx-1.5 h-7 w-[calc(100%+0.75rem)] px-1.5 py-0 text-sm" value={text} placeholder="e.g. 12 months" aria-label={`Duration of ${r.title}`}
+      onChange={(e) => setText(e.target.value)} onBlur={save}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setText(null); }} />
   );
 }

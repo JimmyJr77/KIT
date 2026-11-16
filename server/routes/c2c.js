@@ -6,7 +6,9 @@
 import { Router } from 'express';
 import { db, json } from '../db.js';
 import { reportStager } from '../pipelines.js';
-import { termFromFields } from '../compensation.js';
+import { termFromFields, isTermField, TERM_FIELD_NAME } from '../compensation.js';
+import { fieldByName } from '../services/pipedriveFields.js';
+import { recordTicketUpdate } from '../worklog.js';
 import { canEditTicket } from '../../src/lib/ticketAccess.js';
 import { ticketEditDenied } from './tickets.js';
 
@@ -38,7 +40,8 @@ function list(user) {
   if (rows.length) {
     db.prepare(`SELECT m.id, m.ticket_id, m.body, m.kind, m.created_at, m.updated_at, m.author_id, u.first_name, u.last_name
       FROM ticket_comments m LEFT JOIN users u ON u.id = m.author_id
-      WHERE m.parent_id IS NULL AND m.kind IN ('comment', 'note') AND m.ticket_id IN (SELECT ticket_id FROM c2c_tickets)
+      WHERE m.parent_id IS NULL AND m.kind IN ('comment', 'note') AND (m.target_type IS NULL OR m.target_type IN ('activity', 'subtask'))
+        AND m.ticket_id IN (SELECT ticket_id FROM c2c_tickets)
       ORDER BY m.created_at DESC, m.id DESC`).all().forEach((m) => {
       if (!notes.has(m.ticket_id)) notes.set(m.ticket_id, []);
       notes.get(m.ticket_id).push({ id: m.id, body: m.body, created_at: m.created_at, updated_at: m.updated_at ?? null,
@@ -76,16 +79,40 @@ r.post('/', (req, res) => {
 const entry = (id) => db.prepare('SELECT c.*, t.created_by, t.ticket_type FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id WHERE c.ticket_id = ?').get(Number(id) || 0);
 
 /**
- * Body: any of status (one of the standings, or null to clear it: the ticket's owner or an admin) and note_id (the note the
- * row shows, null for the latest: anyone).
+ * Set the ticket's contract term: its Expected Contract Term field (Pipedrive's, when the deal has one), as the text
+ * typed ("12 months", "1 base + 4 option years"). Empty clears it.
+ */
+function setDuration(user, ticketId, text) {
+  const t = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  const value = String(text ?? '').trim().slice(0, 200);
+  const fields = json.parse(t.custom_fields, []);
+  const at = fields.findIndex((f) => isTermField(f.name));
+  if ((at >= 0 ? fields[at].value || '' : '') === value) return;
+  if (at >= 0 && value) fields[at] = { ...fields[at], value };
+  else if (at >= 0) fields.splice(at, 1);
+  else {
+    const known = fieldByName('deal', TERM_FIELD_NAME); // Pipedrive's own field keeps its key, so the change is synced
+    fields.push({ ...(known ? { key: known.key } : {}), name: TERM_FIELD_NAME, value });
+  }
+  db.prepare("UPDATE tickets SET custom_fields = ?, updated_at = datetime('now') WHERE id = ?").run(json.str(fields), t.id);
+  recordTicketUpdate(user, t, 'Details');
+}
+
+/**
+ * Body: any of status (one of the standings, or null to clear it), duration (the ticket's contract term, as text) and
+ * note_id (the note the row shows, null for the latest). Status and duration are the ticket owner's or an admin's to set;
+ * anyone picks the note.
  */
 r.put('/:ticketId', (req, res) => {
   const c = entry(req.params.ticketId);
   if (!c) return res.status(404).json({ error: 'That ticket isn’t on the list' });
   const b = req.body || {};
-  if ('status' in b) {
+  if ('status' in b || 'duration' in b) {
     const denied = ticketEditDenied(req.user, { id: c.ticket_id, created_by: c.created_by, ticket_type: c.ticket_type });
     if (denied) return res.status(403).json({ error: denied });
+  }
+  if ('duration' in b) setDuration(req.user, c.ticket_id, b.duration);
+  if ('status' in b) {
     if (b.status != null && !SET_STATUSES.includes(b.status)) return res.status(400).json({ error: 'Unknown status' });
     if (['won', 'lost'].includes(db.prepare('SELECT deal_status FROM tickets WHERE id = ?').get(c.ticket_id)?.deal_status)) return res.status(400).json({ error: 'This deal is closed' });
     db.prepare('UPDATE c2c_tickets SET status = ? WHERE ticket_id = ?').run(b.status ?? null, c.ticket_id);

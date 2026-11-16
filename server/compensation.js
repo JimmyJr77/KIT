@@ -91,6 +91,10 @@ export function parseTerm(text) {
   return total > 0 ? total : null;
 }
 
+/** Whether a custom field of this name holds the deal's term. */
+export const isTermField = (name) => TERM_FIELD.test(name || '') && !POP_END_FIELD.test(name || '');
+export const TERM_FIELD_NAME = 'Expected Contract Term';
+
 /** The deal's term field, parsed, from its custom fields JSON. */
 export const termFromFields = (customFields) => {
   const f = json.parse(customFields, []).find((x) => TERM_FIELD.test(x.name || '') && !POP_END_FIELD.test(x.name || '') && x.value);
