@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, Search, ArrowUp, ArrowDown, Printer } from 'lucide-react';
+import { X, Search, ArrowUp, ArrowDown, Download, Loader2 } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useApi } from '../lib/data.js';
+import MultiSelect from '../components/MultiSelect.jsx';
 import { fullName, shortDate, stamp, todayIso } from '../lib/format.js';
 import { usd, quarterFor } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import { MentionText } from '../components/MentionTextarea.jsx';
+import { nameOnLight } from '../lib/brand.js';
 import { TagFilter, byTags, LabelList } from '../components/Labels.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import { PipelineViewToggle, TicketSearch } from './ProcessView.jsx';
@@ -75,6 +78,17 @@ export default function CloseToClosing() {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (call) => { setError(''); try { take(await call()); } catch (e) { setError(e.message); } };
 
+  const users = useApi('/users');
+  const territories = useApi('/territories');
+  const [scope, setScope] = useState('all'); // 'mine': tickets I own, direct or have a priority card on
+  const [filters, setFilters] = useState([]); // "o:<user id>" for account owners, "t:<territory id>" for territories
+  // BD account owners (everyone on the BD team), alphabetical, then the territories (Pipedrive's "Account"), as on the board.
+  const filterOptions = useMemo(() => [
+    ...(users.data?.users || []).filter((u) => (u.teams || []).some((t) => t.name === 'BD'))
+      .sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }))
+      .map((u) => ({ value: `o:${u.id}`, label: fullName(u), group: 'BD account owners' })),
+    ...(territories.data?.territories || []).map((t) => ({ value: `t:${t.id}`, label: t.name, group: 'Territories' })),
+  ], [users.data, territories.data]);
   const [q, setQ] = useState('');
   const [tags, setTags] = useState([]);
   const [sort, setSortState] = useState(savedSort);
@@ -87,38 +101,79 @@ export default function CloseToClosing() {
 
   const sorted = useMemo(() => {
     const words = q.trim().toLowerCase();
-    return (rows || []).filter((r) => !words || `${r.title} ${r.organization || ''}`.toLowerCase().includes(words)).filter(byTags(tags))
+    const owners = filters.filter((f) => f.startsWith('o:')).map((f) => Number(f.slice(2)));
+    const terrs = filters.filter((f) => f.startsWith('t:')).map((f) => Number(f.slice(2)));
+    return (rows || []).filter((r) => scope === 'all' || r.mine)
+      .filter((r) => (!owners.length || owners.includes(r.owner?.id)) && (!terrs.length || terrs.includes(r.territory_id)))
+      .filter((r) => !words || `${r.title} ${r.organization || ''}`.toLowerCase().includes(words)).filter(byTags(tags))
       .filter((r) => !quarter || quarterFor(r.close_date) === quarter).sort(compareBy(sort));
-  }, [rows, q, tags, sort, quarter]);
+  }, [rows, q, tags, sort, quarter, scope, filters]);
   const listed = useMemo(() => new Set((rows || []).map((r) => r.ticket_id)), [rows]);
   const open = sorted.filter((r) => !r.closed);
   const openRow = openId && rows?.find((r) => r.ticket_id === openId);
 
-  // Printed, the table goes on landscape sheets, in the order and with the filters the page has now.
+  // Downloaded as a PDF, the list is in the order and with the filters the page has now, on landscape sheets.
+  const [building, setBuilding] = useState(false);
+  const download = async () => {
+    setBuilding(true);
+    setError('');
+    try {
+      const { downloadC2cPdf } = await import('../lib/c2cPdf.js');
+      await downloadC2cPdf({
+        fileName: `Close to closing ${todayIso()}.pdf`,
+        date: new Date().toLocaleDateString('en-US', { dateStyle: 'long' }),
+        summary: summaryLine, logo: nameOnLight,
+        rows: sorted.map((r) => {
+          const note = shownNote(r);
+          return {
+            title: r.title, sub: [r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · '), tags: (r.labels || []).join(' · '),
+            value: money(r.value), duration: duration(r), category: OUTCOMES[r.outcome]?.label || r.stage || '—', closeDate: closeDate(r.close_date),
+            status: r.closed ? CLOSED.label : STATUS[r.status]?.label || 'Not set',
+            note: note?.body || '', noteBy: note ? [note.author && fullName(note.author), stamp(note.created_at)].filter(Boolean).join(' · ') : '',
+          };
+        }),
+      });
+    } catch (e) { setError(`Couldn’t make the PDF: ${e.message}`); } finally { setBuilding(false); }
+  };
+  // Printed from the browser, the table goes on landscape sheets too.
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = '@media print { @page { size: letter landscape; margin: 0.4in; } }';
     document.head.appendChild(style);
     return () => style.remove();
   }, []);
-  const narrowed = [q.trim() && `matching “${q.trim()}”`, tags.length && `tagged ${tags.join(', ')}`, quarter && `closing ${quarter}`].filter(Boolean);
+  const openTotal = money(sorted.filter((r) => !r.closed).reduce((s, r) => s + (r.value || 0), 0));
+  const narrowed = [scope === 'mine' && 'my tickets', filters.length && filterOptions.filter((o) => filters.includes(o.value)).map((o) => o.label).join(', '), q.trim() && `matching “${q.trim()}”`, tags.length && `tagged ${tags.join(', ')}`, quarter && `closing ${quarter}`].filter(Boolean);
+  const summaryLine = `${sorted.length} ${sorted.length === 1 ? 'opportunity' : 'opportunities'} · ${sorted.filter((r) => !r.closed).length} open · ${openTotal}${narrowed.length ? ` · ${narrowed.join(', ')}` : ''} · sorted by ${SORTS[sort.key].label.toLowerCase()}, ${sort.dir === 'asc' ? 'ascending' : 'descending'}`;
 
   return (
     <div className="flex h-full flex-col print:block print:h-auto">
       {/* The printed sheet's heading: what's listed, how it's narrowed and ordered, and when it was printed. */}
       <div className="hidden print:mb-3 print:block">
-        <div className="flex items-baseline justify-between gap-4">
-          <h1 className="text-lg font-bold text-slate-900">Close to closing</h1>
-          <span className="text-[10px] text-slate-500">{new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}</span>
+        <div className="flex items-center justify-between gap-4">
+          <img src={nameOnLight} alt="Knexus" className="h-5 w-auto" />
+          <div className="text-[9px] font-semibold tracking-wide text-brand-700 uppercase">KIT · Close to closing</div>
         </div>
-        <p className="text-[10px] text-slate-600">
-          {sorted.length} {sorted.length === 1 ? 'opportunity' : 'opportunities'} · {open.length} open · {money(open.reduce((s, r) => s + (r.value || 0), 0))}
-          {narrowed.length > 0 && ` · ${narrowed.join(', ')}`} · sorted by {SORTS[sort.key].label.toLowerCase()}, {sort.dir === 'asc' ? 'ascending' : 'descending'}
-        </p>
+        <div className="mt-3 flex items-baseline justify-between gap-4">
+          <h1 className="text-lg font-bold text-slate-900">Close to closing</h1>
+          <span className="text-[10px] text-slate-500">Prepared {new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}</span>
+        </div>
+        <p className="text-[10px] text-slate-600">{summaryLine}</p>
       </div>
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4 print:hidden">
         <PageHeader title="Close to closing" subtitle="Every ticket in Under Evaluation, plus any you add. A ticket stays here when its deal closes.">
-          <button type="button" className="btn h-9 py-0" onClick={() => window.print()} disabled={!rows} title="Print the list as it's ordered and narrowed now, or save it as a PDF"><Printer size={15} /> Print</button>
+          <div className="w-80 text-left">
+            <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or territory…" />
+          </div>
+          <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
+            {[['mine', 'My tickets'], ['all', 'All tickets']].map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setScope(k)}
+                className={`rounded px-3 ${scope === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
+            ))}
+          </div>
+          <button type="button" className="btn h-9 py-0" onClick={download} disabled={!rows || building} title="Download the list as a PDF, as it's ordered and narrowed now">
+            {building ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} Download
+          </button>
           <PipelineViewToggle />
         </PageHeader>
         <div className="flex flex-wrap items-center gap-4">

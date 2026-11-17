@@ -36,6 +36,9 @@ function list(user) {
   const stage = reportStager();
   const rows = db.prepare(`SELECT c.status AS c_status, c.note_id, c.created_at AS added_at, t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name
     FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id LEFT JOIN users o ON o.id = t.created_by WHERE ${LISTABLE}`).all();
+  // "My tickets", as on the board: ones this person owns, directs, or has a priority card on.
+  const carded = new Set(db.prepare(`SELECT DISTINCT c.ticket_id FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id
+    WHERE a.user_id = ? AND c.ticket_id IN (SELECT ticket_id FROM c2c_tickets)`).all(user.id).map((x) => x.ticket_id));
   const notes = new Map();
   if (rows.length) {
     db.prepare(`SELECT m.id, m.ticket_id, m.body, m.kind, m.created_at, m.updated_at, m.author_id, u.first_name, u.last_name
@@ -60,7 +63,8 @@ function list(user) {
       status: SET_STATUSES.includes(t.c_status) ? t.c_status : null,
       evaluating: t.deal_status === 'open' && stage.of(t.pipeline_id, t.pipeline_status) === EVALUATION,
       owner: t.owner_first_name ? { id: t.created_by, first_name: t.owner_first_name, last_name: t.owner_last_name } : null,
-      can_edit: canEditTicket(user, t),
+      can_edit: canEditTicket(user, t), territory_id: t.territory_id,
+      mine: t.created_by === user.id || t.bd_director_id === user.id || carded.has(t.id),
       notes: mine, note_id: mine.some((n) => n.id === t.note_id) ? t.note_id : null,
     };
   });

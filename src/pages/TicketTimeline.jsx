@@ -300,6 +300,11 @@ function Event({ event: e, ticket, onChanged, onOpenActivity, notePick }) {
   // On the Close to closing list: this comment or note can be the one the ticket's row shows.
   const pickable = !!notePick && e.type === 'comment' && !e.comment.parent_id && ['comment', 'note'].includes(e.comment.kind);
   const shownInList = pickable && notePick.shownId === e.comment.id;
+  // Clicking the note itself picks it (not while selecting its text, or on a link in it).
+  const pickForList = (ev) => {
+    if (ev.target.closest?.('a') || String(window.getSelection?.() || '')) return;
+    if (notePick.pickedId !== e.comment.id) notePick.onPick(e.comment.id);
+  };
   const pin = async () => { await api.put(`/tickets/comments/${e.comment.id}/pin`, { pinned: !e.comment.pinned }); onChanged(); };
 
   return (
@@ -354,7 +359,10 @@ function Event({ event: e, ticket, onChanged, onOpenActivity, notePick }) {
               {editing
                 ? <EditBox initial={post.body} onSave={save} onCancel={() => setEditing(false)} />
                 : (
-                  <p className={`mt-1.5 rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap text-slate-800 ${shownInList ? 'outline-2 outline-offset-2 outline-brand-500 ' : ''}${about ? 'border-l-4 border-violet-500 bg-violet-50 ring-1 ring-violet-200' : isOwner || isNote ? 'bg-amber-50 ring-1 ring-amber-300' : 'bg-white ring-1 ring-slate-200'}`}>
+                  <p onClick={pickable ? pickForList : undefined} onKeyDown={pickable ? (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pickForList(ev); } } : undefined}
+                    role={pickable ? 'button' : undefined} tabIndex={pickable ? 0 : undefined} aria-pressed={pickable ? shownInList : undefined}
+                    title={pickable ? (shownInList ? 'This note is the one showing in Close to closing' : 'Click to show this note in Close to closing') : undefined}
+                    className={`mt-1.5 rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap text-slate-800 ${pickable ? 'cursor-pointer ' : ''}${shownInList ? 'outline-2 outline-offset-2 outline-brand-500 ' : pickable ? 'hover:outline-2 hover:outline-offset-2 hover:outline-brand-200 ' : ''}${about ? 'border-l-4 border-violet-500 bg-violet-50 ring-1 ring-violet-200' : isOwner || isNote ? 'bg-amber-50 ring-1 ring-amber-300' : 'bg-white ring-1 ring-slate-200'}`}>
                     <MentionText text={post.body} />
                   </p>
                 )}
