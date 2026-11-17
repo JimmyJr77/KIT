@@ -54,6 +54,10 @@ export default function SolutionArchitectCoordination() {
   const take = (d) => { setRows(d.rows); setCanRankMaster(!!d.can_rank_master); setArchitects(d.architects || []); };
   const load = () => api.get(`/sac${showDone ? '?done=1' : ''}`).then(take).catch((e) => setError(e.message));
   useEffect(() => { setRows(null); load(); }, [showDone]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A request written in a row is the Request block of that event's form: the list reloads, and a pane open on the same
+  // ticket is opened afresh so its form shows what was just written.
+  const [formVersion, setFormVersion] = useState(0);
+  const requestSaved = (id) => { if (open && rows?.find((x) => x.id === id)?.ticket_id === open.ticket_id) setFormVersion((v) => v + 1); return load(); };
   const run = async (call) => { setError(''); try { await call(); await load(); } catch (e) { setError(e.message); } };
 
   const [scope, setScopeState] = useState(() => saved('kit.sac.scope', (v) => ['mine', 'all'].includes(v), 'all'));
@@ -156,7 +160,7 @@ export default function SolutionArchitectCoordination() {
                   {rows?.length > 0 && !shown.length && <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">No staffing events match.</td></tr>}
                   {shown.map((r, i) => (
                     <Row key={r.id} row={r} n={i + 1} draggable={canDrag && (scope === 'all' || r.mine)} selected={open?.id === r.id} user={user} architects={architects}
-                      onOpen={() => setOpen({ ticket_id: r.ticket_id, id: r.id })} run={run} />
+                      onOpen={() => setOpen({ ticket_id: r.ticket_id, id: r.id })} run={run} onRequestSaved={requestSaved} />
                   ))}
                 </tbody>
               </SortableContext>
@@ -165,12 +169,12 @@ export default function SolutionArchitectCoordination() {
         </div>
       </div>
 
-      {open && <TicketTimeline key={`${open.ticket_id}-${open.id}`} ticketId={open.ticket_id} stepId={open.id ?? null} startStaffing={!!open.staff} drawerOnly onClose={() => { setOpen(null); load(); }} onChanged={load} />}
+      {open && <TicketTimeline key={`${open.ticket_id}-${open.id}-${formVersion}`} ticketId={open.ticket_id} stepId={open.id ?? null} startStaffing={!!open.staff} drawerOnly onClose={() => { setOpen(null); load(); }} onChanged={load} />}
     </div>
   );
 }
 
-function Row({ row: r, n, draggable, selected, onOpen, run, architects }) {
+function Row({ row: r, n, draggable, selected, onOpen, run, architects, onRequestSaved }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: r.id, disabled: !draggable });
   const def = milestoneOf(r.step_type);
   const stop = (e) => e.stopPropagation();
@@ -211,8 +215,10 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects }) {
       <td className="px-3 py-3" onClick={r.completed_at ? undefined : stop}>
         {r.completed_at ? <ArchitectList people={r.architects} /> : <ArchitectCell row={r} options={architects} onSave={(ids) => put({ architects: ids })} />}
       </td>
-      <td className="px-3 py-3">
-        {r.request ? <p className="line-clamp-3 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.request}>{r.request}</p> : <span className="text-xs text-slate-400">No request written</span>}
+      <td className="px-3 py-3" onClick={r.completed_at ? undefined : stop}>
+        {r.completed_at
+          ? (r.request ? <p className="line-clamp-3 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.request}>{r.request}</p> : <span className="text-xs text-slate-400">No request written</span>)
+          : <RequestCell row={r} onSave={(text) => api.put(`/tickets/process/${r.id}`, { notes: text }).then(() => onRequestSaved(r.id))} />}
       </td>
       <td className="px-3 py-3" onClick={stop}><NotesCell row={r} run={run} /></td>
       <td className="px-3 py-3">
@@ -255,6 +261,52 @@ const remove = (r, run) => {
   if (!confirm(`Remove ${r.step_type} from “${r.title}”?\n\nThe staffing event is deleted with its written work and architects, and the ${tag} tag comes off the ticket. Its documents and notes stay on the ticket. This can’t be undone.`)) return;
   run(() => api.del(`/tickets/process/${r.id}`));
 };
+
+/**
+ * The event's request: what's needed from the solution architect. A click on it (or on "Add a request") opens it to write
+ * here; ⌘/Ctrl+Enter or Save keeps it, Escape (or Cancel) drops the change. It's the Request block of the event's form, so
+ * what's written here is what the form shows, and the other way round. Anyone can write it, as in the form.
+ */
+function RequestCell({ row: r, onSave }) {
+  const [text, setText] = useState(null); // null: not editing
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const ref = useRef(null);
+  useEffect(() => { if (text !== null && document.activeElement !== ref.current) { const el = ref.current; el?.focus(); el?.setSelectionRange(el.value.length, el.value.length); } }, [text === null]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (text === null) {
+    return r.request
+      ? <button type="button" onClick={() => setText(r.request)} title="Click to edit the request"
+          className="-mx-1.5 block w-[calc(100%+0.75rem)] rounded px-1.5 py-0.5 text-left text-sm break-words whitespace-pre-wrap text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-300">
+          <span className="line-clamp-3">{r.request}</span>
+        </button>
+      : <button type="button" onClick={() => setText('')} className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline"><Plus size={12} /> Add a request</button>;
+  }
+  const changed = text.trim() !== r.request.trim();
+  const save = async () => {
+    if (busy) return;
+    if (!changed) return setText(null);
+    setBusy(true);
+    setError('');
+    try { await onSave(text.trim()); setText(null); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  const cancel = () => { if (!changed || confirm('Discard your changes to the request?')) setText(null); };
+  return (
+    <div className="rounded-lg border border-brand-500 bg-white ring-2 ring-brand-100">
+      <textarea ref={ref} rows={4} value={text} onChange={(e) => setText(e.target.value)} disabled={busy} aria-label={`Request for ${r.step_type} on ${r.title}`}
+        placeholder="What's needed from the solution architect: the ask, the customer's deadline, open questions…"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+          if (e.key === 'Escape') { e.stopPropagation(); cancel(); }
+        }}
+        className="block w-full resize-y rounded-t-lg border-0 bg-transparent px-2.5 py-1.5 text-sm focus:ring-0 focus:outline-none" />
+      <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-2 py-1">
+        {error && <span className="mr-auto text-[11px] text-red-700">{error}</span>}
+        <button type="button" className="text-xs text-slate-500 hover:text-slate-800" onClick={cancel} disabled={busy}>Cancel</button>
+        <button type="button" className="btn-primary px-2 py-0.5 text-xs" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
+      </div>
+    </div>
+  );
+}
 
 const noteBy = (n) => [n.author && fullName(n.author), stamp(n.created_at), n.updated_at && 'edited'].filter(Boolean).join(' · ');
 
