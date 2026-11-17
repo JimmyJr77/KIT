@@ -1,5 +1,6 @@
 // Close to closing (C2C): the BD Pipeline's list of deals near a decision. Every open pipeline ticket in Under Evaluation
 // (or a stage reports count as Under Evaluation) joins the list on its own; any other pipeline ticket can be added by hand.
+// Anyone can take a ticket off the list: it comes back when it moves into a stage that belongs here, or when it's added again.
 // Once on the list a ticket stays when its deal closes: its category then reads from the deal (Awarded, Paid (Won),
 // Closed - Not awarded) instead of its stage, and a paid or closed deal's status is Closed. Notes are the ticket's own
 // comments and notes.
@@ -19,13 +20,29 @@ const SET_STATUSES = ['on_track', 'off_up', 'off_steady', 'off_down'];
 const EVALUATION = 'Under Evaluation';
 const LISTABLE = "t.ticket_type = 'bid' AND t.archive_set_id IS NULL AND t.archived_at IS NULL";
 
-/** Put every open ticket now in Under Evaluation on the list. */
+/** The stage a ticket is in, as kept against one taken off the list. */
+const stageKey = (t) => `${t.pipeline_id ?? ''}:${t.pipeline_status ?? ''}`;
+const RESTORE = 'UPDATE c2c_tickets SET removed_at = NULL, removed_stage = NULL';
+
+/**
+ * Put every open ticket now in Under Evaluation on the list. One taken off the list stays off while it sits in the stage
+ * it was removed in, and comes back once it's moved into a stage that belongs here.
+ */
 function addEvaluating() {
   const stage = reportStager();
+  const evaluating = (t) => t.deal_status === 'open' && t.pipeline_status != null && stage.of(t.pipeline_id, t.pipeline_status) === EVALUATION;
   const add = db.prepare('INSERT OR IGNORE INTO c2c_tickets (ticket_id) VALUES (?)');
-  db.prepare(`SELECT t.id, t.pipeline_id, t.pipeline_status FROM tickets t
+  db.prepare(`SELECT t.id, t.pipeline_id, t.pipeline_status, t.deal_status FROM tickets t
     WHERE ${LISTABLE} AND t.deal_status = 'open' AND t.pipeline_status IS NOT NULL AND t.id NOT IN (SELECT ticket_id FROM c2c_tickets)`).all()
-    .filter((t) => stage.of(t.pipeline_id, t.pipeline_status) === EVALUATION).forEach((t) => add.run(t.id));
+    .filter(evaluating).forEach((t) => add.run(t.id));
+  const restore = db.prepare(`${RESTORE} WHERE ticket_id = ?`);
+  const moved = db.prepare('UPDATE c2c_tickets SET removed_stage = NULL WHERE ticket_id = ?');
+  db.prepare(`SELECT t.id, t.pipeline_id, t.pipeline_status, t.deal_status, c.removed_stage FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id
+    WHERE c.removed_at IS NOT NULL AND ${LISTABLE}`).all().forEach((t) => {
+    if (t.removed_stage === stageKey(t)) return; // still where it was taken off
+    if (evaluating(t)) restore.run(t.id);
+    else if (t.removed_stage != null) moved.run(t.id); // it's left that stage, so going back to it counts as a move
+  });
 }
 
 /** Where the deal itself says the ticket has got to (shown as its category), or null while it's still in a stage. */
@@ -38,7 +55,7 @@ function list(user) {
   addEvaluating();
   const stage = reportStager();
   const rows = db.prepare(`SELECT c.status AS c_status, c.note_id, c.note_ids, c.created_at AS added_at, t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name
-    FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id LEFT JOIN users o ON o.id = t.created_by WHERE ${LISTABLE}`).all();
+    FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id LEFT JOIN users o ON o.id = t.created_by WHERE c.removed_at IS NULL AND ${LISTABLE}`).all();
   // "My tickets", as on the board: ones this person owns, directs, or has a priority card on.
   const carded = new Set(db.prepare(`SELECT DISTINCT c.ticket_id FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id
     WHERE a.user_id = ? AND c.ticket_id IN (SELECT ticket_id FROM c2c_tickets)`).all(user.id).map((x) => x.ticket_id));
@@ -75,15 +92,16 @@ function list(user) {
 
 r.get('/', (req, res) => res.json({ rows: list(req.user) }));
 
-/** Body: { ticket_id }. Adds a pipeline ticket to the list. */
+/** Body: { ticket_id }. Adds a pipeline ticket to the list, or puts back one that was taken off. */
 r.post('/', (req, res) => {
   const t = db.prepare(`SELECT t.id FROM tickets t WHERE t.id = ? AND ${LISTABLE}`).get(Number(req.body?.ticket_id) || 0);
   if (!t) return res.status(400).json({ error: 'Pick a pipeline ticket that isn’t archived' });
   db.prepare('INSERT OR IGNORE INTO c2c_tickets (ticket_id, added_by) VALUES (?, ?)').run(t.id, req.user.id);
+  db.prepare(`${RESTORE} WHERE ticket_id = ? AND removed_at IS NOT NULL`).run(t.id);
   res.json({ rows: list(req.user) });
 });
 
-const entry = (id) => db.prepare('SELECT c.*, t.created_by, t.ticket_type FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id WHERE c.ticket_id = ?').get(Number(id) || 0);
+const entry = (id) => db.prepare('SELECT c.*, t.created_by, t.ticket_type, t.pipeline_id, t.pipeline_status FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id WHERE c.ticket_id = ? AND c.removed_at IS NULL').get(Number(id) || 0);
 
 /**
  * Set the ticket's contract term: its Expected Contract Term field (Pipedrive's, when the deal has one), as the text
@@ -133,12 +151,14 @@ r.put('/:ticketId', (req, res) => {
   res.json({ rows: list(req.user) });
 });
 
-/** Take a ticket off the list. One still in Under Evaluation belongs on it, so it stays. */
+/**
+ * Take a ticket off the list, whatever stage it's in. Its row is kept, marked removed with the stage it was in, so it stays
+ * off until it moves into a stage that belongs here or someone adds it again; its status and picked notes come back with it.
+ */
 r.delete('/:ticketId', (req, res) => {
   const c = entry(req.params.ticketId);
   if (!c) return res.status(404).json({ error: 'That ticket isn’t on the list' });
-  if (list(req.user).find((x) => x.ticket_id === c.ticket_id)?.evaluating) return res.status(400).json({ error: 'Tickets in Under Evaluation stay on this list' });
-  db.prepare('DELETE FROM c2c_tickets WHERE ticket_id = ?').run(c.ticket_id);
+  db.prepare("UPDATE c2c_tickets SET removed_at = datetime('now'), removed_stage = ? WHERE ticket_id = ?").run(stageKey(c), c.ticket_id);
   res.json({ rows: list(req.user) });
 });
 

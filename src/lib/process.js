@@ -8,26 +8,90 @@ export const PHASES = ['Qualify & Gate', 'Plan Response', 'Develop', 'Review & A
 /**
  * Staffing events: what a pipeline ticket is run through on its way to a bid (the BD process steps a solution architect is
  * staffed to), in the order they usually happen, each in its phase. `tag` is the process tag that goes with it; `gate` marks
- * the reviews where a decision is taken (proceed, no-bid, revise) and the price is considered. `fields` are the blocks of work
- * the event asks for, each written as text or answered with a document.
+ * the reviews where a decision is taken (proceed, no-bid, revise), and `pricing` adds the price considerations block.
+ * `fields` are the sections the deliverable or review is made of, as [key, label, hint], each written as text or answered with
+ * a document. They follow the Knexus playbook (the Streamlined Response Workflow's S-1 steps, the Gate Checklist, the CTO
+ * technical and CEO pricing approvals required before anything binding goes out) and the standard federal formats.
  */
 export const STAFFING_EVENTS = [
-  { type: 'RFI Response', tag: 'RFI', phase: 'Qualify & Gate', about: 'Our response to an RFI or sources sought',
-    fields: [['ask', 'What the customer is asking'], ['approach', 'Technical approach & capabilities'], ['past_performance', 'Relevant past performance'], ['questions', 'Gaps & questions back to the customer']] },
-  { type: 'White Paper', tag: 'Paper', phase: 'Qualify & Gate', about: 'A white paper shaping the requirement',
-    fields: [['problem', 'The customer’s problem'], ['solution', 'Proposed solution'], ['differentiators', 'Differentiators'], ['draft', 'Draft']] },
-  { type: 'Initial Gate Review', tag: 'Initial Gate', phase: 'Qualify & Gate', gate: true, about: 'Gate checklist presented; the SVP of Growth decides whether to pursue (S-1.3, S-1.4)',
-    fields: [['fit', 'Opportunity fit'], ['feasibility', 'Technical feasibility & gaps'], ['resources', 'Resources needed to pursue'], ['recommendation', 'Recommendation']] },
-  { type: 'Final Gate Review', tag: 'Final Gate', phase: 'Review & Approve', gate: true, about: 'Gold Team approval and final compliance check (S-1.12, S-1.13)',
-    fields: [['compliance', 'Compliance check'], ['solution', 'Solution summary'], ['risks', 'Risks & mitigations'], ['recommendation', 'Recommendation']] },
-  { type: 'Statement of Objectives', tag: 'SOO', phase: 'Plan Response', about: 'The outcomes the customer wants, for them to build a SOW or PWS from',
-    fields: [['objectives', 'Objectives'], ['approach', 'Approach'], ['assumptions', 'Assumptions & constraints']] },
-  { type: 'Statement of Work', tag: 'SOW', phase: 'Plan Response', about: 'Statement of work: scope, tasks and deliverables (S-1.7)',
-    fields: [['scope', 'Scope & tasks'], ['deliverables', 'Deliverables'], ['staffing', 'Staffing & labor categories'], ['assumptions', 'Assumptions']] },
-  { type: 'Rough Order of Magnitude', tag: 'ROM', phase: 'Develop', gate: true, about: 'Rough order of magnitude, pricing and Green Team (S-1.9)',
-    fields: [['basis', 'Scope basis'], ['labor', 'Labor mix & hours'], ['estimate', 'Cost estimate'], ['assumptions', 'Assumptions']] },
-  { type: 'Proposal', tag: 'Proposal', phase: 'Submit & Close', about: 'Response written, reviewed, submitted and archived (S-1.14)',
-    fields: [['technical', 'Technical volume'], ['management', 'Management volume'], ['staffing', 'Staffing plan'], ['compliance', 'Compliance matrix']] },
+  { type: 'RFI Response', tag: 'RFI', phase: 'Qualify & Gate', about: 'Our response to an RFI or Sources Sought notice, run on the Streamlined Response Workflow',
+    fields: [
+      ['instructions', 'Instructions & compliance', 'From the notice (S-1.6): due date and time, submission method, page limit, format, and every item the government asked for'],
+      ['company', 'Company information', 'UEI, CAGE code, NAICS codes, business size and socioeconomic status, contract vehicles (GSA MAS, BPAs, GWACs), point of contact'],
+      ['responses', 'Answers to the government’s questions', 'Each question as the RFI numbers it, answered in its order, inside the page limit'],
+      ['capability', 'Technical capability & approach', 'How Knexus meets the requirement: architecture, tools, how it runs in the customer’s IT environment (Solution Architect, S-1.2 and S-1.8)'],
+      ['past_performance', 'Relevant past performance', 'Contract, customer, value, period of performance and why it’s relevant to this requirement'],
+      ['shaping', 'Requirement shaping & acquisition recommendations', 'What we recommend to shape the RFP our way: set-aside, vehicle, NAICS, scope, evaluation approach'],
+    ] },
+  { type: 'White Paper', tag: 'Paper', phase: 'Qualify & Gate', about: 'A white paper shaping the requirement, solicited (BAA, CSO) or unsolicited',
+    fields: [
+      ['instructions', 'Call & evaluation criteria', 'The BAA, CSO or area of interest it answers, page limit, due date, and how it will be evaluated'],
+      ['need', 'Mission need & problem', 'What government leaders want and what end users actually need: the pain points found in discovery'],
+      ['approach', 'Proposed solution & technical approach', 'The solution and its architecture, and why it’s technically viable in the customer’s environment'],
+      ['innovation', 'Innovation & differentiators', 'What’s new, and why Knexus and not someone else'],
+      ['outcomes', 'Expected outcomes & measures of success', 'The mission results it delivers and how they’ll be measured'],
+      ['schedule_cost', 'Schedule, milestones & ROM cost', 'Phases, milestones and a rough order of magnitude cost'],
+      ['team', 'Team & qualifications', 'Key people, partners and the past performance that proves we can do it'],
+    ] },
+  { type: 'Initial Gate Review', tag: 'Initial Gate', phase: 'Qualify & Gate', gate: true, pricing: true,
+    about: 'Gate Checklist presented; the SVP of Growth decides whether to pursue (S-1.3, S-1.4)',
+    fields: [
+      ['opportunity', 'Opportunity summary', 'Customer, requirement, estimated value, vehicle, set-aside, key dates, and where it came from'],
+      ['customer', 'Customer access & intelligence', 'Who we know and how well; what leaders want and users need; what we’ve learned in capture'],
+      ['alignment', 'Capability alignment & feasibility', 'The Solution Architect’s read (S-1.2): what we can deliver, what’s proven, and the gaps'],
+      ['competition', 'Competition & win strategy', 'Incumbent, likely competitors, our discriminators and win themes, and why the PWIN is what it is'],
+      ['teaming', 'Teaming & gap resolution', 'Partners needed and how each gap closes; NDAs and teaming agreements to put in place'],
+      ['resources', 'Resources & B&P', 'Who has to work on it, the bid and proposal cost, and whether the schedule is achievable'],
+      ['recommendation', 'Recommendation', 'Proceed, No-Bid, or revise and resolve gaps (S-1.4), with the reasons'],
+    ] },
+  { type: 'Final Gate Review', tag: 'Final Gate', phase: 'Review & Approve', gate: true,
+    about: 'Gold Team approval and final compliance check before submission (S-1.12, S-1.13)',
+    fields: [
+      ['compliance', 'Compliance check', 'Compliance matrix complete: every instruction and evaluation factor addressed, format and page limits met (S-1.13)'],
+      ['red_team', 'Red Team findings & resolution', 'What the Red Team raised and how each finding was resolved (S-1.10, S-1.11)'],
+      ['technical_approval', 'CTO technical approval', 'Feasibility, architecture alignment, resource availability, WBS and delivery commitments, approved by the CTO'],
+      ['pricing_approval', 'CEO pricing approval', 'Labor rates, margins, business and contract terms and the overall risk posture, approved by the CEO'],
+      ['risks', 'Open risks & exceptions', 'Risks still open, assumptions and any exceptions taken to the terms'],
+    ] },
+  { type: 'Statement of Objectives', tag: 'SOO', phase: 'Plan Response', about: 'The outcomes the government wants, for offerors to build a SOW or PWS from',
+    fields: [
+      ['purpose', 'Purpose', 'Why the effort exists, in a sentence or two'],
+      ['background', 'Background & current environment', 'The mission, today’s systems and processes, and what’s driving the change'],
+      ['scope', 'Scope', 'What the effort covers, and what it doesn’t'],
+      ['objectives', 'Performance objectives', 'The outcomes wanted, stated as results rather than methods, each measurable'],
+      ['constraints', 'Operating constraints', 'Security, ATO and impact levels, data rights, the IT environment and policies the solution has to fit'],
+      ['period', 'Period & place of performance', 'How long, where, and any phases or option periods'],
+    ] },
+  { type: 'Statement of Work', tag: 'SOW', phase: 'Plan Response', about: 'Statement of work: the tasks, deliverables and terms the work is performed under (S-1.7)',
+    fields: [
+      ['background', 'Background', 'The customer, the mission and why the work is needed'],
+      ['scope', 'Scope', 'What’s in, what’s out'],
+      ['tasks', 'Tasks & requirements', 'Each task numbered, as the WBS breaks it down, with what has to be done'],
+      ['deliverables', 'Deliverables & schedule', 'Each deliverable, its format, and when it’s due'],
+      ['period', 'Period & place of performance', 'Base and option periods, and where the work happens (on site, remote)'],
+      ['gfi', 'Government-furnished information & equipment', 'Access, data, systems and equipment the government provides'],
+      ['security', 'Security & compliance requirements', 'Clearances, ATO and impact level, FedRAMP, data handling'],
+      ['acceptance', 'Acceptance criteria', 'How each deliverable is reviewed and accepted, and performance standards'],
+    ] },
+  { type: 'Rough Order of Magnitude', tag: 'ROM', phase: 'Develop', gate: true, about: 'Rough order of magnitude estimate, pricing and Green Team (S-1.9)',
+    fields: [
+      ['basis', 'Scope & basis of estimate', 'What’s being estimated, the source documents, and the method (analogy, parametric, bottom-up)'],
+      ['wbs', 'Work breakdown structure', 'The work broken into tasks, with the technical team’s estimate for each'],
+      ['labor', 'Labor categories & hours', 'Labor categories, hours by period, and the rates or rate source used'],
+      ['odcs', 'Licenses, cloud & other direct costs', 'Software licenses, Google Cloud consumption, hardware, travel and other direct costs'],
+      ['estimate', 'Estimate & range', 'The total by period and year, with a low–high range and how confident we are'],
+      ['assumptions', 'Assumptions & exclusions', 'What the estimate assumes and what it leaves out'],
+    ] },
+  { type: 'Proposal', tag: 'Proposal', phase: 'Submit & Close', about: 'The proposal, run on the full Proposal Management Workflow: written, reviewed, submitted and archived (S-1.14)',
+    fields: [
+      ['compliance', 'Compliance matrix', 'Every Section L instruction and Section M evaluation factor mapped to where the proposal answers it (Proposal Manager)'],
+      ['executive', 'Executive summary & win themes', 'The customer’s need, our solution and why we win, in the evaluator’s words; written last'],
+      ['technical', 'Technical volume', 'Understanding of the requirement, technical approach and architecture, innovation and risk mitigation'],
+      ['management', 'Management volume', 'Program management, organization, staffing plan, transition, quality control and schedule'],
+      ['key_personnel', 'Key personnel & resumes', 'Who fills each key role, and resumes matched to the SOW requirements'],
+      ['past_performance', 'Past performance volume', 'Relevant contracts as the RFP asks for them: scope, size, recency, customer references'],
+      ['price', 'Price / cost volume', 'Pricing by CLIN and period, the basis of estimate and pricing narrative, with CEO pricing approval'],
+    ] },
 ];
 // Milestones recorded before staffing events replaced them. They keep their type; new ones can't be made.
 const EARLIER = [
@@ -36,6 +100,21 @@ const EARLIER = [
   { type: 'Color Team Review', phase: 'Review & Approve', gate: true, about: 'Red Team review and feedback incorporated (S-1.10, S-1.11)' },
 ].map((m) => ({ ...m, earlier: true, fields: [] }));
 export const MILESTONES = [...STAFFING_EVENTS, ...EARLIER];
+
+/**
+ * Sections staffing events had before they were replaced with the real ones (2026-11), and where their text goes now. A key
+ * mapped to null had no match: its text moves into the event's Request, under the old section's name.
+ */
+export const EARLIER_FIELDS = {
+  'RFI Response': { ask: ['responses'], approach: ['capability'], past_performance: ['past_performance'], questions: [null, 'Gaps & questions back to the customer'] },
+  'White Paper': { problem: ['need'], solution: ['approach'], differentiators: ['innovation'], draft: [null, 'Draft'] },
+  'Initial Gate Review': { fit: ['opportunity'], feasibility: ['alignment'], resources: ['resources'], recommendation: ['recommendation'] },
+  'Final Gate Review': { compliance: ['compliance'], solution: [null, 'Solution summary'], risks: ['risks'], recommendation: [null, 'Recommendation'] },
+  'Statement of Objectives': { objectives: ['objectives'], approach: [null, 'Approach'], assumptions: ['constraints'] },
+  'Statement of Work': { scope: ['scope'], deliverables: ['deliverables'], staffing: ['tasks'], assumptions: [null, 'Assumptions'] },
+  'Rough Order of Magnitude': { basis: ['basis'], labor: ['labor'], estimate: ['estimate'], assumptions: ['assumptions'] },
+  'Proposal': { technical: ['technical'], management: ['management'], staffing: ['key_personnel'], compliance: ['compliance'] },
+};
 /** The staffing events that can be added. */
 export const PROCESS_TYPES = STAFFING_EVENTS.map((m) => m.type);
 /** Every type a staffing event can have, the earlier milestones' included. */

@@ -17,7 +17,7 @@ import '../sample/registry.js'; // sample_rows, so sample tickets aren't moved o
 import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields } from '../services/pipedriveFields.js';
 import { PROCESS_TYPES, DECISIONS, cleanReviews, cleanFields, milestoneOf } from '../../src/lib/process.js';
-import { addStaffingEvent, queueFromTags, isCriticality, tagTicket } from '../staffing.js';
+import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTags } from '../staffing.js';
 import { NEXT_STEP_SQL } from '../activities.js';
 import { canEditTicket, ownerOnlyMessage } from '../../src/lib/ticketAccess.js';
 import { focusTickets } from '../focus.js';
@@ -667,6 +667,7 @@ const processRow = (id) => db.prepare('SELECT * FROM ticket_process_steps WHERE 
 const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
 
 export function listProcess(ticketId) {
+  staffFromTags(ticketId); // a process tag on the ticket stands for an open event
   const files = db.prepare(`SELECT f.*, u.first_name, u.last_name FROM ticket_files f LEFT JOIN users u ON u.id = f.uploaded_by
     WHERE f.ticket_id = ? AND f.process_step_id IS NOT NULL ORDER BY f.created_at, f.id`).all(ticketId);
   return db.prepare(`SELECT p.*, a.first_name, a.last_name, e.first_name AS e_first_name, e.last_name AS e_last_name
@@ -704,7 +705,8 @@ const OWNER_KEYS = ['step_type', 'step_date', 'criticality', 'decision'];
 /**
  * Body may hold step_type, step_date (due date), criticality, decision (Proceed, Revise, No-Bid or none), reviews, notes,
  * pricing, fields ({ key: text }) and done. Anyone can write the work (fields, reviews, notes, pricing) and mark it done, so
- * solution architects answer from the SAC list; the rest is the ticket owner's or an admin's.
+ * solution architects answer from the SAC list; the rest is the ticket owner's or an admin's. Marking it done takes its
+ * process tag off the ticket (and the event off the SAC list); reopening it puts the tag back.
  */
 r.put('/process/:pid', (req, res) => {
   const p = processRow(req.params.pid);
@@ -735,18 +737,19 @@ r.put('/process/:pid', (req, res) => {
     done ? (p.completed_at ? p.completed_by : req.user.id) : null,
     req.user.id, p.id,
   );
-  if (type !== p.step_type) tagTicket(p.ticket_id, milestoneOf(type).tag);
+  if (type !== p.step_type || done !== !!p.completed_at) [...new Set([p.step_type, type])].forEach((k) => settleTag(p.ticket_id, k));
   touch(p.ticket_id);
   recordTicketUpdate(req.user, t, `Staffing event: ${type}`);
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
-/** Its documents stay on the ticket. */
+/** Its documents stay on the ticket; its process tag comes off, unless another open event of its type is there. */
 r.delete('/process/:pid', ownerOnly(ofStep), (req, res) => {
   const p = processRow(req.params.pid);
   if (!p) return res.status(404).json({ error: 'Staffing event not found' });
   db.prepare('DELETE FROM ticket_process_steps WHERE id = ?').run(p.id);
   db.prepare("DELETE FROM work_log WHERE kind = 'process' AND ref_id = ?").run(p.id);
+  settleTag(p.ticket_id, p.step_type);
   touch(p.ticket_id);
   recordTicketUpdate(req.user, ticketRow(p.ticket_id), `Staffing event removed: ${p.step_type}`);
   res.json({ steps: listProcess(p.ticket_id) });

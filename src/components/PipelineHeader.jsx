@@ -43,7 +43,8 @@ export default function PipelineHeader({ title, subtitle, scope, onScope, onSett
   const chips = picked.length > 0 || tags?.length > 0;
   return (
     <div className="space-y-3 border-b border-slate-200 bg-white px-8 pt-8 pb-4 print:hidden">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      {/* The controls line up with the title, wherever a long subtitle wraps to. */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1 basis-64">
           <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
           {subtitle && <p className="mt-0.5 text-sm text-slate-500">{subtitle}</p>}

@@ -377,7 +377,7 @@ function ProcessStep({ step: s, open, onToggle, byId, userOptions, onDirty, appl
 }
 
 /** One block of an event's work: a big area to write in, and the documents that answer it. */
-function WorkBlock({ id, label, value, onChange, files, onUpload, placeholder, rows = 6 }) {
+function WorkBlock({ id, label, hint, value, onChange, files, onUpload, placeholder, rows = 6 }) {
   const [uploading, setUploading] = useState(false);
   const ref = useRef(null);
   const upload = async (file) => {
@@ -388,7 +388,7 @@ function WorkBlock({ id, label, value, onChange, files, onUpload, placeholder, r
   return (
     <section className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <label className="text-xs font-semibold text-slate-700" htmlFor={id}>{label}</label>
+        <label className="text-xs font-semibold text-slate-700" htmlFor={id} title={hint}>{label}</label>
         {onUpload && (
           <label className={`btn cursor-pointer px-2 py-0.5 text-[11px] ${uploading ? 'pointer-events-none opacity-60' : ''}`} title={`Answer “${label}” with a document`}>
             {uploading ? <><Loader2 size={11} className="animate-spin" /> Uploading…</> : <><Upload size={11} /> Document</>}
@@ -505,12 +505,12 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
       <WorkBlock id={`ps-notes-${s.id}`} label="Request" rows={4} value={form.notes} onChange={(v) => set('notes', v)}
         placeholder="What's needed from the solution architect: the ask, the customer's deadline, open questions…" />
 
-      {def.fields.map(([key, label]) => (
-        <WorkBlock key={key} id={`ps-f-${s.id}-${key}`} label={label} value={form.fields[key] || ''} onChange={(v) => setField(key, v)}
-          files={s.files.filter((f) => f.field === key)} onUpload={(file) => upload(file, key)} placeholder="Write it here, or answer with a document" />
+      {def.fields.map(([key, label, hint]) => (
+        <WorkBlock key={key} id={`ps-f-${s.id}-${key}`} label={label} hint={hint} value={form.fields[key] || ''} onChange={(v) => setField(key, v)}
+          files={s.files.filter((f) => f.field === key)} onUpload={(file) => upload(file, key)} placeholder={`${hint || 'Write it here'}. Or answer with a document.`} />
       ))}
 
-      {def.gate && (
+      {def.pricing && (
         <WorkBlock id={`ps-pricing-${s.id}`} label="Price considerations" rows={3} value={form.pricing} onChange={(v) => set('pricing', v)}
           placeholder="Initial price, ROM, price-to-win, margin, B&P budget…" />
       )}

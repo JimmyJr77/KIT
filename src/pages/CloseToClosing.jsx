@@ -146,7 +146,7 @@ export default function CloseToClosing() {
         </div>
         <p className="text-[10px] text-slate-600">{summaryLine}</p>
       </div>
-      <PipelineHeader title="Close to closing" subtitle="Every ticket in Under Evaluation, plus any you add. A ticket stays here when its deal closes."
+      <PipelineHeader title="Close to closing" subtitle="Every ticket in Under Evaluation, plus any you add. A ticket stays here when its deal closes, unless you take it off."
         scope={scope} onScope={setScope}
         add={<AddExistingButton title="Add a ticket to Close to closing" skip={listed} onPick={(t) => run(() => api.post('/c2c', { ticket_id: t.id }))} />}
         search={{ value: q, onChange: setQ }}
@@ -245,11 +245,9 @@ function Row({ row: r, selected, onOpen, run }) {
       </td>
       <td className="px-3 py-3 print:px-1.5 print:py-1.5"><Notes row={r} /></td>
       <td className="py-3 pr-2 print:hidden" onClick={stop}>
-        {!r.evaluating && (
-          <button type="button" aria-label={`Take ${r.title} off the list`} title="Take off this list"
-            onClick={() => confirm(`Take “${r.title}” off Close to closing? The ticket itself isn’t changed.`) && run(() => api.del(`/c2c/${r.ticket_id}`))}
-            className="rounded p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600"><X size={14} /></button>
-        )}
+        <button type="button" aria-label={`Take ${r.title} off the list`} title="Take off this list"
+          onClick={() => confirm(`Take “${r.title}” off Close to closing? The ticket itself isn’t changed. It comes back if it moves into a stage that belongs here, or if you add it again.`) && run(() => api.del(`/c2c/${r.ticket_id}`))}
+          className="rounded p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600"><X size={14} /></button>
       </td>
     </tr>
   );

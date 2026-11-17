@@ -1,13 +1,13 @@
 // SAC (Solution Architect Coordination): every open staffing event on a pipeline ticket, as one list for solution architects
 // to work down. Events join when a ticket is staffed (the ticket pane's Staff Ticket, a drop on a board bucket, or a process
-// tag) and leave when marked done. Each person orders the events on their own tickets; team leads (and admins) order the
+// tag, including one that came in from Pipedrive) and leave when marked done. Each person orders the events on their own tickets; team leads (and admins) order the
 // master list everyone sees.
 import { Router } from 'express';
 import { db, json } from '../db.js';
 import { reportStager, listPipelines } from '../pipelines.js';
 import { canEditTicket } from '../../src/lib/ticketAccess.js';
 import { ticketEditDenied } from './tickets.js';
-import { addStaffingEvent } from '../staffing.js';
+import { addStaffingEvent, staffFromTags } from '../staffing.js';
 import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
 
 const r = Router();
@@ -21,6 +21,7 @@ export const ranksMaster = (user) => user.role === 'admin' || !!db.prepare("SELE
 const minePredicate = 't.created_by = @me OR t.bd_director_id = @me';
 
 function list(user, { done = false } = {}) {
+  staffFromTags(); // a ticket carrying a process tag is staffed for it
   const rows = db.prepare(`SELECT p.*, t.opportunity_title, t.organization, t.pipeline_status, t.pipeline_id, t.labels, t.created_by AS owner_id,
       t.bd_director_id, t.territory_id, t.value, t.deal_status, o.first_name AS o_first, o.last_name AS o_last, d.first_name AS d_first, d.last_name AS d_last,
       tr.name AS territory_name, mr.position AS my_rank, (${minePredicate}) AS mine

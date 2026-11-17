@@ -3,7 +3,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { PROCESS_TAG_NAMES } from '../src/lib/process.js';
+import { PROCESS_TAG_NAMES, STAFFING_EVENTS, EARLIER_FIELDS } from '../src/lib/process.js';
 
 const dbPath = process.env.DATABASE_PATH || path.resolve('server/data/kit.db');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -1889,6 +1889,11 @@ CREATE TABLE IF NOT EXISTS marketing_leads (
 // Several notes can be picked for a C2C row: note_ids is a JSON array of ticket_comments ids (it replaces note_id, kept for
 // rows picked before). Empty or null: the row shows the latest note.
 addColumn('c2c_tickets', 'note_ids', 'TEXT');
+// A ticket taken off the C2C list keeps its row, marked removed, so it isn't pulled straight back in. removed_stage is the
+// stage it was in then ("pipeline id:stage"), cleared once it's seen anywhere else: it returns when it reaches a stage that
+// belongs on the list other than by still sitting in that one, or when someone adds it again.
+addColumn('c2c_tickets', 'removed_at', 'TEXT');
+addColumn('c2c_tickets', 'removed_stage', 'TEXT');
 addColumn('meetings', 'objectives', 'TEXT'); // what we want out of the meeting
 // ---- Staffing events (ticket_process_steps, once called milestones) and the SAC list (Solution Architect Coordination).
 // step_date is the event's due date. criticality: critical | moderate | queued | available. fields: JSON of the event's blocks
@@ -1914,6 +1919,33 @@ addColumn('meetings', 'objectives', 'TEXT'); // what we want out of the meeting
       position INTEGER NOT NULL,
       PRIMARY KEY (user_id, step_id)
     );`);
+  // Staffing events' sections were replaced with the real ones: text written under a section that's gone moves to the section
+  // that took its place (after anything already there), or into the Request under the old section's name; documents follow
+  // it, or become the event's other documents.
+  const current = new Map(STAFFING_EVENTS.map((e) => [e.type, new Set(e.fields.map(([k]) => k))]));
+  const stale = db.prepare("SELECT id, step_type, fields, notes FROM ticket_process_steps WHERE fields IS NOT NULL AND fields NOT IN ('', '{}')").all()
+    .filter((p) => current.has(p.step_type) && Object.keys(JSON.parse(p.fields || '{}')).some((k) => !current.get(p.step_type).has(k)));
+  const moveFiles = db.prepare('UPDATE ticket_files SET process_field = ? WHERE process_step_id = ? AND process_field = ?');
+  db.transaction(() => {
+    stale.forEach((p) => {
+      const fields = JSON.parse(p.fields);
+      const map = EARLIER_FIELDS[p.step_type] || {};
+      let notes = p.notes || '';
+      Object.keys(fields).filter((k) => !current.get(p.step_type).has(k)).forEach((k) => {
+        const [to, label] = map[k] || [null, k];
+        const text = String(fields[k] || '').trim();
+        delete fields[k];
+        if (!text) return;
+        if (to) fields[to] = fields[to] ? `${fields[to]}\n\n${text}` : text;
+        else notes = `${notes ? `${notes}\n\n` : ''}${label}:\n${text}`;
+      });
+      db.prepare('UPDATE ticket_process_steps SET fields = ?, notes = ? WHERE id = ?').run(JSON.stringify(fields), notes, p.id);
+    });
+    // Documents answering a section that's gone (whether or not the event had text).
+    db.prepare('SELECT DISTINCT f.process_step_id AS id, f.process_field AS field, p.step_type FROM ticket_files f JOIN ticket_process_steps p ON p.id = f.process_step_id WHERE f.process_field IS NOT NULL').all()
+      .filter((f) => current.has(f.step_type) && !current.get(f.step_type).has(f.field))
+      .forEach((f) => moveFiles.run(EARLIER_FIELDS[f.step_type]?.[f.field]?.[0] ?? null, f.id, f.field));
+  })();
 }
 
 /** Whether an admin has stopped people creating pipeline tickets in KIT. Deals pulled from Pipedrive still come in. */

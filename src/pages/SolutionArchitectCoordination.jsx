@@ -211,11 +211,11 @@ function Row({ row: r, n, draggable, selected, onOpen, run }) {
       </td>
       <td className="px-3 py-3">
         <ul className="space-y-0.5">
-          {def.fields.map(([key, label]) => {
+          {def.fields.map(([key, label, hint]) => {
             const text = r.fields[key];
             const docs = r.files.filter((f) => f.field === key).length;
             return (
-              <li key={key} className={`flex items-center gap-1.5 text-xs ${text || docs ? 'text-slate-700' : 'text-slate-400'}`} title={text ? text.slice(0, 300) : undefined}>
+              <li key={key} className={`flex items-center gap-1.5 text-xs ${text || docs ? 'text-slate-700' : 'text-slate-400'}`} title={text ? text.slice(0, 300) : hint}>
                 {text || docs ? <Check size={11} className="shrink-0 text-emerald-600" /> : <Circle size={9} className="mx-px shrink-0" />}
                 <span className="truncate">{label}</span>
                 {text && <PenLine size={10} className="shrink-0 text-slate-400" />}

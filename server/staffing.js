@@ -1,9 +1,10 @@
 // Staffing events on a pipeline ticket (ticket_process_steps): RFI responses, white papers, gate reviews, SOO, SOW, ROM and
 // proposals a solution architect is staffed to. Each goes with a process tag, and every open one is on the SAC list
-// (Solution Architect Coordination). Making one tags the ticket; tagging a ticket with a process tag makes one.
+// (Solution Architect Coordination). Making one tags the ticket; tagging a ticket with a process tag makes one. Its tag
+// comes off the ticket when the event is marked done or deleted, unless another open event of that type still needs it.
 import { db, json } from './db.js';
 import { recordWork } from './worklog.js';
-import { milestoneOf, eventForTag, cleanReviews, CRITICALITY, DEFAULT_CRITICALITY } from '../src/lib/process.js';
+import { milestoneOf, eventForTag, cleanReviews, CRITICALITY, DEFAULT_CRITICALITY, PROCESS_TAG_NAMES } from '../src/lib/process.js';
 
 export const isCriticality = (k) => CRITICALITY.some((c) => c.key === k);
 
@@ -18,6 +19,27 @@ export function tagTicket(ticketId, tag) {
   db.prepare('UPDATE tickets SET labels = ?, labels_pending = CASE WHEN pipedrive_id IS NULL THEN labels_pending ELSE 1 END WHERE id = ?').run(json.str([...labels, tag]), t.id);
 }
 
+/** Take `tag` off the ticket if it's there. A ticket from Pipedrive waits for an admin to send the change. */
+function untagTicket(ticketId, tag) {
+  const t = db.prepare('SELECT id, labels FROM tickets WHERE id = ?').get(ticketId);
+  if (!t || !tag) return;
+  const labels = json.parse(t.labels, []);
+  const kept = labels.filter((l) => String(l).toLowerCase() !== tag.toLowerCase());
+  if (kept.length === labels.length) return;
+  db.prepare('UPDATE tickets SET labels = ?, labels_pending = CASE WHEN pipedrive_id IS NULL THEN labels_pending ELSE 1 END WHERE id = ?').run(json.str(kept), t.id);
+}
+
+/**
+ * After a staffing event of `type` is marked done, reopened, deleted or changed to or from that type: the ticket carries the
+ * type's process tag while it has an open event of that type, and not otherwise.
+ */
+export function settleTag(ticketId, type) {
+  const tag = milestoneOf(type)?.tag;
+  if (!tag) return; // an earlier milestone, which has no tag
+  if (openOf(ticketId, type)) tagTicket(ticketId, tag);
+  else untagTicket(ticketId, tag);
+}
+
 /** The open (not done) staffing event of `type` on the ticket, if there is one. */
 const openOf = (ticketId, type) => db.prepare('SELECT id FROM ticket_process_steps WHERE ticket_id = ? AND step_type = ? AND completed_at IS NULL ORDER BY id DESC').get(ticketId, type);
 
@@ -25,14 +47,15 @@ const openOf = (ticketId, type) => db.prepare('SELECT id FROM ticket_process_ste
  * Make a staffing event of `type` on the ticket and tag the ticket for it. With `reuse`, an open one of that type already
  * there is used instead of a second. Returns { id, created }.
  */
-export function addStaffingEvent(user, ticketId, type, { dueDate = null, criticality = DEFAULT_CRITICALITY, reuse = false } = {}) {
+export function addStaffingEvent(user, ticketId, type, { dueDate = null, criticality = DEFAULT_CRITICALITY, reuse = false, quiet = false } = {}) {
   const def = milestoneOf(type);
   return db.transaction(() => {
     const existing = reuse && openOf(ticketId, type);
     tagTicket(ticketId, def.tag);
     if (existing) return { id: existing.id, created: false };
     const id = db.prepare(`INSERT INTO ticket_process_steps (ticket_id, step_type, step_date, reviews, fields, criticality, author_id)
-      VALUES (?, ?, ?, ?, '{}', ?, ?)`).run(ticketId, type, dueDate, json.str(cleanReviews({})), isCriticality(criticality) ? criticality : DEFAULT_CRITICALITY, user.id).lastInsertRowid;
+      VALUES (?, ?, ?, ?, '{}', ?, ?)`).run(ticketId, type, dueDate, json.str(cleanReviews({})), isCriticality(criticality) ? criticality : DEFAULT_CRITICALITY, user?.id ?? null).lastInsertRowid;
+    if (quiet) return { id, created: true }; // made from a tag that was already there: nobody's work, and the ticket isn't touched
     recordWork(user, { kind: 'process', ticket_id: ticketId, ref_id: id, summary: type });
     db.prepare("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").run(ticketId);
     return { id, created: true };
@@ -47,4 +70,18 @@ export function queueFromTags(user, ticketId, before, after) {
   const had = new Set(json.parse(before, []).map((l) => String(l).toLowerCase()));
   json.parse(after, []).filter((l) => !had.has(String(l).toLowerCase())).map(eventForTag).filter(Boolean)
     .forEach((def) => addStaffingEvent(user, ticketId, def.type, { reuse: true }));
+}
+
+/**
+ * A process tag on a ticket means it's staffed, however the tag got there (from Pipedrive, or before staffing events
+ * existed): every open pipeline ticket carrying one, with no open event of that type, gets the event, queued under the
+ * ticket's owner, and so goes on the SAC list. With `ticketId`, only that ticket is looked at. Run before events are listed.
+ */
+export function staffFromTags(ticketId = null) {
+  const tagged = db.prepare(`SELECT t.id, t.labels, t.created_by FROM tickets t
+    WHERE t.ticket_type = 'bid' AND t.archive_set_id IS NULL AND t.archived_at IS NULL AND t.deal_status = 'open'
+      AND (${PROCESS_TAG_NAMES.map(() => 'lower(t.labels) LIKE ?').join(' OR ')})${ticketId ? ' AND t.id = ?' : ''}`)
+    .all(...PROCESS_TAG_NAMES.map((n) => `%"${n.toLowerCase()}"%`), ...(ticketId ? [ticketId] : []));
+  tagged.forEach((t) => json.parse(t.labels, []).map(eventForTag).filter(Boolean)
+    .forEach((def) => addStaffingEvent(t.created_by ? { id: t.created_by } : null, t.id, def.type, { reuse: true, quiet: true })));
 }
