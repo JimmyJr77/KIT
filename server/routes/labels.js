@@ -7,7 +7,7 @@ import { db, tagCategory, PROCESS_TAGS } from '../db.js';
 const r = Router();
 export const LABEL_COLORS = ['green', 'blue', 'red', 'yellow', 'purple', 'gray', 'orange', 'brown', 'pink', 'dark-gray'];
 
-// Process tags in their own order (RFI, White Paper, SOW, RFP), then the lead sources, then everything else.
+// Process tags in their own order (RFI, Paper, Initial Gate … Proposal), then the lead sources, then everything else.
 const ORDER = { process: 0, source: 1, other: 2 };
 const list = () => db.prepare(`SELECT l.id, l.name, l.color, l.pipedrive_id, l.kind,
     (SELECT COUNT(*) FROM tickets t, json_each(CASE WHEN json_valid(t.labels) THEN t.labels ELSE '[]' END) j WHERE j.value = l.name COLLATE NOCASE) AS ticket_count

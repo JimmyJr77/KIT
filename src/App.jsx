@@ -22,6 +22,7 @@ import Backups from './pages/Backups.jsx';
 import DoneTickets from './pages/DoneTickets.jsx';
 import ProcessView from './pages/ProcessView.jsx';
 import CloseToClosing from './pages/CloseToClosing.jsx';
+import SolutionArchitectCoordination from './pages/SolutionArchitectCoordination.jsx';
 import ClosedDeals from './pages/ClosedDeals.jsx';
 import LessonsLearned from './pages/LessonsLearned.jsx';
 import Retros from './pages/Retros.jsx';
@@ -77,6 +78,7 @@ export default function App() {
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/pipeline/process" element={<ProcessView />} />
           <Route path="/pipeline/c2c" element={<CloseToClosing />} />
+          <Route path="/pipeline/sac" element={<SolutionArchitectCoordination />} />
           <Route path="/delivery" element={<Delivery />} />
           <Route path="/closed-deals" element={<ClosedDeals />} />
           <Route path="/crm" element={<Crm />} />

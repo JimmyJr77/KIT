@@ -5,7 +5,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { allStatuses } from '../pipelines.js';
-import { PROCESS_TYPES } from '../../src/lib/process.js';
 import { geminiConfigured } from '../services/gemini.js';
 import { askAboutLessons, choosePeriod, dateOrNull, generateTrendReport, inRange, latestTrendReport, lessonDate, storeTrendReport, trendStats } from '../services/lessonInsights.js';
 
@@ -16,7 +15,8 @@ const ACTIONS = ['continue', 'change'];
 const SOURCES = ['manual', 'retro'];
 const TAG_GROUPS = ['Pipeline stages', 'Major milestones', 'Areas', 'Added by users'];
 
-const MILESTONES = [...new Set([...PROCESS_TYPES.map((t) => (t === 'Final Gate Review' ? 'Final/Follow-on Gate Review' : t)), 'SOW', 'PO'])];
+// Lesson tags keep the milestone names lessons were filed under before staffing events renamed some of them.
+const MILESTONES = ['RFI', 'RFI Response', 'White Paper', 'Initial Gate Review', 'RFP', 'SOW', 'ROM', 'Color Team Review', 'Final/Follow-on Gate Review', 'Proposal', 'PO'];
 const AREAS = ['KIT', 'Software', 'Admin'];
 
 const text = (v, max = 4000) => String(v ?? '').trim().slice(0, max);

@@ -122,7 +122,7 @@ function TicketStrip({ ticket: t, pwin, onOpenTool }) {
       </div>
       {onOpenTool && (
         <div className="flex shrink-0 gap-1.5">
-          <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => onOpenTool('process')}><Flag size={13} /> Add or edit milestones</button>
+          <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => onOpenTool('process')}><Flag size={13} /> Add or edit staffing events</button>
           <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => onOpenTool(null)}><ExternalLink size={13} /> Open ticket</button>
         </div>
       )}
@@ -376,7 +376,7 @@ function milestoneParts(m, data, onOpenTool, onChanged) {
             {m.decision
               ? <span className={`rounded px-2 py-0.5 text-xs font-semibold shadow-sm ${DECISION_STYLE[m.decision]}`}>{m.decision}</span>
               : <span className="text-slate-400">Not recorded</span>}
-            {data.strategy.pwin && <span className="ml-auto rounded bg-brand-50 px-1.5 py-px font-bold text-brand-700 shadow-sm tabular-nums" title="As rated now; the assessment isn't kept per milestone">PWIN {data.strategy.pwin.score}%</span>}
+            {data.strategy.pwin && <span className="ml-auto rounded bg-brand-50 px-1.5 py-px font-bold text-brand-700 shadow-sm tabular-nums" title="As rated now; the assessment isn't kept per staffing event">PWIN {data.strategy.pwin.score}%</span>}
           </div>
         )}
         {approvers.length > 0 && (
@@ -403,7 +403,7 @@ function milestoneParts(m, data, onOpenTool, onChanged) {
           <div>
             <Heading icon={Scale}>Bid and win assessment</Heading>
             <div className="mt-1"><Assessment strategy={data.strategy} compact /></div>
-            <p className="mt-1 text-[10px] text-slate-400">As rated now; the assessment isn't kept per milestone.</p>
+            <p className="mt-1 text-[10px] text-slate-400">As rated now; the assessment isn't kept per staffing event.</p>
           </div>
         )}
         <div>
@@ -473,7 +473,7 @@ function Documents({ milestone: m, onChanged }) {
   return (
     <div>
       <Heading icon={FileText} action={!readOnly && (
-        <label className={`btn cursor-pointer px-2 py-0.5 text-[11px] ${uploading ? 'pointer-events-none opacity-60' : ''}`} title="Attach a document to this milestone">
+        <label className={`btn cursor-pointer px-2 py-0.5 text-[11px] ${uploading ? 'pointer-events-none opacity-60' : ''}`} title="Attach a document to this staffing event">
           {uploading ? <><Loader2 size={11} className="animate-spin" /> Uploading…</> : <><Upload size={11} /> Upload</>}
           <input ref={fileRef} type="file" className="sr-only" onChange={(e) => upload(e.target.files[0])} />
         </label>

@@ -181,8 +181,8 @@ export function generateSample({ production = process.env.NODE_ENV === 'producti
       done_at: k.done ? ago(int(0, 5)) : null,
     }));
     if (['Capture', 'Proposal', 'Under Evaluation'].includes(t.status)) {
-      ['RFI', 'Initial Gate Review', 'RFP'].slice(0, int(1, 3)).forEach((step_type, i) => insert('ticket_process_steps', {
-        ticket_id: t.id, step_type, step_date: addDays(today, -60 + i * 20), author_id: t.owner.id,
+      ['RFI Response', 'Initial Gate Review', 'Statement of Work'].slice(0, int(1, 3)).forEach((step_type, i) => insert('ticket_process_steps', {
+        ticket_id: t.id, step_type, step_date: addDays(today, -40 + i * 25), completed_at: i < 2 ? addDays(today, -40 + i * 25) : null, author_id: t.owner.id,
         reviews: json.str({ technical: { people: some(onTeam('Technical Solutioning'), 2).map((p) => p.id), notes: 'Architecture approach approved.' },
           pricing: { people: [], notes: '' }, strategy: { people: [t.owner.id], notes: '' }, support: { people: [], notes: '' } }),
       }));

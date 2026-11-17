@@ -18,6 +18,7 @@ export function PipelineViewToggle() {
       <NavLink to="/pipeline" end className={link}>Pipeline</NavLink>
       <NavLink to="/pipeline/process" className={link}>Process</NavLink>
       <NavLink to="/pipeline/c2c" className={link} title="Close to closing">C2C</NavLink>
+      <NavLink to="/pipeline/sac" className={link} title="Solution Architect Coordination">SAC</NavLink>
     </nav>
   );
 }
@@ -40,7 +41,7 @@ export default function ProcessView() {
   return (
     <div className="flex h-full flex-col">
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
-        <PageHeader title="Process" subtitle="One pipeline ticket, left to right: the lead, the strategy, the shaping work and each milestone.">
+        <PageHeader title="Process" subtitle="One pipeline ticket, left to right: the lead, the strategy, the shaping work and each staffing event.">
           <PipelineViewToggle />
         </PageHeader>
         <TicketSearch value={ticketId ? picked : null} onChange={choose} />
@@ -51,7 +52,7 @@ export default function ProcessView() {
         <div className="flex flex-1 items-center justify-center bg-slate-50 p-8">
           <div className="max-w-md text-center text-slate-400">
             <Workflow size={32} className="mx-auto mb-3 text-slate-300" />
-            <p className="text-sm">Search for a pipeline ticket above to see its process: who generated the lead, the strategy behind it, what shaped it, and every milestone with who was there and who approved.</p>
+            <p className="text-sm">Search for a pipeline ticket above to see its process: who generated the lead, the strategy behind it, what shaped it, and every staffing event with who was there and who approved.</p>
           </div>
         </div>
       )}

@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
 // With the board in priority order a ticket is dropped on another ticket (to go just above it) as well as on a column.
 const CARD = 'card:';
+// While a ticket is dragged, the header becomes buckets: dropping on one staffs the ticket for that event (see BucketBar).
+const BUCKET = 'bucket:';
 const cardFirst = (args) => { const hits = pointerWithin(args); const cards = hits.filter((h) => String(h.id).startsWith(CARD)); return cards.length ? cards : hits; };
-import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp, Star, Trophy, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp, Star, Trophy, ChevronsLeft, ChevronsRight, UserPlus, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullName, fullStamp, ticketKind } from '../lib/format.js';
@@ -19,6 +21,7 @@ import PwinSettings from './PwinSettings.jsx';
 import { LabelList, TagFilter, byTags, usePriorityTagHidden } from '../components/Labels.jsx';
 import { PipelineViewToggle } from './ProcessView.jsx';
 import NextStepBadge from '../components/NextStepBadge.jsx';
+import { bucketsFor } from '../lib/process.js';
 
 const NO_STAGE = '__none__';
 // How wide the board's columns (and so its tickets) are: each person's own choice, in the board's settings, kept in this
@@ -68,6 +71,8 @@ export default function Pipeline() {
   const meta = useApi('/priorities/meta');
   const users = useApi('/users');
   const territories = useApi('/territories');
+  const sacMeta = useApi('/sac/meta');
+  const [staffed, setStaffed] = useState(''); // what the last drop on a bucket did
   const [scope, setScope] = useState('all');
   const [filters, setFilters] = useState([]); // "o:<user id>" for account owners, "t:<territory id>" for territories
   const [q, setQ] = useState('');
@@ -158,11 +163,27 @@ export default function Pipeline() {
   const ranking = sort.key === 'priority'; // tickets are dragged up and down their column to set the order
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
 
+  // The stage reports count a ticket's stage as (a KIT-added stage blended into Capture offers Capture's buckets).
+  const reportStage = (t) => sacMeta.data?.stages?.[`${keyOf(t.pipeline_id)}|${t.pipeline_status}`] ?? t.pipeline_status;
+  const staff = async (t, type) => {
+    setError('');
+    setStaffed('');
+    try {
+      const d = await api.post('/sac', { ticket_id: t.id, step_type: type });
+      setTickets((xs) => xs.map((x) => (x.id === t.id ? { ...x, labels: d.labels } : x)));
+      setStaffed(d.created ? `“${t.opportunity_title}” is staffed for ${type}: tagged and on the SAC list.` : `“${t.opportunity_title}” already has an open ${type} on the SAC list.`);
+    } catch (e) {
+      setError(`Couldn’t staff “${t.opportunity_title}”: ${e.message}`);
+    }
+  };
+
   const onDragEnd = async ({ active, over }) => {
     setDragId(null);
     if (!over) return;
     const t = tickets.find((x) => x.id === active.id);
     if (!t) return;
+    // Dropped on a bucket: the ticket keeps its stage and is staffed for that event.
+    if (String(over.id).startsWith(BUCKET)) { staff(t, String(over.id).slice(BUCKET.length)); return; }
     // Dropped on a ticket (priority order only): into that ticket's column, just above it. Dropped on a column: at its end.
     const onCard = String(over.id).startsWith(CARD) ? Number(String(over.id).slice(CARD.length)) : null;
     if (onCard === t.id) return;
@@ -196,8 +217,11 @@ export default function Pipeline() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
-        <PageHeader title="BD Pipeline" subtitle="Pipeline tickets by stage. Drag a ticket to move it.">
+      <DndContext sensors={sensors} collisionDetection={ranking ? cardFirst : pointerWithin}
+        onDragStart={({ active }) => { setDragId(active.id); setStaffed(''); }} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
+      <div className="relative space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
+        {dragging && <BucketBar ticket={dragging} stage={reportStage(dragging)} />}
+        <PageHeader title="BD Pipeline" subtitle="Pipeline tickets by stage. Drag a ticket to move it, or onto a staffing bucket in the header to send it to SAC.">
           <div className="w-80 text-left">
             <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or territory…" />
           </div>
@@ -231,6 +255,12 @@ export default function Pipeline() {
             </button>
           </div>
           {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
+          {staffed && (
+            <span className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-1.5 text-sm text-emerald-800">
+              <UserPlus size={14} /> {staffed} <Link to="/pipeline/sac" className="font-semibold underline">Open SAC</Link>
+              <button type="button" onClick={() => setStaffed('')} aria-label="Dismiss" className="rounded p-0.5 hover:bg-emerald-100"><X size={13} /></button>
+            </span>
+          )}
           {wonHere.length > 0 && (
             <Link to="/closed-deals" className="ml-auto flex items-center gap-1.5 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100" title="Won deals leave the board; they're contracts in Delivery">
               <Trophy size={13} /> {wonHere.length} won · {money(wonHere.reduce((s, t) => s + (t.value || 0), 0))}
@@ -250,8 +280,6 @@ export default function Pipeline() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
-        <DndContext sensors={sensors} collisionDetection={ranking ? cardFirst : pointerWithin}
-          onDragStart={({ active }) => setDragId(active.id)} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
           {/* At a set width the board scrolls sideways for the columns that don't fit; fitted to the window, they share it. */}
           <div className={`flex h-full min-h-96 items-stretch gap-3 ${cardWidth === 'fit' ? '' : 'w-max min-w-full'}`}>
             {columns.map((c) => <Column key={c.key} column={c} onOpen={(id) => { setOpenStep(undefined); setOpenId(id); }}
@@ -259,9 +287,9 @@ export default function Pipeline() {
               onWon={c.key === lastStage ? markWon : null} width={cardWidth} ranking={ranking}
               minimized={minimized.includes(`${pipeline?.key}|${c.key}`)} onMinimize={() => toggleMinimized(`${pipeline?.key}|${c.key}`)} />)}
           </div>
-          <DragOverlay>{dragging && <TicketCard ticket={dragging} now={now} overlay />}</DragOverlay>
-        </DndContext>
       </div>
+      <DragOverlay>{dragging && <TicketCard ticket={dragging} now={now} overlay />}</DragOverlay>
+      </DndContext>
 
       {settingsOpen && <PwinSettings onClose={() => setSettingsOpen(false)} onSaved={load} pipeline={pipeline} cardWidth={cardWidth} onCardWidth={setCardWidth}
         onStagesChanged={() => { meta.reload({ quiet: true }); load(); }} />}
@@ -272,6 +300,35 @@ export default function Pipeline() {
       )}
 
       {openId && <TicketTimeline key={`${openId}-${openStep}`} ticketId={openId} activityId={openStep} onClose={() => { setOpenId(null); load(); }} onChanged={load} />}
+    </div>
+  );
+}
+
+/**
+ * Over the header while a ticket is dragged: one bucket per staffing event its stage can be staffed for. A drop on one
+ * leaves the ticket in its stage, makes the staffing event, tags the ticket and puts it on the SAC list.
+ */
+function BucketBar({ ticket, stage }) {
+  const buckets = bucketsFor(stage);
+  return (
+    <div className="absolute inset-0 z-20 flex flex-col justify-center gap-2 bg-white/95 px-8 py-3 backdrop-blur-sm">
+      <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+        Staff “{ticket.opportunity_title}” · drop on an event to tag it and send it to SAC, or on a stage below to move it
+      </p>
+      <div className="flex min-h-0 flex-1 gap-2">
+        {buckets.map((b) => <Bucket key={b.type} event={b} />)}
+      </div>
+    </div>
+  );
+}
+
+function Bucket({ event }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `${BUCKET}${event.type}` });
+  return (
+    <div ref={setNodeRef} className={`flex min-w-0 flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed px-2 text-center transition ${
+      isOver ? 'scale-[1.03] border-brand-500 bg-brand-50 text-brand-800 shadow-md' : 'border-slate-300 bg-slate-50 text-slate-700'}`}>
+      <span className="text-sm leading-tight font-semibold">{event.type}</span>
+      <span className={`mt-1 rounded-full px-2 py-px text-[11px] font-medium ${isOver ? 'bg-brand-600 text-white' : 'bg-white text-slate-500 ring-1 ring-slate-200'}`}>{event.tag}</span>
     </div>
   );
 }

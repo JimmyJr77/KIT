@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft, Megaphone } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft, Megaphone, UserPlus } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -31,21 +31,25 @@ const eventKey = (e) => `${e.type}-${e.activity?.id ?? e.comment?.id ?? e.file?.
  * `focus` ("c-12" for a comment) scrolls to and highlights one item; `activityId` opens that activity in the Activity pane;
  * `initialTool` opens the pane on one of its tools (strategy, process…). A pipeline ticket's Process view opens over the pane
  * and closing it returns here. `notePick` ({ shownIds, pickedIds, onPick }), from the Close to closing list, lets a comment or
- * note be picked as the one the ticket's row shows there, and outlines the one showing.
+ * note be picked as the one the ticket's row shows there, and outlines the one showing. `stepId` opens the Staffing events
+ * pane on that event (from the SAC list).
  */
-export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, onClose, onChanged, notePick = null }) {
+export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, stepId = null, onClose, onChanged, notePick = null }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
-  const [tool, setTool] = useState(activityId !== undefined ? 'activities' : initialTool); // a pane off the left edge
+  const [tool, setTool] = useState(activityId !== undefined ? 'activities' : stepId ? 'process' : initialTool); // a pane off the left edge
+  const [openStep, setOpenStep] = useState(stepId); // the staffing event the Staffing events pane opens on
+  const [staffing, setStaffing] = useState(false); // opened from Staff Ticket: the new-event form is put forward
   const [openActivity, setOpenActivity] = useState(activityId ?? null); // the activity the Activity pane opens on
   const [processOpen, setProcessOpen] = useState(false);
   const [processKey, setProcessKey] = useState(0);
   const toolDirty = useRef(false);
   const setToolDirty = (v) => { toolDirty.current = v; };
   const leaveTool = () => !toolDirty.current || confirm('You have unsaved changes. Discard them?');
-  const switchTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setTool(next); } };
+  const switchTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setOpenStep(null); setStaffing(false); setTool(next); } };
   const showActivity = (id) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(id); setTool('activities'); } };
-  const showTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setTool(next); } };
+  const showTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setOpenStep(null); setStaffing(false); setTool(next); } };
+  const staffTicket = () => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setOpenStep(null); setStaffing(true); setTool('process'); } };
   const close = () => { if (leaveTool()) onClose(); };
   const load = () => api.get(`/tickets/${ticketId}/timeline`).then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [ticketId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -73,7 +77,9 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
     <SidePanel wide onClose={close} title={t ? t.opportunity_title : 'Loading…'}
       onEscape={processOpen ? () => setProcessOpen(false) : tool ? () => switchTool(null) : close}
       rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} skip={t.ticket_type === 'account' ? ['strategy', 'tickets'] : []} />}
-      drawer={t && tool && <PlanDrawer key={`${tool}-${openActivity}`} tool={tool} ticket={t} activityId={openActivity} onClose={() => switchTool(null)} onChanged={refresh} onDirty={setToolDirty} />}
+      drawerWide={tool === 'process'}
+      drawer={t && tool && <PlanDrawer key={`${tool}-${openActivity}-${openStep}-${staffing}`} tool={tool} ticket={t} activityId={openActivity} stepId={openStep} staffing={staffing}
+        onClose={() => switchTool(null)} onChanged={refresh} onDirty={setToolDirty} />}
       subtitle={t && (
         <span className="flex flex-wrap items-center gap-1.5">
           <span className={`rounded px-1.5 font-semibold ${t.ticket_type === 'work' ? 'bg-slate-200 text-slate-700' : 'bg-brand-50 text-brand-700'}`}>{ticketKind(t)} #{t.id}</span>
@@ -105,8 +111,13 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
         <div className="space-y-5">
           {t.ticket_type === 'bid' && (
             <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-              <span className="flex items-center gap-1.5"><Workflow size={14} className="text-brand-600" /> The pursuit left to right: lead, strategy, shaping and milestones.</span>
+              <span className="flex items-center gap-1.5"><Workflow size={14} className="text-brand-600" /> Process steps &amp; Staffing Events</span>
               <span className="flex shrink-0 items-center gap-1.5">
+                {canEdit && t.deal_status === 'open' && (
+                  <button type="button" className="btn px-2.5 py-1 text-xs" onClick={staffTicket} title="Staff this ticket for an RFI response, white paper, gate review, SOO, SOW, ROM or proposal: it joins the SAC list">
+                    <UserPlus size={13} /> Staff Ticket
+                  </button>
+                )}
                 <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => showTool('marketing')} title="Marketing requests, lead source and marketing dollars for this ticket"><Megaphone size={13} /> Marketing</button>
                 <button type="button" className="btn-primary px-2.5 py-1 text-xs" onClick={() => setProcessOpen(true)}>Process view</button>
               </span>

@@ -3,6 +3,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { PROCESS_TAG_NAMES } from '../src/lib/process.js';
 
 const dbPath = process.env.DATABASE_PATH || path.resolve('server/data/kit.db');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -1765,7 +1766,7 @@ CREATE TABLE IF NOT EXISTS comp_projections (
 // ---- Marketing tracking: lead source tags, what each marketing request is for, the dollars behind it, the opportunities
 // tied to an event, meetings, and the leads Marketing feeds the team.
 
-// Tags KIT keeps for good (they can't be renamed or deleted), in categories: Process (RFI, White Paper, SOW, RFP), Source
+// Tags KIT keeps for good (they can't be renamed or deleted), in categories: Process (one per staffing event: RFI, Paper, SOW, ROM…), Source
 // (the four lead sources, which share one color) and Other, where Google Solution (we're integrating Google, but Google
 // didn't bring the lead) sits with every ordinary tag. They're tags like any other, so a Pipedrive
 // label of the same name takes one over on the next pull and it then syncs both ways.
@@ -1775,14 +1776,17 @@ addColumn('labels', 'pipedrive_gone', 'INTEGER NOT NULL DEFAULT 0');
 export const LEAD_TAGS = { event: 'Event Lead', google: 'Google Lead', marketing: 'Marketing Lead', bd: 'BD Lead' };
 export const GOOGLE_SOLUTION_TAG = 'Google Solution';
 export const LEAD_TAG_COLOR = 'purple';
-// Process tags say what kind of ask a pursuit is answering. RFI is Pipedrive's label where it has one; the rest are KIT's.
-export const PROCESS_TAGS = ['RFI', 'White Paper', 'SOW', 'RFP'];
+// Process tags say which staffing event a pursuit is in (RFI, Paper, Initial Gate, Final Gate, SOO, SOW, ROM, Proposal), one per
+// event (src/lib/process.js). RFI is Pipedrive's label where it has one; the rest are KIT's.
+export const PROCESS_TAGS = PROCESS_TAG_NAMES;
 /** The category a tag is shown under: Process, Source (where the lead came from), or Other. */
 export const tagCategory = (kind) => ({ process: 'process', lead: 'source' }[kind] || 'other');
 {
   const keep = db.prepare(`INSERT INTO main.labels (name, color, position, kind) VALUES (@name, @color, (SELECT COALESCE(MAX(position) + 1, 0) FROM main.labels), @kind)
     ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, color = CASE WHEN pipedrive_id IS NULL AND excluded.kind != 'process' THEN excluded.color ELSE color END`);
   PROCESS_TAGS.forEach((name) => keep.run({ name, color: 'gray', kind: 'process' }));
+  // Process tags from before staffing events (White Paper, RFP) become ordinary tags: tickets keep them, and they can be deleted.
+  db.prepare(`UPDATE main.labels SET kind = NULL WHERE kind = 'process' AND name NOT IN (${PROCESS_TAGS.map(() => '?').join(', ')})`).run(...PROCESS_TAGS);
   Object.values(LEAD_TAGS).forEach((name) => keep.run({ name, color: LEAD_TAG_COLOR, kind: 'lead' }));
   keep.run({ name: GOOGLE_SOLUTION_TAG, color: 'yellow', kind: 'solution' });
 }
@@ -1886,6 +1890,31 @@ CREATE TABLE IF NOT EXISTS marketing_leads (
 // rows picked before). Empty or null: the row shows the latest note.
 addColumn('c2c_tickets', 'note_ids', 'TEXT');
 addColumn('meetings', 'objectives', 'TEXT'); // what we want out of the meeting
+// ---- Staffing events (ticket_process_steps, once called milestones) and the SAC list (Solution Architect Coordination).
+// step_date is the event's due date. criticality: critical | moderate | queued | available. fields: JSON of the event's blocks
+// of work as text, keyed as in src/lib/process.js (documents for a block are ticket_files with process_field set).
+// completed_at marks it done, which takes it off the SAC list. sac_rank is its place on the master SAC list, set by team
+// leads; sac_ranks holds each person's own order of the events on their tickets.
+{
+  const firstTime = !db.prepare('PRAGMA table_info(ticket_process_steps)').all().some((c) => c.name === 'completed_at');
+  addColumn('ticket_process_steps', 'criticality', "TEXT NOT NULL DEFAULT 'queued'");
+  addColumn('ticket_process_steps', 'fields', 'TEXT');
+  addColumn('ticket_process_steps', 'completed_at', 'TEXT');
+  addColumn('ticket_process_steps', 'completed_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+  addColumn('ticket_process_steps', 'sac_rank', 'INTEGER');
+  addColumn('ticket_files', 'process_field', 'TEXT');
+  // Milestones recorded before were a record of what had happened: those dated before today (or undated) count as done, so
+  // only ones still ahead join the SAC list.
+  if (firstTime) db.exec(`UPDATE ticket_process_steps SET completed_at = created_at WHERE step_date IS NULL OR step_date < date('now')`);
+  db.exec(`UPDATE ticket_process_steps SET step_type = 'Statement of Work' WHERE step_type = 'SOW';
+    UPDATE ticket_process_steps SET step_type = 'Rough Order of Magnitude' WHERE step_type = 'ROM';
+    CREATE TABLE IF NOT EXISTS sac_ranks (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      step_id INTEGER NOT NULL REFERENCES ticket_process_steps(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      PRIMARY KEY (user_id, step_id)
+    );`);
+}
 
 /** Whether an admin has stopped people creating pipeline tickets in KIT. Deals pulled from Pipedrive still come in. */
 export const pipelineTicketsClosed = () => getSetting('pipeline_tickets_closed') === '1';

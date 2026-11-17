@@ -13,6 +13,7 @@ import teamRoutes from './routes/teams.js';
 import territoryRoutes from './routes/territories.js';
 import stageRoutes from './routes/stages.js';
 import c2cRoutes from './routes/c2c.js';
+import sacRoutes from './routes/sac.js';
 import targetRoutes from './routes/targets.js';
 import objectiveRoutes from './routes/objectives.js';
 import financialRoutes from './routes/financials.js';
@@ -73,6 +74,7 @@ app.use('/api/teams', teamRoutes); // GET is public (used by account activation)
 app.use('/api/territories', requireAuth, territoryRoutes);
 app.use('/api/stages', requireAuth, stageRoutes);
 app.use('/api/c2c', requireAuth, c2cRoutes);
+app.use('/api/sac', requireAuth, sacRoutes);
 app.use('/api/targets', requireAuth, targetRoutes);
 app.use('/api/objectives', requireAuth, objectiveRoutes);
 app.use('/api/financials', requireAuth, financialRoutes);

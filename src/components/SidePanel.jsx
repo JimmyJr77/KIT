@@ -90,9 +90,10 @@ export function usePanelResize() {
 /**
  * Right-hand slide-out pane, matching the priority editor.
  * `rail` adds a thin menu bar along its left edge, and `drawer` opens an extra pane to the left of that;
- * both add to the width rather than taking from the main pane. Escape calls `onEscape` (default: onClose).
+ * both add to the width rather than taking from the main pane; `drawerWide` gives the drawer room for long writing.
+ * Escape calls `onEscape` (default: onClose).
  */
-export default function SidePanel({ title, subtitle, onClose, onEscape, children, footer, wide, rail, drawer }) {
+export default function SidePanel({ title, subtitle, onClose, onEscape, children, footer, wide, rail, drawer, drawerWide = false }) {
   const escape = onEscape || onClose;
   const resize = usePanelResize();
   // Panels can open over one another (a form from a ticket, a scheduler from that form): Escape closes only the top one.
@@ -112,7 +113,7 @@ export default function SidePanel({ title, subtitle, onClose, onEscape, children
       <div className="fixed inset-0 z-40 bg-slate-900/20" onClick={onClose} />
       <aside className="fixed top-0 right-0 z-50 flex h-full max-w-full bg-white shadow-2xl animate-[slidein_.2s_ease-out]">
         <style>{'@keyframes slidein{from{transform:translateX(100%)}to{transform:none}}'}</style>
-        {drawer && <section className="flex h-full w-[28rem] max-w-[90vw] shrink-0 flex-col border-r border-slate-200 bg-slate-50">{drawer}</section>}
+        {drawer && <section className={`flex h-full ${drawerWide ? 'w-[40rem]' : 'w-[28rem]'} max-w-[90vw] shrink-0 flex-col border-r border-slate-200 bg-slate-50`}>{drawer}</section>}
         {rail && <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-slate-200 bg-slate-50 py-3">{rail}</nav>}
         <div ref={resize.ref} style={resize.style} className={`relative flex h-full ${wide ? PANEL_WIDTH_WIDE : PANEL_WIDTH} min-w-0 flex-col`}>
           {resize.handle}

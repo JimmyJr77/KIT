@@ -1,13 +1,13 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { X, Plus, Trash2, Loader2, Check, Eye, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, Ticket, Megaphone } from 'lucide-react';
+import { X, Plus, Trash2, Loader2, Check, Eye, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, Ticket, Megaphone, RotateCcw } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { api } from '../lib/api.js';
 import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
-import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, milestoneOf } from '../lib/process.js';
+import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, CRITICALITY, DEFAULT_CRITICALITY, criticalityOf, milestoneOf } from '../lib/process.js';
 import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { MarketingDrawer } from './TicketMarketing.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
@@ -23,7 +23,7 @@ export const PLAN_TOOLS = [
   { key: 'tickets', label: 'Priority tickets', icon: Ticket, account: true, accountOnly: true },
   { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
   { key: 'people', label: 'People', accountLabel: 'CRM', icon: ContactRound, account: true },
-  { key: 'process', label: 'Milestones', icon: Workflow, bidOnly: true },
+  { key: 'process', label: 'Staffing events', icon: Workflow, bidOnly: true },
   { key: 'details', label: 'Deal details', icon: ClipboardList, bidOnly: true },
   { key: 'marketing', label: 'Marketing', icon: Megaphone },
 ];
@@ -42,11 +42,11 @@ export function PlanRail({ ticket, active, onSelect, skip = [] }) {
 }
 
 /** The extra pane for whichever menu item is open. `onChanged` refreshes the timeline after a save. */
-export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty, activityId }) {
+export function PlanDrawer({ tool, ticket, onClose, onChanged, onDirty, activityId, stepId = null, staffing = false }) {
   if (tool === 'activities') return <ActivitiesDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} initialId={activityId} />;
   if (tool === 'people') return <PeopleDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
   if (tool === 'strategy') return <StrategyDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
-  if (tool === 'process') return <ProcessDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
+  if (tool === 'process') return <ProcessDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} openId={stepId} staffing={staffing} />;
   if (tool === 'details') return <DetailsDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
   if (tool === 'marketing') return <MarketingDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} />;
   if (tool === 'assessment') return <AssessmentDrawer ticket={ticket} onClose={onClose} onChanged={onChanged} onDirty={onDirty} />;
@@ -216,20 +216,39 @@ function LinkFromCrm({ ticket, linked, onLinked }) {
 
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 const today = () => new Date().toLocaleDateString('en-CA');
-const stepForm = (s) => ({ step_type: s.step_type, step_date: s.step_date || '', notes: s.notes, reviews: s.reviews, decision: s.decision || '', pricing: s.pricing || '' });
+const stepForm = (s) => ({ step_type: s.step_type, step_date: s.step_date || '', notes: s.notes, reviews: s.reviews, decision: s.decision || '', pricing: s.pricing || '',
+  criticality: s.criticality || DEFAULT_CRITICALITY, fields: { ...(s.fields || {}) }, done: !!s.done });
 const DECISION_STYLE = { Proceed: 'bg-emerald-100 text-emerald-800', Revise: 'bg-amber-100 text-amber-800', 'No-Bid': 'bg-red-100 text-red-800' };
+/** Open ones first, by due date (undated last); done ones after, latest first. */
+const byDue = (a, b) => (a.done - b.done) || (a.done ? String(b.completed_at).localeCompare(String(a.completed_at))
+  : ((!a.step_date) - (!b.step_date)) || String(a.step_date || '').localeCompare(String(b.step_date || '')) || a.id - b.id);
+
+/** A due date as "Due Dec 4", reddened once it's passed while the event is open. */
+export function DueDate({ date, done, className = '' }) {
+  if (!date) return <span className={`text-slate-400 ${className}`}>No due date</span>;
+  const late = !done && date < today();
+  return <span className={`${late ? 'font-semibold text-red-600' : 'text-slate-500'} ${className}`} title={late ? 'Past due' : undefined}>Due {shortDate(date)}</span>;
+}
+
+/** A criticality pill. */
+export function CriticalityPill({ value, className = '' }) {
+  const c = criticalityOf(value);
+  return <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ring-1 ${c.tone} ${className}`}>{c.label}</span>;
+}
 
 /**
- * The milestones of a pipeline ticket (RFI, RFP, gate reviews, ROM, proposal…), oldest first. Milestones can be added at
- * any time. Each records who was there and who approved, by role, a gate's decision and price considerations, notes and documents.
- * The Process view lays them out left to right with everything that happened in between.
+ * The staffing events of a pipeline ticket (RFI responses, white papers, gate reviews, SOO, SOW, ROM, proposals): what the
+ * pursuit is staffed for. The ticket's owner staffs it (the event is made, the ticket tagged for it, and it joins the SAC
+ * list) and sets the due date and how critical it is; anyone writes the work, block by block, as text or a document.
+ * `openId` opens one event; `staffing` (from the pane's Staff Ticket button) puts the new-event form forward.
  */
-function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
+function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpen = null, staffing = false }) {
   const [steps, setSteps] = useState(null);
   const [users, setUsers] = useState([]);
   const [type, setType] = useState(PROCESS_TYPES[0]);
-  const [date, setDate] = useState(today());
-  const [openId, setOpenId] = useState(null);
+  const [date, setDate] = useState('');
+  const [criticality, setCriticality] = useState(DEFAULT_CRITICALITY);
+  const [openId, setOpenId] = useState(initialOpen);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const dirty = useRef(false);
@@ -238,21 +257,27 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
     api.get(`/tickets/${ticket.id}/process`).then((d) => setSteps(d.steps)).catch((e) => setError(e.message));
     api.get('/users').then((d) => setUsers(d.users));
   }, [ticket.id]);
+  // Opened on one event: bring it into view.
+  useEffect(() => {
+    if (steps && initialOpen) document.getElementById(`staffing-${initialOpen}`)?.scrollIntoView({ block: 'start' });
+  }, [!!steps]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const apply = (p) => p.then((d) => { setSteps(d.steps); onChanged(); return d; });
   const toggle = (id) => {
-    if (dirty.current && !confirm('You have unsaved changes to this step. Discard them?')) return;
+    if (dirty.current && !confirm('You have unsaved changes to this staffing event. Discard them?')) return;
     setDirty(false);
     setOpenId(openId === id ? null : id);
   };
   const add = async () => {
-    if (busy || (dirty.current && !confirm('You have unsaved changes to a step. Discard them?'))) return;
+    if (busy || (dirty.current && !confirm('You have unsaved changes to a staffing event. Discard them?'))) return;
     setBusy(true);
     setError('');
     try {
-      const d = await apply(api.post(`/tickets/${ticket.id}/process`, { step_type: type, step_date: date }));
+      const d = await apply(api.post(`/tickets/${ticket.id}/process`, { step_type: type, step_date: date || null, criticality }));
       setDirty(false);
       setOpenId(d.id);
+      setDate('');
+      setCriticality(DEFAULT_CRITICALITY);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -263,30 +288,45 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
   const userOptions = users.map((u) => ({ value: u.id, label: fullName(u), sub: u.team_name }));
   const byId = (id) => users.find((u) => u.id === id);
   const { readOnly } = useContext(TicketAccess);
+  const sorted = steps && [...steps].sort(byDue);
+  const tag = milestoneOf(type).tag;
 
   return (
-    <DrawerShell title="Milestones" subtitle="The formal steps of this pursuit: who was there, who approved, decisions and documents" onClose={onClose}>
+    <DrawerShell title="Staffing events" subtitle="What this pursuit is staffed for: due dates, how critical, and the work, block by block. Open ones are on the SAC list." onClose={onClose}>
       <div className="space-y-4">
-        {readOnly ? <ViewOnlyNote /> : (
-        <section className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-          <span className="text-xs font-semibold tracking-wide text-slate-600 uppercase">New milestone</span>
-          <div className="flex gap-2">
-            <select className="input flex-1 text-sm" value={type} onChange={(e) => setType(e.target.value)} aria-label="Milestone">
-              {PROCESS_TYPES.map((t) => <option key={t}>{t}</option>)}
-            </select>
-            <input type="date" className="input w-36 text-sm" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Milestone date" />
+        {readOnly ? (
+          <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">
+            Only the ticket’s owner (or an admin) staffs it and sets due dates and how critical. You can write the request and the work, and mark it done.
+          </p>
+        ) : (
+        <section className={`space-y-2 rounded-lg border bg-white p-3 ${staffing ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'}`}>
+          <span className="text-xs font-semibold tracking-wide text-slate-600 uppercase">Staff this ticket</span>
+          <select autoFocus={staffing} className="input text-sm" value={type} onChange={(e) => setType(e.target.value)} aria-label="Staffing event">
+            {PROCESS_TYPES.map((t) => <option key={t}>{t}</option>)}
+          </select>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="mb-0.5 block text-[11px] font-medium text-slate-600">Due date</span>
+              <input type="date" className="input text-sm" value={date} onChange={(e) => setDate(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-0.5 block text-[11px] font-medium text-slate-600">How critical</span>
+              <select className="input text-sm" value={criticality} onChange={(e) => setCriticality(e.target.value)}>
+                {CRITICALITY.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+            </label>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span className={`text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>{error || milestoneOf(type).about || 'Add milestones in any order; they sort by date'}</span>
-            <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={add} disabled={busy}>{busy ? 'Adding…' : <><Plus size={13} /> Add milestone</>}</button>
+            <span className={`text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>{error || `${milestoneOf(type).about}. Tags the ticket ${tag}.`}</span>
+            <button type="button" className="btn-primary shrink-0 px-3 py-1.5 text-xs" onClick={add} disabled={busy}>{busy ? 'Staffing…' : <><Plus size={13} /> Staff ticket</>}</button>
           </div>
         </section>
         )}
 
-        {steps && !steps.length && <p className="text-sm text-slate-400">{readOnly ? 'No milestones yet.' : 'No milestones yet. Add the first one above.'}</p>}
-        {steps && steps.length > 0 && (
+        {steps && !steps.length && <p className="text-sm text-slate-400">{readOnly ? 'Not staffed for anything yet.' : 'Not staffed for anything yet. Staff it above.'}</p>}
+        {sorted && sorted.length > 0 && (
           <ol className="relative space-y-3 before:absolute before:top-3 before:bottom-3 before:left-[11px] before:w-px before:bg-slate-200">
-            {steps.map((s) => (
+            {sorted.map((s) => (
               <ProcessStep key={s.id} step={s} open={openId === s.id} onToggle={() => toggle(s.id)} byId={byId} userOptions={userOptions}
                 onDirty={setDirty} apply={apply}
                 onDeleted={() => { setDirty(false); setOpenId(null); }} />
@@ -300,65 +340,113 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty }) {
 
 function ProcessStep({ step: s, open, onToggle, byId, userOptions, onDirty, apply, onDeleted }) {
   const { user } = useAuth();
-  const { readOnly } = useContext(TicketAccess);
+  const def = milestoneOf(s.step_type);
   const involved = REVIEW_AREAS.filter((a) => s.reviews[a.key].people.length || s.reviews[a.key].notes);
   const people = [...new Set(REVIEW_AREAS.flatMap((a) => s.reviews[a.key].people))].map(byId).filter(Boolean);
+  const written = def.fields.filter(([k]) => s.fields[k] || s.files.some((f) => f.field === k)).length;
   return (
-    <li className="relative flex gap-3">
-      <span className={`relative z-10 mt-2.5 grid h-6 w-6 shrink-0 place-items-center rounded-full ring-4 ring-slate-50 ${open ? 'bg-brand-600 text-white' : 'bg-brand-100 text-brand-700'}`}>
-        <Workflow size={12} />
+    <li id={`staffing-${s.id}`} className="relative flex scroll-mt-3 gap-3">
+      <span className={`relative z-10 mt-2.5 grid h-6 w-6 shrink-0 place-items-center rounded-full ring-4 ring-slate-50 ${s.done ? 'bg-emerald-100 text-emerald-700' : open ? 'bg-brand-600 text-white' : 'bg-brand-100 text-brand-700'}`}>
+        {s.done ? <Check size={12} /> : <Workflow size={12} />}
       </span>
-      <div className={`min-w-0 flex-1 rounded-lg border bg-white transition ${open ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200 hover:border-brand-500'}`}>
+      <div className={`min-w-0 flex-1 rounded-lg border bg-white transition ${open ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200 hover:border-brand-500'} ${s.done && !open ? 'opacity-75' : ''}`}>
         <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full items-start gap-2 p-2.5 text-left">
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-baseline gap-x-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="text-sm font-semibold text-slate-800">{s.step_type}</span>
-              <span className="text-xs text-slate-500">{s.step_date ? shortDate(s.step_date) : 'No date'}</span>
+              <DueDate date={s.step_date} done={s.done} className="text-xs" />
+              {s.done ? <span className="rounded bg-emerald-100 px-1.5 py-px text-[11px] font-semibold text-emerald-800">Done</span> : <CriticalityPill value={s.criticality} />}
               {s.decision && <span className={`rounded px-1.5 py-px text-[11px] font-semibold ${DECISION_STYLE[s.decision] || 'bg-slate-100 text-slate-700'}`}>{s.decision}</span>}
             </div>
             {!open && (
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
-                {involved.map((a) => <span key={a.key} className="rounded bg-slate-100 px-1.5 py-0.5">{a.label}</span>)}
+                {def.fields.length > 0 && <span className="rounded bg-slate-100 px-1.5 py-0.5">{written} of {def.fields.length} blocks written</span>}
+                {involved.map((a) => <span key={a.key} className="rounded bg-slate-100 px-1.5 py-0.5">{a.short}</span>)}
                 {s.files.length > 0 && <span className="flex items-center gap-0.5"><FileText size={11} /> {s.files.length}</span>}
                 {people.length > 0 && <span className="flex -space-x-1">{people.slice(0, 5).map((u) => <Avatar key={u.id} user={u} size="xs" className="ring-2 ring-white" />)}</span>}
-                {!involved.length && !s.files.length && !s.notes && !s.pricing && <span className="text-slate-400">Nothing recorded yet</span>}
               </div>
             )}
             {!open && s.notes && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{s.notes}</p>}
           </div>
           {open ? <ChevronDown size={15} className="mt-0.5 shrink-0 text-slate-400" /> : <ChevronRight size={15} className="mt-0.5 shrink-0 text-slate-300" />}
         </button>
-        {open && (
-          <fieldset disabled={readOnly} className="min-w-0">
-            <ProcessStepEditor step={s} user={user} userOptions={userOptions} onDirty={onDirty} apply={apply} onDeleted={onDeleted} />
-          </fieldset>
-        )}
+        {open && <ProcessStepEditor step={s} user={user} userOptions={userOptions} onDirty={onDirty} apply={apply} onDeleted={onDeleted} />}
       </div>
     </li>
   );
 }
 
+/** One block of an event's work: a big area to write in, and the documents that answer it. */
+function WorkBlock({ id, label, value, onChange, files, onUpload, placeholder, rows = 6 }) {
+  const [uploading, setUploading] = useState(false);
+  const ref = useRef(null);
+  const upload = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    try { await onUpload(file); } finally { setUploading(false); if (ref.current) ref.current.value = ''; }
+  };
+  return (
+    <section className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <label className="text-xs font-semibold text-slate-700" htmlFor={id}>{label}</label>
+        {onUpload && (
+          <label className={`btn cursor-pointer px-2 py-0.5 text-[11px] ${uploading ? 'pointer-events-none opacity-60' : ''}`} title={`Answer “${label}” with a document`}>
+            {uploading ? <><Loader2 size={11} className="animate-spin" /> Uploading…</> : <><Upload size={11} /> Document</>}
+            <input ref={ref} type="file" className="sr-only" onChange={(e) => upload(e.target.files[0])} />
+          </label>
+        )}
+      </div>
+      <textarea id={id} rows={rows} className="input min-h-28 resize-y bg-white text-sm leading-relaxed" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      {files?.length > 0 && <FileList files={files} className="mt-1.5" />}
+    </section>
+  );
+}
+
+function FileList({ files, className = '' }) {
+  return (
+    <ul className={`space-y-1 ${className}`}>
+      {files.map((f) => (
+        <li key={f.id}>
+          <a href={`/api/tickets/files/${f.id}`} className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-sm hover:border-brand-500" title={`Uploaded ${fullStamp(f.created_at)}${f.uploaded_by ? ` by ${fullName(f.uploaded_by)}` : ''}`}>
+            <FileText size={14} className="shrink-0 text-emerald-600" />
+            <span className="min-w-0 flex-1 truncate">{f.name}</span>
+            <span className="shrink-0 text-[11px] text-slate-400">{bytes(f.size)}</span>
+            <Download size={13} className="shrink-0 text-slate-400" />
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * A staffing event open for editing. What it is, when it's due, how critical and a gate's decision are the ticket owner's
+ * (or an admin's); the request, the blocks of work, who was there and done are anyone's, so solution architects answer here.
+ */
 function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDeleted }) {
+  const { readOnly } = useContext(TicketAccess);
   const [form, setForm] = useState(() => stepForm(s));
   const [saved, setSaved] = useState(() => JSON.stringify(stepForm(s)));
   const [busy, setBusy] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
-  const fileRef = useRef(null);
+  const [showPeople, setShowPeople] = useState(() => REVIEW_AREAS.some((a) => s.reviews[a.key].people.length || s.reviews[a.key].notes));
   const dirty = JSON.stringify(form) !== saved;
   useEffect(() => { onDirty(dirty); }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const setField = (k, v) => setForm((f) => ({ ...f, fields: { ...f.fields, [k]: v } }));
   const setReview = (area, k, v) => setForm((f) => ({ ...f, reviews: { ...f.reviews, [area]: { ...f.reviews[area], [k]: v } } }));
   // Only people who were there can have approved.
   const setPeople = (area, v) => setForm((f) => ({ ...f, reviews: { ...f.reviews, [area]: { ...f.reviews[area], people: v, approved: f.reviews[area].approved.filter((id) => v.includes(id)) } } }));
-  const milestone = milestoneOf(form.step_type);
+  const def = milestoneOf(form.step_type);
+  // An earlier milestone keeps its type in the list; new ones are staffing events only.
+  const types = PROCESS_TYPES.includes(s.step_type) ? PROCESS_TYPES : [s.step_type, ...PROCESS_TYPES];
 
-  const save = async () => {
+  const save = async (patch = {}) => {
     setBusy(true);
     setError('');
     try {
-      const d = await apply(api.put(`/tickets/process/${s.id}`, form));
+      const d = await apply(api.put(`/tickets/process/${s.id}`, { ...form, ...patch }));
       const next = stepForm(d.steps.find((x) => x.id === s.id));
       setForm(next);
       setSaved(JSON.stringify(next));
@@ -369,55 +457,70 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
     }
   };
   const remove = async () => {
-    if (!confirm(`Delete this ${s.step_type} milestone? Its documents stay on the ticket.`)) return;
+    if (!confirm(`Delete this ${s.step_type} staffing event? Its documents stay on the ticket.`)) return;
     try { await apply(api.del(`/tickets/process/${s.id}`)); onDeleted(); } catch (e) { setError(e.message); }
   };
-  const upload = async (file) => {
-    if (!file) return;
-    setUploading(true);
+  const upload = async (file, field = null) => {
     setError('');
     const fd = new FormData();
     fd.append('file', file);
-    try { await apply(api.post(`/tickets/process/${s.id}/files`, fd)); } catch (e) { setError(e.message); }
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = '';
+    try { await apply(api.post(`/tickets/process/${s.id}/files${field ? `?field=${encodeURIComponent(field)}` : ''}`, fd)); } catch (e) { setError(e.message); }
   };
+  const otherFiles = s.files.filter((f) => !f.field || !def.fields.some(([k]) => k === f.field));
 
   return (
     <div className="space-y-4 border-t border-slate-100 px-3 pt-3 pb-3">
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-type-${s.id}`}>Milestone</label>
-          <select id={`ps-type-${s.id}`} className="input py-1.5 text-sm" value={form.step_type} onChange={(e) => set('step_type', e.target.value)}>
-            {PROCESS_TYPES.map((t) => <option key={t}>{t}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-date-${s.id}`}>Date</label>
-          <input id={`ps-date-${s.id}`} type="date" className="input py-1.5 text-sm" value={form.step_date} onChange={(e) => set('step_date', e.target.value)} />
-        </div>
-      </div>
-      {milestone.about && <p className="-mt-2 text-[11px] text-slate-500">{milestone.phase} · {milestone.about}</p>}
-
-      {milestone.gate && (
-        <div className="grid grid-cols-2 gap-2">
+      {/* What it is, when it's due and how critical: the ticket owner's. */}
+      <fieldset disabled={readOnly} className="min-w-0 space-y-2">
+        <div className="grid grid-cols-3 gap-2">
           <div>
-            <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-decision-${s.id}`}>Decision</label>
+            <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-type-${s.id}`}>Staffing event</label>
+            <select id={`ps-type-${s.id}`} className="input py-1.5 text-sm" value={form.step_type} onChange={(e) => set('step_type', e.target.value)}>
+              {types.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-date-${s.id}`}>Due date</label>
+            <input id={`ps-date-${s.id}`} type="date" className="input py-1.5 text-sm" value={form.step_date} onChange={(e) => set('step_date', e.target.value)} />
+          </div>
+          <div>
+            <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-crit-${s.id}`}>How critical</label>
+            <select id={`ps-crit-${s.id}`} className="input py-1.5 text-sm" value={form.criticality} onChange={(e) => set('criticality', e.target.value)}>
+              {CRITICALITY.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </div>
+        </div>
+        {def.about && <p className="text-[11px] text-slate-500">{def.phase} · {def.about}{def.tag ? ` · tagged ${def.tag}` : ''}</p>}
+        {def.gate && (
+          <div>
+            <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-decision-${s.id}`}>Gate decision</label>
             <select id={`ps-decision-${s.id}`} className="input py-1.5 text-sm" value={form.decision} onChange={(e) => set('decision', e.target.value)}>
               <option value="">Not decided yet</option>
               {DECISIONS.map((d) => <option key={d}>{d}</option>)}
             </select>
           </div>
-          <div className="col-span-2">
-            <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-pricing-${s.id}`}>Price considerations</label>
-            <textarea id={`ps-pricing-${s.id}`} rows={2} className="input resize-y py-1.5 text-sm" value={form.pricing} onChange={(e) => set('pricing', e.target.value)}
-              placeholder="Initial price, ROM, price-to-win, margin, B&P budget…" />
-          </div>
-        </div>
+        )}
+      </fieldset>
+
+      <WorkBlock id={`ps-notes-${s.id}`} label="Request" rows={4} value={form.notes} onChange={(v) => set('notes', v)}
+        placeholder="What's needed from the solution architect: the ask, the customer's deadline, open questions…" />
+
+      {def.fields.map(([key, label]) => (
+        <WorkBlock key={key} id={`ps-f-${s.id}-${key}`} label={label} value={form.fields[key] || ''} onChange={(v) => setField(key, v)}
+          files={s.files.filter((f) => f.field === key)} onUpload={(file) => upload(file, key)} placeholder="Write it here, or answer with a document" />
+      ))}
+
+      {def.gate && (
+        <WorkBlock id={`ps-pricing-${s.id}`} label="Price considerations" rows={3} value={form.pricing} onChange={(v) => set('pricing', v)}
+          placeholder="Initial price, ROM, price-to-win, margin, B&P budget…" />
       )}
 
       <section>
-        <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Users size={12} /> Who was there, and who approved</h4>
+        <button type="button" onClick={() => setShowPeople(!showPeople)} aria-expanded={showPeople}
+          className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase hover:text-slate-800">
+          {showPeople ? <ChevronDown size={12} /> : <ChevronRight size={12} />}<Users size={12} /> Who’s staffed, who was there, and who approved
+        </button>
+        {showPeople && (
         <div className="space-y-2.5">
           {REVIEW_AREAS.map((a) => {
             const r = form.reviews[a.key];
@@ -427,9 +530,9 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
               <div key={a.key} className={`rounded-md p-2.5 ${expected ? 'bg-brand-50/60 ring-1 ring-brand-100' : 'bg-slate-50'}`}>
                 <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2">
                   <span className="text-xs font-semibold text-slate-700">{a.label}</span>
-                  {expected && <span className="text-[10px] font-medium text-brand-700" title={a.about}>Expected at this milestone</span>}
+                  {expected && <span className="text-[10px] font-medium text-brand-700" title={a.about}>Expected at this event</span>}
                 </div>
-                <MultiSelect compact options={userOptions} value={r.people} onChange={(v) => setPeople(a.key, v)} placeholder="Who was there…" />
+                <MultiSelect compact options={userOptions} value={r.people} onChange={(v) => setPeople(a.key, v)} placeholder={a.key === 'technical' ? 'Solution architects staffed…' : 'Who was there…'} />
                 {there.length > 0 && (
                   <div className="mt-1.5">
                     <MultiSelect compact options={there} value={r.approved} onChange={(v) => setReview(a.key, 'approved', v)} placeholder="Who approved…" />
@@ -441,52 +544,51 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
             );
           })}
         </div>
-      </section>
-
-      <section>
-        <label className="mb-1 block text-xs font-semibold tracking-wide text-slate-500 uppercase" htmlFor={`ps-notes-${s.id}`}>Notes</label>
-        <textarea id={`ps-notes-${s.id}`} rows={3} className="input resize-y text-sm" value={form.notes} onChange={(e) => set('notes', e.target.value)}
-          placeholder="Decisions, open questions, due dates…" />
+        )}
       </section>
 
       <section>
         <div className="mb-1 flex items-center justify-between">
-          <span className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Documents</span>
-          <label className={`btn cursor-pointer px-2.5 py-1 text-xs ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
-            {uploading ? <><Loader2 size={12} className="animate-spin" /> Uploading…</> : <><Upload size={12} /> Upload</>}
-            <input ref={fileRef} type="file" className="sr-only" onChange={(e) => upload(e.target.files[0])} />
-          </label>
+          <span className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Other documents</span>
+          <UploadButton onUpload={(file) => upload(file)} />
         </div>
-        {s.files.length ? (
-          <ul className="space-y-1">
-            {s.files.map((f) => (
-              <li key={f.id}>
-                <a href={`/api/tickets/files/${f.id}`} className="flex items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 text-sm hover:border-brand-500" title={`Uploaded ${fullStamp(f.created_at)}${f.uploaded_by ? ` by ${fullName(f.uploaded_by)}` : ''}`}>
-                  <FileText size={14} className="shrink-0 text-emerald-600" />
-                  <span className="min-w-0 flex-1 truncate">{f.name}</span>
-                  <span className="shrink-0 text-[11px] text-slate-400">{bytes(f.size)}</span>
-                  <Download size={13} className="shrink-0 text-slate-400" />
-                </a>
-              </li>
-            ))}
-          </ul>
-        ) : <p className="text-xs text-slate-400">No documents yet. Uploads also appear on the ticket timeline.</p>}
+        {otherFiles.length ? <FileList files={otherFiles} /> : <p className="text-xs text-slate-400">None. Uploads also appear on the ticket timeline.</p>}
       </section>
 
       <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
         <span className={`text-[11px] ${error ? 'text-red-600' : dirty ? 'text-amber-700' : 'text-slate-400'}`}>
           {error || (dirty ? 'Unsaved changes' : s.updated_at ? `Saved ${stamp(s.updated_at)}${s.updated_by ? ` by ${fullName(s.updated_by)}` : ''}` : `Added ${stamp(s.created_at)}${s.author ? ` by ${fullName(s.author)}` : ''}`)}
         </span>
-        <span className="flex shrink-0 gap-1.5">
-          {(s.author?.id === user.id || user.role === 'admin') && (
-            <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500 hover:text-red-600" onClick={remove} aria-label="Delete milestone" title="Delete milestone"><Trash2 size={13} /></button>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {!readOnly && (s.author?.id === user.id || user.role === 'admin') && (
+            <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500 hover:text-red-600" onClick={remove} aria-label="Delete staffing event" title="Delete staffing event"><Trash2 size={13} /></button>
           )}
-          <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={save} disabled={!dirty || busy}>
+          <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => save({ done: !form.done })} disabled={busy}
+            title={form.done ? 'Put it back on the SAC list' : 'Mark it done: it leaves the SAC list'}>
+            {form.done ? <><RotateCcw size={12} /> Reopen</> : <><Check size={12} /> Done</>}
+          </button>
+          <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={() => save()} disabled={!dirty || busy}>
             {busy ? <><Loader2 size={12} className="animate-spin" /> Saving…</> : 'Save'}
           </button>
         </span>
       </div>
     </div>
+  );
+}
+
+function UploadButton({ onUpload }) {
+  const [uploading, setUploading] = useState(false);
+  const ref = useRef(null);
+  return (
+    <label className={`btn cursor-pointer px-2.5 py-1 text-xs ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
+      {uploading ? <><Loader2 size={12} className="animate-spin" /> Uploading…</> : <><Upload size={12} /> Upload</>}
+      <input ref={ref} type="file" className="sr-only" onChange={async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setUploading(true);
+        try { await onUpload(file); } finally { setUploading(false); if (ref.current) ref.current.value = ''; }
+      }} />
+    </label>
   );
 }
 

@@ -16,7 +16,8 @@ import { statusesFor, listPipelines, defaultPipeline, pipelineForNew, kitPipelin
 import '../sample/registry.js'; // sample_rows, so sample tickets aren't moved off KIT's own pipeline
 import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields } from '../services/pipedriveFields.js';
-import { PROCESS_TYPES, DECISIONS, cleanReviews } from '../../src/lib/process.js';
+import { PROCESS_TYPES, DECISIONS, cleanReviews, cleanFields, milestoneOf } from '../../src/lib/process.js';
+import { addStaffingEvent, queueFromTags, isCriticality, tagTicket } from '../staffing.js';
 import { NEXT_STEP_SQL } from '../activities.js';
 import { canEditTicket, ownerOnlyMessage } from '../../src/lib/ticketAccess.js';
 import { focusTickets } from '../focus.js';
@@ -657,14 +658,15 @@ r.delete('/comments/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Process flow: RFI, RFP, gate reviews and so on, each with its reviews, notes and documents
+// ---- Staffing events (once milestones): RFI responses, white papers, gate reviews, SOO, SOW, ROM and proposals, each with
+// its due date, criticality, blocks of work (text or documents), reviews, notes and documents. Every open one is on the SAC list.
 
-const fileOut = (f) => ({ id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, created_at: f.created_at,
+const fileOut = (f) => ({ id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, created_at: f.created_at, field: f.process_field ?? null,
   uploaded_by: f.first_name ? { id: f.uploaded_by, first_name: f.first_name, last_name: f.last_name } : null });
 const processRow = (id) => db.prepare('SELECT * FROM ticket_process_steps WHERE id = ?').get(id);
 const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
 
-function listProcess(ticketId) {
+export function listProcess(ticketId) {
   const files = db.prepare(`SELECT f.*, u.first_name, u.last_name FROM ticket_files f LEFT JOIN users u ON u.id = f.uploaded_by
     WHERE f.ticket_id = ? AND f.process_step_id IS NOT NULL ORDER BY f.created_at, f.id`).all(ticketId);
   return db.prepare(`SELECT p.*, a.first_name, a.last_name, e.first_name AS e_first_name, e.last_name AS e_last_name
@@ -672,7 +674,8 @@ function listProcess(ticketId) {
     WHERE p.ticket_id = ? ORDER BY COALESCE(p.step_date, substr(p.created_at, 1, 10)), p.created_at, p.id`).all(ticketId)
     .map((p) => ({
       id: p.id, step_type: p.step_type, step_date: p.step_date, notes: p.notes || '', reviews: cleanReviews(json.parse(p.reviews, {})),
-      decision: p.decision || '', pricing: p.pricing || '',
+      decision: p.decision || '', pricing: p.pricing || '', criticality: p.criticality || 'queued', fields: json.parse(p.fields, {}),
+      done: !!p.completed_at, completed_at: p.completed_at ?? null,
       created_at: p.created_at, updated_at: p.updated_at,
       author: p.first_name ? { id: p.author_id, first_name: p.first_name, last_name: p.last_name } : null,
       updated_by: p.e_first_name ? { id: p.updated_by, first_name: p.e_first_name, last_name: p.e_last_name } : null,
@@ -685,60 +688,81 @@ r.get('/:id/process', (req, res) => {
   res.json({ steps: listProcess(req.params.id), types: PROCESS_TYPES });
 });
 
-/** Body: { step_type, step_date? }. Steps can be added in any order, at any time. */
+/** Body: { step_type, step_date? (the due date), criticality? }. Staffs the ticket: the event is made, the ticket tagged for it, and it joins the SAC list. */
 r.post('/:id/process', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const type = String(req.body?.step_type || '');
-  if (!PROCESS_TYPES.includes(type)) return res.status(400).json({ error: 'Choose a step type' });
-  const id = db.prepare('INSERT INTO ticket_process_steps (ticket_id, step_type, step_date, reviews, author_id) VALUES (?, ?, ?, ?, ?)')
-    .run(t.id, type, isoDate(req.body?.step_date), json.str(cleanReviews({})), req.user.id).lastInsertRowid;
-  recordWork(req.user, { kind: 'process', ticket_id: t.id, ref_id: id, summary: type });
-  touch(t.id);
-  res.json({ id, steps: listProcess(t.id) });
+  if (!PROCESS_TYPES.includes(type)) return res.status(400).json({ error: 'Choose a staffing event' });
+  const { id } = addStaffingEvent(req.user, t.id, type, { dueDate: isoDate(req.body?.step_date), criticality: req.body?.criticality });
+  res.json({ id, steps: listProcess(t.id), labels: json.parse(ticketRow(t.id).labels, []) });
 });
 
-/** Body may hold step_type, step_date, reviews, notes, decision (Proceed, Revise, No-Bid or none) and pricing. Anyone can update a milestone. */
-r.put('/process/:pid', ownerOnly(ofStep), (req, res) => {
+// What only the ticket's owner (or an admin) sets on a staffing event: what it is, when it's due, how critical, and a gate's decision.
+const OWNER_KEYS = ['step_type', 'step_date', 'criticality', 'decision'];
+
+/**
+ * Body may hold step_type, step_date (due date), criticality, decision (Proceed, Revise, No-Bid or none), reviews, notes,
+ * pricing, fields ({ key: text }) and done. Anyone can write the work (fields, reviews, notes, pricing) and mark it done, so
+ * solution architects answer from the SAC list; the rest is the ticket owner's or an admin's.
+ */
+r.put('/process/:pid', (req, res) => {
   const p = processRow(req.params.pid);
-  if (!p) return res.status(404).json({ error: 'Process step not found' });
+  if (!p) return res.status(404).json({ error: 'Staffing event not found' });
   const b = req.body || {};
-  if (b.step_type !== undefined && !PROCESS_TYPES.includes(b.step_type)) return res.status(400).json({ error: 'Choose a milestone' });
+  const t = ticketRow(p.ticket_id);
+  const changes = (k) => b[k] !== undefined && String(b[k] ?? '') !== String((k === 'decision' ? p.decision : p[k]) ?? '');
+  if (OWNER_KEYS.some(changes)) {
+    const denied = ticketEditDenied(req.user, t);
+    if (denied) return res.status(403).json({ error: denied });
+  }
+  if (b.step_type !== undefined && b.step_type !== p.step_type && !PROCESS_TYPES.includes(b.step_type)) return res.status(400).json({ error: 'Choose a staffing event' });
   if (b.decision !== undefined && b.decision && !DECISIONS.includes(b.decision)) return res.status(400).json({ error: 'Choose a decision' });
-  db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, decision = ?, pricing = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`).run(
-    b.step_type ?? p.step_type,
+  if (b.criticality !== undefined && !isCriticality(b.criticality)) return res.status(400).json({ error: 'Choose how critical it is' });
+  const type = b.step_type ?? p.step_type;
+  const done = b.done === undefined ? !!p.completed_at : !!b.done;
+  db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, decision = ?, pricing = ?, criticality = ?, fields = ?,
+      completed_at = ?, completed_by = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`).run(
+    type,
     b.step_date !== undefined ? isoDate(b.step_date) : p.step_date,
     b.reviews !== undefined ? json.str(cleanReviews(b.reviews)) : p.reviews,
     typeof b.notes === 'string' ? b.notes.trim() : p.notes,
     b.decision !== undefined ? (b.decision || null) : p.decision,
     typeof b.pricing === 'string' ? b.pricing.trim() : p.pricing,
+    b.criticality ?? p.criticality,
+    b.fields !== undefined ? json.str(cleanFields(type, b.fields)) : p.fields,
+    done ? (p.completed_at || new Date().toISOString().slice(0, 19).replace('T', ' ')) : null,
+    done ? (p.completed_at ? p.completed_by : req.user.id) : null,
     req.user.id, p.id,
   );
+  if (type !== p.step_type) tagTicket(p.ticket_id, milestoneOf(type).tag);
   touch(p.ticket_id);
-  recordTicketUpdate(req.user, ticketRow(p.ticket_id), `Process step: ${b.step_type ?? p.step_type}`);
+  recordTicketUpdate(req.user, t, `Staffing event: ${type}`);
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
 /** Its documents stay on the ticket. */
 r.delete('/process/:pid', ownerOnly(ofStep), (req, res) => {
   const p = processRow(req.params.pid);
-  if (!p) return res.status(404).json({ error: 'Process step not found' });
+  if (!p) return res.status(404).json({ error: 'Staffing event not found' });
   db.prepare('DELETE FROM ticket_process_steps WHERE id = ?').run(p.id);
   db.prepare("DELETE FROM work_log WHERE kind = 'process' AND ref_id = ?").run(p.id);
   touch(p.ticket_id);
-  recordTicketUpdate(req.user, ticketRow(p.ticket_id), `Process step removed: ${p.step_type}`);
+  recordTicketUpdate(req.user, ticketRow(p.ticket_id), `Staffing event removed: ${p.step_type}`);
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
-r.post('/process/:pid/files', ownerOnly(ofStep), upload.single('file'), (req, res) => {
+/** A document for a staffing event; with ?field=<key>, the answer to one of its blocks of work. Anyone can add one. */
+r.post('/process/:pid/files', upload.single('file'), (req, res) => {
   const p = processRow(req.params.pid);
   if (!req.file) return res.status(400).json({ error: 'Choose a file to upload' });
   if (!p) {
     fs.rmSync(req.file.path, { force: true });
-    return res.status(404).json({ error: 'Process step not found' });
+    return res.status(404).json({ error: 'Staffing event not found' });
   }
-  const id = db.prepare(`INSERT INTO ticket_files (ticket_id, original_name, stored_name, mime_type, size, uploaded_by, process_step_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(p.ticket_id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id, p.id).lastInsertRowid;
+  const field = milestoneOf(p.step_type).fields.some(([k]) => k === req.query.field) ? String(req.query.field) : null;
+  const id = db.prepare(`INSERT INTO ticket_files (ticket_id, original_name, stored_name, mime_type, size, uploaded_by, process_step_id, process_field)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(p.ticket_id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id, p.id, field).lastInsertRowid;
   recordWork(req.user, { kind: 'file', ticket_id: p.ticket_id, ref_id: id, summary: req.file.originalname });
   touch(p.ticket_id);
   res.json({ steps: listProcess(p.ticket_id) });
@@ -910,6 +934,7 @@ r.put('/:id/details', ownerOnly(), (req, res) => {
   }
   db.transaction(() => {
     Object.entries(set).forEach(([k, v]) => db.prepare(`UPDATE tickets SET ${k} = ? WHERE id = ?`).run(v, t.id));
+    if (set.labels) queueFromTags(req.user, t.id, t.labels, set.labels);
     if (Array.isArray(b.followers)) {
       db.prepare('DELETE FROM ticket_followers WHERE ticket_id = ?').run(t.id);
       const add = db.prepare('INSERT OR IGNORE INTO ticket_followers (ticket_id, user_id) SELECT ?, id FROM users WHERE id = ?');
@@ -930,11 +955,16 @@ function cleanLabels(names) {
   return json.str(out);
 }
 
-/** Body: { labels: [names] }. Sets a ticket's tags. On a ticket from Pipedrive the change waits for an admin to send it. */
+/**
+ * Body: { labels: [names] }. Sets a ticket's tags. On a ticket from Pipedrive the change waits for an admin to send it. A
+ * process tag newly on the ticket queues its staffing event. Returns the tags and whether any event was queued.
+ */
 r.put('/:id/labels', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  db.prepare('UPDATE tickets SET labels = ?, labels_pending = ? WHERE id = ?').run(cleanLabels(req.body?.labels), t.pipedrive_id ? 1 : 0, t.id);
+  const labels = cleanLabels(req.body?.labels);
+  db.prepare('UPDATE tickets SET labels = ?, labels_pending = ? WHERE id = ?').run(labels, t.pipedrive_id ? 1 : 0, t.id);
+  queueFromTags(req.user, t.id, t.labels, labels); // a process tag queues its staffing event, and so the SAC list
   touch(t.id);
   recordTicketUpdate(req.user, t, 'Labels');
   res.json({ labels: json.parse(ticketRow(t.id).labels, []) });
