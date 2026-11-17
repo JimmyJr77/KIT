@@ -7,7 +7,7 @@ import { api } from '../lib/api.js';
 import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
-import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, CRITICALITY, DEFAULT_CRITICALITY, criticalityOf, milestoneOf } from '../lib/process.js';
+import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, CRITICALITY, DEFAULT_CRITICALITY, defaultCriticality, criticalityOf, milestoneOf } from '../lib/process.js';
 import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { MarketingDrawer } from './TicketMarketing.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
@@ -247,7 +247,7 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpe
   const [users, setUsers] = useState([]);
   const [type, setType] = useState(PROCESS_TYPES[0]);
   const [date, setDate] = useState('');
-  const [criticality, setCriticality] = useState(DEFAULT_CRITICALITY);
+  const [criticality, setCriticality] = useState(() => defaultCriticality(ticket.pipeline_status)); // As Available from Prospecting
   const [openId, setOpenId] = useState(initialOpen);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -292,7 +292,8 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpe
   const tag = milestoneOf(type).tag;
 
   return (
-    <DrawerShell title="Staffing events" subtitle="What this pursuit is staffed for: due dates, how critical, and the work, block by block. Open ones are on the SAC list." onClose={onClose}>
+    <DrawerShell title="Staffing events" onClose={onClose}
+      subtitle={<><span className="block font-medium text-slate-700">{ticket.opportunity_title}</span>What this pursuit is staffed for: due dates, how critical, and the work, block by block. Open ones are on the SAC list.</>}>
       <div className="space-y-4">
         {readOnly ? (
           <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">

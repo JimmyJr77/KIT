@@ -706,7 +706,8 @@ const OWNER_KEYS = ['step_type', 'step_date', 'criticality', 'decision'];
  * Body may hold step_type, step_date (due date), criticality, decision (Proceed, Revise, No-Bid or none), reviews, notes,
  * pricing, fields ({ key: text }) and done. Anyone can write the work (fields, reviews, notes, pricing) and mark it done, so
  * solution architects answer from the SAC list; the rest is the ticket owner's or an admin's. Marking it done takes its
- * process tag off the ticket (and the event off the SAC list); reopening it puts the tag back.
+ * process tag off the ticket (and the event off the SAC list); reopening it puts the tag back. `architects` (user ids) sets
+ * who's staffed to it, the people under Solution Architect & Technical, leaving the rest of the reviews alone.
  */
 r.put('/process/:pid', (req, res) => {
   const p = processRow(req.params.pid);
@@ -722,6 +723,10 @@ r.put('/process/:pid', (req, res) => {
   if (b.decision !== undefined && b.decision && !DECISIONS.includes(b.decision)) return res.status(400).json({ error: 'Choose a decision' });
   if (b.criticality !== undefined && !isCriticality(b.criticality)) return res.status(400).json({ error: 'Choose how critical it is' });
   const type = b.step_type ?? p.step_type;
+  if (Array.isArray(b.architects) && b.reviews === undefined) {
+    const reviews = cleanReviews(json.parse(p.reviews, {}));
+    b.reviews = { ...reviews, technical: { ...reviews.technical, people: b.architects } };
+  }
   const done = b.done === undefined ? !!p.completed_at : !!b.done;
   db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, decision = ?, pricing = ?, criticality = ?, fields = ?,
       completed_at = ?, completed_by = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`).run(

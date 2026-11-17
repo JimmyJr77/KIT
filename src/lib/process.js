@@ -133,6 +133,8 @@ export const CRITICALITY = [
   { key: 'available', label: 'As Available', tone: 'bg-slate-100 text-slate-600 ring-slate-200' },
 ];
 export const DEFAULT_CRITICALITY = 'queued';
+/** How critical a new staffing event starts out, by the ticket's stage: As Available from Prospecting, else Queued. */
+export const defaultCriticality = (stage) => (stage === 'Prospecting' ? 'available' : DEFAULT_CRITICALITY);
 export const criticalityOf = (key) => CRITICALITY.find((c) => c.key === key) || CRITICALITY.find((c) => c.key === DEFAULT_CRITICALITY);
 
 /**

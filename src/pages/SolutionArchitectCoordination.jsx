@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -47,7 +48,8 @@ export default function SolutionArchitectCoordination() {
   const [error, setError] = useState('');
   const [open, setOpen] = useState(null); // { ticket_id, id } of the event whose pane is open, or { ticket_id, staff } to staff a ticket
   const [showDone, setShowDone] = useState(false);
-  const take = (d) => { setRows(d.rows); setCanRankMaster(!!d.can_rank_master); };
+  const [architects, setArchitects] = useState([]); // the solution architects who can be staffed
+  const take = (d) => { setRows(d.rows); setCanRankMaster(!!d.can_rank_master); setArchitects(d.architects || []); };
   const load = () => api.get(`/sac${showDone ? '?done=1' : ''}`).then(take).catch((e) => setError(e.message));
   useEffect(() => { setRows(null); load(); }, [showDone]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (call) => { setError(''); try { await call(); await load(); } catch (e) { setError(e.message); } };
@@ -125,13 +127,14 @@ export default function SolutionArchitectCoordination() {
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <table className="w-full min-w-[90rem] table-fixed text-left text-sm">
+            <table className="w-full min-w-[98rem] table-fixed text-left text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold tracking-wide text-slate-500 uppercase">
                 <tr>
                   <th className="w-12 py-2.5 pl-3">#</th>
                   <th className="w-[20%] px-3 py-2.5">Opportunity</th>
                   <th className="w-44 px-3 py-2.5">Staffing event</th>
                   <th className="w-36 px-3 py-2.5">Due date</th>
+                  <th className="w-36 px-3 py-2.5">Category</th>
                   <th className="w-44 px-3 py-2.5">How critical</th>
                   <th className="w-32 px-3 py-2.5">Architects</th>
                   <th className="px-3 py-2.5">Request</th>
@@ -141,15 +144,15 @@ export default function SolutionArchitectCoordination() {
               </thead>
               <SortableContext items={shown.map((r) => r.id)} strategy={verticalListSortingStrategy}>
                 <tbody className="divide-y divide-slate-100">
-                  {rows === null && <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
+                  {rows === null && <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
                   {rows?.length === 0 && (
-                    <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">
+                    <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">
                       {showDone ? 'Nothing is done yet.' : 'Nothing is staffed yet. Use Staff Ticket in a pipeline ticket, drag a ticket onto a bucket on the board, or give it a process tag.'}
                     </td></tr>
                   )}
-                  {rows?.length > 0 && !shown.length && <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No staffing events match.</td></tr>}
+                  {rows?.length > 0 && !shown.length && <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No staffing events match.</td></tr>}
                   {shown.map((r, i) => (
-                    <Row key={r.id} row={r} n={i + 1} draggable={canDrag && (scope === 'all' || r.mine)} selected={open?.id === r.id} user={user}
+                    <Row key={r.id} row={r} n={i + 1} draggable={canDrag && (scope === 'all' || r.mine)} selected={open?.id === r.id} user={user} architects={architects}
                       onOpen={() => setOpen({ ticket_id: r.ticket_id, id: r.id })} run={run} />
                   ))}
                 </tbody>
@@ -159,12 +162,12 @@ export default function SolutionArchitectCoordination() {
         </div>
       </div>
 
-      {open && <TicketTimeline key={`${open.ticket_id}-${open.id}`} ticketId={open.ticket_id} stepId={open.id ?? null} startStaffing={!!open.staff} onClose={() => { setOpen(null); load(); }} onChanged={load} />}
+      {open && <TicketTimeline key={`${open.ticket_id}-${open.id}`} ticketId={open.ticket_id} stepId={open.id ?? null} startStaffing={!!open.staff} drawerOnly onClose={() => { setOpen(null); load(); }} onChanged={load} />}
     </div>
   );
 }
 
-function Row({ row: r, n, draggable, selected, onOpen, run }) {
+function Row({ row: r, n, draggable, selected, onOpen, run, architects }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: r.id, disabled: !draggable });
   const def = milestoneOf(r.step_type);
   const stop = (e) => e.stopPropagation();
@@ -182,7 +185,7 @@ function Row({ row: r, n, draggable, selected, onOpen, run }) {
       </td>
       <td className="px-3 py-3">
         <div className="font-semibold text-slate-900">{r.title}</div>
-        <div className="mt-0.5 text-xs text-slate-500">{[r.organization, r.stage, r.owner && fullName(r.owner), r.territory?.name].filter(Boolean).join(' · ')}</div>
+        <div className="mt-0.5 text-xs text-slate-500">{[r.organization, r.owner && fullName(r.owner), r.territory?.name].filter(Boolean).join(' · ')}</div>
         <LabelList labels={r.labels} className="mt-1.5" />
       </td>
       <td className="px-3 py-3">
@@ -193,6 +196,7 @@ function Row({ row: r, n, draggable, selected, onOpen, run }) {
       <td className="px-3 py-3 whitespace-nowrap" onClick={r.can_edit && !r.completed_at ? stop : undefined}>
         {r.completed_at ? <span className="text-xs text-emerald-700">Done {stamp(r.completed_at)}</span> : <DueCell row={r} onSave={(v) => put({ step_date: v || null })} />}
       </td>
+      <td className="px-3 py-3 text-slate-700" title="The stage the ticket is in now">{r.stage || '—'}</td>
       <td className="px-3 py-3" onClick={r.can_edit ? stop : undefined}>
         {r.can_edit && !r.completed_at ? (
           <select aria-label={`How critical ${r.step_type} for ${r.title} is`} value={r.criticality} onChange={(e) => put({ criticality: e.target.value })}
@@ -201,10 +205,8 @@ function Row({ row: r, n, draggable, selected, onOpen, run }) {
           </select>
         ) : <CriticalityPill value={r.criticality} />}
       </td>
-      <td className="px-3 py-3">
-        {r.architects.length
-          ? <span className="flex flex-wrap gap-1">{r.architects.map((u) => <Avatar key={u.id} user={u} size="xs" />)}</span>
-          : <span className="text-xs text-slate-400">None yet</span>}
+      <td className="px-3 py-3" onClick={r.completed_at ? undefined : stop}>
+        {r.completed_at ? <ArchitectList people={r.architects} /> : <ArchitectCell row={r} options={architects} onSave={(ids) => put({ architects: ids })} />}
       </td>
       <td className="px-3 py-3">
         {r.request ? <p className="line-clamp-3 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.request}>{r.request}</p> : <span className="text-xs text-slate-400">No request written</span>}
@@ -231,6 +233,72 @@ function Row({ row: r, n, draggable, selected, onOpen, run }) {
           : <button type="button" className="btn px-2 py-1 text-xs" onClick={() => confirm(`Mark ${r.step_type} for “${r.title}” done? It leaves this list.`) && put({ done: true })} title="Mark it done: it leaves this list"><Check size={12} /> Done</button>}
       </td>
     </tr>
+  );
+}
+
+const ArchitectList = ({ people }) => (people.length
+  ? <span className="flex flex-wrap gap-1">{people.map((u) => <Avatar key={u.id} user={u} size="xs" />)}</span>
+  : <span className="text-xs text-slate-400">None yet</span>);
+
+/**
+ * Who's staffed to the event. A click on the architects (or "None yet") opens the solution architects in that spot, to tick
+ * any number of; it saves as it closes. Someone staffed who isn't a solution architect stays listed, so they can be taken off.
+ */
+function ArchitectCell({ row: r, options, onSave }) {
+  const [picked, setPicked] = useState(null); // null: closed
+  const [at, setAt] = useState(null);
+  const button = useRef(null);
+  const menu = useRef(null);
+  const current = r.architects.map((u) => u.id);
+  const close = () => {
+    if (picked === null) return;
+    const next = picked;
+    setPicked(null);
+    if (next.length !== current.length || next.some((id) => !current.includes(id))) onSave(next);
+  };
+  // The table scrolls, so the list is placed on the page where the cell is. It closes (and saves) on a click elsewhere, or
+  // if the page moves under it.
+  useEffect(() => {
+    if (picked === null) return undefined;
+    const outside = (e) => { if (!menu.current?.contains(e.target) && !button.current?.contains(e.target)) close(); };
+    window.addEventListener('mousedown', outside);
+    window.addEventListener('scroll', outside, true);
+    window.addEventListener('resize', close);
+    return () => { window.removeEventListener('mousedown', outside); window.removeEventListener('scroll', outside, true); window.removeEventListener('resize', close); };
+  });
+  const open = () => {
+    const box = button.current.getBoundingClientRect();
+    setAt({ left: Math.min(box.left, window.innerWidth - 336), top: box.bottom + 4, maxHeight: Math.max(160, window.innerHeight - box.bottom - 16) });
+    setPicked(current);
+  };
+  const people = [...options, ...r.architects.filter((u) => !options.some((o) => o.id === u.id))];
+  const toggle = (id) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
+  return (
+    <>
+      <button ref={button} type="button" onClick={() => (picked === null ? open() : close())} aria-haspopup="listbox" aria-expanded={picked !== null}
+        aria-label={`Solution architects on ${r.step_type} for ${r.title}`} title="Click to choose the solution architects"
+        className="-mx-1.5 rounded px-1.5 py-0.5 text-left hover:bg-white hover:ring-1 hover:ring-slate-300">
+        <ArchitectList people={r.architects} />
+      </button>
+      {picked !== null && createPortal(
+        <div ref={menu} role="listbox" aria-multiselectable="true" style={at} onKeyDown={(e) => e.key === 'Escape' && setPicked(null)}
+          className="fixed z-50 w-80 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+          <div className="px-3 py-1.5 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Solution architects</div>
+          {people.length === 0 && <div className="px-3 py-2 text-sm text-slate-400">No one is on the Technical Solutioning team yet.</div>}
+          {people.map((u) => (
+            <label key={u.id} className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-slate-50">
+              <input type="checkbox" checked={picked.includes(u.id)} onChange={() => toggle(u.id)} />
+              <Avatar user={u} size="xs" />
+              <span className="min-w-0 flex-1 truncate text-slate-800">{fullName(u)}</span>
+              {u.title && <span className="shrink-0 text-[11px] text-slate-400">{u.title}</span>}
+            </label>
+          ))}
+          <div className="mt-1 flex items-center justify-between border-t border-slate-100 px-3 pt-1.5 pb-1">
+            <button type="button" className="text-xs text-slate-500 hover:text-slate-800 hover:underline" onClick={() => setPicked([])}>None</button>
+            <button type="button" className="btn px-2 py-0.5 text-xs" onClick={close}>Done</button>
+          </div>
+        </div>, document.body)}
+    </>
   );
 }
 

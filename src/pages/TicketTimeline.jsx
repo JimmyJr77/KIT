@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft, Megaphone, UserPlus } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft, Megaphone, UserPlus, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -32,15 +32,17 @@ const eventKey = (e) => `${e.type}-${e.activity?.id ?? e.comment?.id ?? e.file?.
  * `initialTool` opens the pane on one of its tools (strategy, process…). A pipeline ticket's Process view opens over the pane
  * and closing it returns here. `notePick` ({ shownIds, pickedIds, onPick }), from the Close to closing list, lets a comment or
  * note be picked as the one the ticket's row shows there, and outlines the one showing. `stepId` opens the Staffing events
- * pane on that event (from the SAC list).
+ * pane on that event (from the SAC list). `drawerOnly` (the SAC list) opens with just that pane and the menu bar: the
+ * ticket's own pane is tucked away until the chevrons at the foot of the menu bar bring it out, and they tuck it back.
  */
-export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, stepId = null, startStaffing = false, onClose, onChanged, notePick = null }) {
+export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, stepId = null, startStaffing = false, drawerOnly = false, onClose, onChanged, notePick = null }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [tool, setTool] = useState(activityId !== undefined ? 'activities' : stepId || startStaffing ? 'process' : initialTool); // a pane off the left edge
   const [openStep, setOpenStep] = useState(stepId); // the staffing event the Staffing events pane opens on
   const [staffing, setStaffing] = useState(startStaffing); // opened from Staff Ticket: the new-event form is put forward
   const [openActivity, setOpenActivity] = useState(activityId ?? null); // the activity the Activity pane opens on
+  const [mainHidden, setMainHidden] = useState(drawerOnly && !!(stepId || startStaffing)); // only the tool's pane is showing
   const [processOpen, setProcessOpen] = useState(false);
   const [processKey, setProcessKey] = useState(0);
   const toolDirty = useRef(false);
@@ -51,6 +53,10 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   const showTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setOpenStep(null); setStaffing(false); setTool(next); } };
   const staffTicket = () => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setOpenStep(null); setStaffing(true); setTool('process'); } };
   const close = () => { if (leaveTool()) onClose(); };
+  // With the ticket's pane tucked away there's nothing behind a tool: turning it off in the menu bar brings the ticket back,
+  // and closing it closes the lot.
+  const pickTool = (next) => { if (!next && mainHidden) setMainHidden(false); switchTool(next); };
+  const closeTool = () => (mainHidden ? close() : switchTool(null));
   const load = () => api.get(`/tickets/${ticketId}/timeline`).then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [ticketId]); // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = () => { load(); onChanged?.(); setProcessKey((k) => k + 1); };
@@ -75,11 +81,21 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   return (
     <TicketAccess.Provider value={access}>
     <SidePanel wide onClose={close} title={t ? t.opportunity_title : 'Loading…'}
-      onEscape={processOpen ? () => setProcessOpen(false) : tool ? () => switchTool(null) : close}
-      rail={t && <PlanRail ticket={t} active={tool} onSelect={switchTool} skip={t.ticket_type === 'account' ? ['strategy', 'tickets'] : []} />}
+      onEscape={processOpen ? () => setProcessOpen(false) : tool ? closeTool : close}
+      mainHidden={mainHidden && !!tool}
+      rail={t && <>
+        <PlanRail ticket={t} active={tool} onSelect={pickTool} skip={t.ticket_type === 'account' ? ['strategy', 'tickets'] : []} />
+        {drawerOnly && tool && (
+          <button type="button" onClick={() => setMainHidden(!mainHidden)} aria-pressed={!mainHidden}
+            title={mainHidden ? 'Show the ticket' : 'Hide the ticket'} aria-label={mainHidden ? 'Show the ticket' : 'Hide the ticket'}
+            className="mt-1 grid h-9 w-9 place-items-center rounded-md border-t border-slate-200 text-slate-500 transition hover:bg-white hover:text-brand-700 hover:shadow-sm">
+            {mainHidden ? <ChevronsLeft size={18} /> : <ChevronsRight size={18} />}
+          </button>
+        )}
+      </>}
       drawerWide={tool === 'process'}
       drawer={t && tool && <PlanDrawer key={`${tool}-${openActivity}-${openStep}-${staffing}`} tool={tool} ticket={t} activityId={openActivity} stepId={openStep} staffing={staffing}
-        onClose={() => switchTool(null)} onChanged={refresh} onDirty={setToolDirty} />}
+        onClose={closeTool} onChanged={refresh} onDirty={setToolDirty} />}
       subtitle={t && (
         <span className="flex flex-wrap items-center gap-1.5">
           <span className={`rounded px-1.5 font-semibold ${t.ticket_type === 'work' ? 'bg-slate-200 text-slate-700' : 'bg-brand-50 text-brand-700'}`}>{ticketKind(t)} #{t.id}</span>

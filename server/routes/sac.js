@@ -51,7 +51,12 @@ function list(user, { done = false } = {}) {
   });
 }
 
-r.get('/', (req, res) => res.json({ rows: list(req.user, { done: req.query.done === '1' }), can_rank_master: ranksMaster(req.user) }));
+/** Who can be staffed to an event from the list: the active people on the Technical Solutioning team, by name. */
+const solutionArchitects = () => db.prepare(`SELECT DISTINCT u.id, u.first_name, u.last_name, u.title FROM users u
+  JOIN user_teams ut ON ut.user_id = u.id JOIN teams tm ON tm.id = ut.team_id
+  WHERE tm.name = 'Technical Solutioning' AND u.active = 1 ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE`).all();
+
+r.get('/', (req, res) => res.json({ rows: list(req.user, { done: req.query.done === '1' }), can_rank_master: ranksMaster(req.user), architects: solutionArchitects() }));
 
 /**
  * What the board needs to offer buckets: the stage each pipeline's stages count as in reports (a KIT-added stage blended

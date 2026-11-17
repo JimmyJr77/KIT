@@ -3,8 +3,9 @@
 // (Solution Architect Coordination). Making one tags the ticket; tagging a ticket with a process tag makes one. Its tag
 // comes off the ticket when the event is marked done or deleted, unless another open event of that type still needs it.
 import { db, json } from './db.js';
+import { reportStager } from './pipelines.js';
 import { recordWork } from './worklog.js';
-import { milestoneOf, eventForTag, cleanReviews, CRITICALITY, DEFAULT_CRITICALITY, PROCESS_TAG_NAMES } from '../src/lib/process.js';
+import { milestoneOf, eventForTag, cleanReviews, CRITICALITY, defaultCriticality, PROCESS_TAG_NAMES } from '../src/lib/process.js';
 
 export const isCriticality = (k) => CRITICALITY.some((c) => c.key === k);
 
@@ -45,16 +46,19 @@ const openOf = (ticketId, type) => db.prepare('SELECT id FROM ticket_process_ste
 
 /**
  * Make a staffing event of `type` on the ticket and tag the ticket for it. With `reuse`, an open one of that type already
- * there is used instead of a second. Returns { id, created }.
+ * there is used instead of a second. Unless `criticality` says otherwise it starts As Available on a ticket in Prospecting
+ * (or a stage reports count as Prospecting) and Queued anywhere else. Returns { id, created }.
  */
-export function addStaffingEvent(user, ticketId, type, { dueDate = null, criticality = DEFAULT_CRITICALITY, reuse = false, quiet = false } = {}) {
+export function addStaffingEvent(user, ticketId, type, { dueDate = null, criticality = null, reuse = false, quiet = false } = {}) {
   const def = milestoneOf(type);
   return db.transaction(() => {
     const existing = reuse && openOf(ticketId, type);
     tagTicket(ticketId, def.tag);
     if (existing) return { id: existing.id, created: false };
+    const t = db.prepare('SELECT pipeline_id, pipeline_status FROM tickets WHERE id = ?').get(ticketId);
+    const start = defaultCriticality(reportStager().of(t?.pipeline_id, t?.pipeline_status));
     const id = db.prepare(`INSERT INTO ticket_process_steps (ticket_id, step_type, step_date, reviews, fields, criticality, author_id)
-      VALUES (?, ?, ?, ?, '{}', ?, ?)`).run(ticketId, type, dueDate, json.str(cleanReviews({})), isCriticality(criticality) ? criticality : DEFAULT_CRITICALITY, user?.id ?? null).lastInsertRowid;
+      VALUES (?, ?, ?, ?, '{}', ?, ?)`).run(ticketId, type, dueDate, json.str(cleanReviews({})), isCriticality(criticality) ? criticality : start, user?.id ?? null).lastInsertRowid;
     if (quiet) return { id, created: true }; // made from a tag that was already there: nobody's work, and the ticket isn't touched
     recordWork(user, { kind: 'process', ticket_id: ticketId, ref_id: id, summary: type });
     db.prepare("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").run(ticketId);
