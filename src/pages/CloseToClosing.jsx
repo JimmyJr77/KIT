@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, Search, ArrowUp, ArrowDown, Download, Loader2 } from 'lucide-react';
+import { X, ArrowUp, ArrowDown, Download, Loader2 } from 'lucide-react';
 import { api } from '../lib/api.js';
-import { useApi } from '../lib/data.js';
-import MultiSelect from '../components/MultiSelect.jsx';
 import { fullName, shortDate, stamp, todayIso } from '../lib/format.js';
 import { usd, quarterFor } from '../lib/travelCalc.js';
 import { MentionText } from '../components/MentionTextarea.jsx';
 import { nameOnLight } from '../lib/brand.js';
-import { TagFilter, byTags, LabelList } from '../components/Labels.jsx';
+import { byTags, LabelList } from '../components/Labels.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
-import { PipelineViewToggle, TicketSearch } from './ProcessView.jsx';
+import PipelineHeader, { AddExistingButton, useOwnerTerritoryFilter } from '../components/PipelineHeader.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 // The standings someone sets while the deal is open. A deal that's paid or closed reads Closed instead.
@@ -78,17 +76,8 @@ export default function CloseToClosing() {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (call) => { setError(''); try { take(await call()); } catch (e) { setError(e.message); } };
 
-  const users = useApi('/users');
-  const territories = useApi('/territories');
   const [scope, setScope] = useState('all'); // 'mine': tickets I own, direct or have a priority card on
-  const [filters, setFilters] = useState([]); // "o:<user id>" for account owners, "t:<territory id>" for territories
-  // BD account owners (everyone on the BD team), alphabetical, then the territories (Pipedrive's "Account"), as on the board.
-  const filterOptions = useMemo(() => [
-    ...(users.data?.users || []).filter((u) => (u.teams || []).some((t) => t.name === 'BD'))
-      .sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }))
-      .map((u) => ({ value: `o:${u.id}`, label: fullName(u), group: 'BD account owners' })),
-    ...(territories.data?.territories || []).map((t) => ({ value: `t:${t.id}`, label: t.name, group: 'Territories' })),
-  ], [users.data, territories.data]);
+  const filter = useOwnerTerritoryFilter(); // account owners and territories, as on the board
   const [q, setQ] = useState('');
   const [tags, setTags] = useState([]);
   const [sort, setSortState] = useState(savedSort);
@@ -101,13 +90,11 @@ export default function CloseToClosing() {
 
   const sorted = useMemo(() => {
     const words = q.trim().toLowerCase();
-    const owners = filters.filter((f) => f.startsWith('o:')).map((f) => Number(f.slice(2)));
-    const terrs = filters.filter((f) => f.startsWith('t:')).map((f) => Number(f.slice(2)));
     return (rows || []).filter((r) => scope === 'all' || r.mine)
-      .filter((r) => (!owners.length || owners.includes(r.owner?.id)) && (!terrs.length || terrs.includes(r.territory_id)))
+      .filter((r) => filter.passes(r.owner?.id, r.territory_id))
       .filter((r) => !words || `${r.title} ${r.organization || ''}`.toLowerCase().includes(words)).filter(byTags(tags))
       .filter((r) => !quarter || quarterFor(r.close_date) === quarter).sort(compareBy(sort));
-  }, [rows, q, tags, sort, quarter, scope, filters]);
+  }, [rows, q, tags, sort, quarter, scope, filter.value]); // eslint-disable-line react-hooks/exhaustive-deps
   const listed = useMemo(() => new Set((rows || []).map((r) => r.ticket_id)), [rows]);
   const open = sorted.filter((r) => !r.closed);
   const openRow = openId && rows?.find((r) => r.ticket_id === openId);
@@ -142,7 +129,7 @@ export default function CloseToClosing() {
     return () => style.remove();
   }, []);
   const openTotal = money(sorted.filter((r) => !r.closed).reduce((s, r) => s + (r.value || 0), 0));
-  const narrowed = [scope === 'mine' && 'my tickets', filters.length && filterOptions.filter((o) => filters.includes(o.value)).map((o) => o.label).join(', '), q.trim() && `matching “${q.trim()}”`, tags.length && `tagged ${tags.join(', ')}`, quarter && `closing ${quarter}`].filter(Boolean);
+  const narrowed = [scope === 'mine' && 'my tickets', filter.value.length && filter.options.filter((o) => filter.value.includes(o.value)).map((o) => o.label).join(', '), q.trim() && `matching “${q.trim()}”`, tags.length && `tagged ${tags.join(', ')}`, quarter && `closing ${quarter}`].filter(Boolean);
   const summaryLine = `${sorted.length} ${sorted.length === 1 ? 'opportunity' : 'opportunities'} · ${sorted.filter((r) => !r.closed).length} open · ${openTotal}${narrowed.length ? ` · ${narrowed.join(', ')}` : ''} · sorted by ${SORTS[sort.key].label.toLowerCase()}, ${sort.dir === 'asc' ? 'ascending' : 'descending'}`;
 
   return (
@@ -159,57 +146,24 @@ export default function CloseToClosing() {
         </div>
         <p className="text-[10px] text-slate-600">{summaryLine}</p>
       </div>
-      <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4 print:hidden">
-        {/* The title, with the controls held at the top right as on the board: the title gives way before they wrap. */}
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="min-w-0 flex-1 basis-56">
-            <h1 className="text-2xl font-bold text-slate-900">Close to closing</h1>
-            <p className="mt-0.5 text-sm text-slate-500">Every ticket in Under Evaluation, plus any you add. A ticket stays here when its deal closes.</p>
-          </div>
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <div className="w-80 text-left">
-            <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or territory…" />
-          </div>
-          <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
-            {[['mine', 'My tickets'], ['all', 'All tickets']].map(([k, l]) => (
-              <button key={k} type="button" onClick={() => setScope(k)}
-                className={`rounded px-3 ${scope === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
-            ))}
-          </div>
-          <button type="button" className="btn h-9 py-0" onClick={download} disabled={!rows || building} title="Download the list as a PDF, as it's ordered and narrowed now">
-            {building ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} Download
-          </button>
-          <PipelineViewToggle />
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <TicketSearch value={null} skip={listed} placeholder="Add a ticket: search by opportunity or organization…"
-            onChange={(t) => t && run(() => api.post('/c2c', { ticket_id: t.id }))} />
-          {rows && <span className="text-sm text-slate-500">{open.length} open · <span className="font-medium text-emerald-700 tabular-nums">{money(open.reduce((s, r) => s + (r.value || 0), 0))}</span></span>}
-          {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
-        </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="relative w-full max-w-xs">
-            <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
-            <input className="input pl-9" placeholder="Search this list…" aria-label="Search this list" value={q} onChange={(e) => setQ(e.target.value)} />
-          </div>
-          <TagFilter value={tags} onChange={setTags} className="w-72" />
-          <div className="flex items-center gap-1">
-            <select className="input h-[38px] w-44 py-0" aria-label="Sort the list" value={sort.key}
-              onChange={(e) => setSort({ key: e.target.value, dir: SORTS[e.target.value].dir })}>
-              {Object.entries(SORTS).map(([k, o]) => <option key={k} value={k}>{o.label}</option>)}
-            </select>
-            <button type="button" className="btn h-[38px] w-[38px] shrink-0 p-0" onClick={() => setSort({ ...sort, dir: sort.dir === 'asc' ? 'desc' : 'asc' })}
-              title={`${sort.dir === 'asc' ? 'Ascending' : 'Descending'} (click to reverse)`} aria-label={`${sort.dir === 'asc' ? 'Ascending' : 'Descending'}. Reverse the order.`}>
-              {sort.dir === 'asc' ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
-            </button>
-          </div>
-          <select className="input h-[38px] w-48 py-0" aria-label="Show tickets expected to close in" title="Narrow the list by est. close date" value={quarter} onChange={(e) => setQuarter(e.target.value)}>
+      <PipelineHeader title="Close to closing" subtitle="Every ticket in Under Evaluation, plus any you add. A ticket stays here when its deal closes."
+        scope={scope} onScope={setScope}
+        add={<AddExistingButton title="Add a ticket to Close to closing" skip={listed} onPick={(t) => run(() => api.post('/c2c', { ticket_id: t.id }))} />}
+        search={{ value: q, onChange: setQ }}
+        filter={{ options: filter.options, value: filter.value, onChange: filter.setValue }} tags={tags} onTags={setTags}
+        sort={{ options: Object.entries(SORTS).map(([k, o]) => [k, o.label]), value: sort.key, onChange: (k) => setSort({ key: k, dir: SORTS[k].dir }),
+          dir: sort.dir, onDir: () => setSort({ ...sort, dir: sort.dir === 'asc' ? 'desc' : 'asc' }) }}
+        extra={<>
+          <select className="input h-[38px] w-40 py-0" aria-label="Show tickets expected to close in" title="Narrow the list by est. close date" value={quarter} onChange={(e) => setQuarter(e.target.value)}>
             <option value="">All close dates</option>
             {quarters.map((k, i) => <option key={k} value={k}>{k}{i === 0 ? ' (current)' : ''}</option>)}
           </select>
-        </div>
-      </div>
+          <button type="button" className="btn h-[38px] py-0" onClick={download} disabled={!rows || building} title="Download the list as a PDF, as it's ordered and narrowed now">
+            {building ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} Download
+          </button>
+          {rows && <span className="text-sm text-slate-500">{open.length} open · <span className="font-medium text-emerald-700 tabular-nums">{money(open.reduce((s, r) => s + (r.value || 0), 0))}</span></span>}
+          {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
+        </>} />
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6 print:overflow-visible print:bg-white print:p-0">
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white print:overflow-visible print:rounded-none print:border-0">

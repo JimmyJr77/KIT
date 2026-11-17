@@ -201,11 +201,11 @@ export const byTags = (selected) => (t) => !selected.length
   || (t.labels || []).some((l) => selected.some((s) => s.toLowerCase() === String(l).toLowerCase()));
 
 /** Pick any number of tags to narrow a list of tickets to those carrying at least one of them. */
-export function TagFilter({ value, onChange, className = '' }) {
+export function TagFilter({ value, onChange, className = '', hideChips = false }) {
   const labels = useLabels();
   return (
     <div className={className}>
-      <MultiSelect compact options={labels.map((l) => ({ value: l.name, label: l.name, group: categoryName(l.category), sub: l.pipedrive_id ? 'Pipedrive' : undefined }))}
+      <MultiSelect compact hideChips={hideChips} options={labels.map((l) => ({ value: l.name, label: l.name, group: categoryName(l.category), sub: l.pipedrive_id ? 'Pipedrive' : undefined }))}
         value={value} onChange={onChange} placeholder={labels.length ? 'Filter by tag…' : 'No tags yet'} />
     </div>
   );

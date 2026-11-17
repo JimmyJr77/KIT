@@ -5,9 +5,10 @@ import { useClickAway } from './UserCombobox.jsx';
 /**
  * Multi-select with a type-to-filter text box and removable chips.
  * options: [{ value, label, sub?, group? }]. Options sharing a `group` are listed under that heading.
- * With `onCreate`, typing a name no option has offers to add it: onCreate(name) makes it and selects it.
+ * With `onCreate`, typing a name no option has offers to add it: onCreate(name) makes it and selects it. With `hideChips`
+ * the picks aren't shown in the box (the page shows them elsewhere); the box says how many are picked.
  */
-export default function MultiSelect({ options = [], value = [], onChange, placeholder = 'Type to filter…', compact, onCreate }) {
+export default function MultiSelect({ options = [], value = [], onChange, placeholder = 'Type to filter…', compact, onCreate, hideChips = false }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -29,7 +30,7 @@ export default function MultiSelect({ options = [], value = [], onChange, placeh
   return (
     <div className="relative" ref={ref}>
       <div className={`input flex flex-wrap items-center gap-1.5 ${compact ? 'min-h-9 py-1' : 'min-h-[38px] py-1.5'}`} onClick={() => setOpen(true)}>
-        {selected.map((o) => (
+        {!hideChips && selected.map((o) => (
           <span key={o.value} className="chip">
             {o.label}
             <button type="button" onClick={(e) => { e.stopPropagation(); remove(o.value); }} className="hover:text-brand-900"><X size={12} /></button>
@@ -37,7 +38,7 @@ export default function MultiSelect({ options = [], value = [], onChange, placeh
         ))}
         <input
           className="min-w-24 flex-1 border-0 p-0 text-sm outline-none focus:ring-0"
-          placeholder={selected.length ? '' : placeholder}
+          placeholder={!selected.length ? placeholder : hideChips ? `${selected.length} picked · add more…` : ''}
           value={q}
           onChange={(e) => { setQ(e.target.value); setOpen(true); }}
           onFocus={() => setOpen(true)}

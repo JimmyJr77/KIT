@@ -2,19 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Search, ArrowUp, ArrowDown, GripVertical, Check, FileText, PenLine, Circle, RotateCcw } from 'lucide-react';
+import { GripVertical, Check, FileText, PenLine, Circle, RotateCcw } from 'lucide-react';
 import { api } from '../lib/api.js';
-import { useApi } from '../lib/data.js';
 import { useAuth } from '../lib/auth.jsx';
-import MultiSelect from '../components/MultiSelect.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { fullName, stamp } from '../lib/format.js';
-import { isBdDirector } from '../lib/bd.js';
-import { LabelList } from '../components/Labels.jsx';
+import { LabelList, byTags } from '../components/Labels.jsx';
 import { PROCESS_TYPES, CRITICALITY, milestoneOf } from '../lib/process.js';
 import { DueDate, CriticalityPill } from './TicketPlanning.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
-import { PipelineViewToggle } from './ProcessView.jsx';
+import PipelineHeader, { AddExistingButton, useOwnerTerritoryFilter } from '../components/PipelineHeader.jsx';
 
 const CRIT_RANK = Object.fromEntries(CRITICALITY.map((c, i) => [c.key, i]));
 const today = () => new Date().toLocaleDateString('en-CA');
@@ -48,23 +45,17 @@ export default function SolutionArchitectCoordination() {
   const [rows, setRows] = useState(null);
   const [canRankMaster, setCanRankMaster] = useState(false);
   const [error, setError] = useState('');
-  const [open, setOpen] = useState(null); // { ticket_id, id } of the event whose pane is open
+  const [open, setOpen] = useState(null); // { ticket_id, id } of the event whose pane is open, or { ticket_id, staff } to staff a ticket
   const [showDone, setShowDone] = useState(false);
   const take = (d) => { setRows(d.rows); setCanRankMaster(!!d.can_rank_master); };
   const load = () => api.get(`/sac${showDone ? '?done=1' : ''}`).then(take).catch((e) => setError(e.message));
   useEffect(() => { setRows(null); load(); }, [showDone]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (call) => { setError(''); try { await call(); await load(); } catch (e) { setError(e.message); } };
 
-  const users = useApi('/users');
-  const territories = useApi('/territories');
   const [scope, setScopeState] = useState(() => saved('kit.sac.scope', (v) => ['mine', 'all'].includes(v), 'all'));
   const setScope = (v) => { setScopeState(v); keep('kit.sac.scope', v); };
-  const [filters, setFilters] = useState([]); // "d:<user id>" for BD directors, "t:<territory id>" for territories
-  const filterOptions = useMemo(() => [
-    ...(users.data?.users || []).filter(isBdDirector).sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }))
-      .map((u) => ({ value: `d:${u.id}`, label: fullName(u), group: 'BD directors' })),
-    ...(territories.data?.territories || []).map((t) => ({ value: `t:${t.id}`, label: t.name, group: 'Territories' })),
-  ], [users.data, territories.data]);
+  const filter = useOwnerTerritoryFilter(); // account owners and territories, as on the board
+  const [tags, setTags] = useState([]);
   const [q, setQ] = useState('');
   const [type, setType] = useState('');
   const [sort, setSortState] = useState(() => saved('kit.sac.sort', (v) => !!SORTS[v], 'priority'));
@@ -72,14 +63,12 @@ export default function SolutionArchitectCoordination() {
 
   const shown = useMemo(() => {
     const words = q.trim().toLowerCase();
-    const directors = filters.filter((f) => f.startsWith('d:')).map((f) => Number(f.slice(2)));
-    const terrs = filters.filter((f) => f.startsWith('t:')).map((f) => Number(f.slice(2)));
     return (rows || []).filter((r) => scope === 'all' || r.mine)
-      .filter((r) => (!directors.length || directors.includes(r.director?.id)) && (!terrs.length || terrs.includes(r.territory?.id)))
+      .filter((r) => filter.passes(r.owner?.id, r.territory?.id)).filter(byTags(tags))
       .filter((r) => !type || r.step_type === type)
       .filter((r) => !words || `${r.title} ${r.organization || ''} ${r.step_type} ${r.request}`.toLowerCase().includes(words))
       .sort(SORTS[sort].compare(scope));
-  }, [rows, scope, filters, type, q, sort]);
+  }, [rows, scope, filter.value, tags, type, q, sort]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Dragging rows sets the order: on My tickets, your own; on All tickets, the master list (team leads and admins only).
   const canDrag = !showDone && sort === 'priority' && (scope === 'mine' || canRankMaster);
@@ -103,36 +92,16 @@ export default function SolutionArchitectCoordination() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="min-w-0 flex-1 basis-56">
-            <h1 className="text-2xl font-bold text-slate-900">Solution Architect Coordination</h1>
-            <p className="mt-0.5 text-sm text-slate-500">Every staffed pursuit: RFI responses, white papers, gate reviews, SOO, SOW, ROM and proposals. Click a row to write or respond.</p>
-          </div>
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            <div className="w-80 text-left">
-              <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by BD director or territory…" />
-            </div>
-            <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
-              {[['mine', 'My tickets'], ['all', 'All tickets']].map(([k, l]) => (
-                <button key={k} type="button" onClick={() => setScope(k)}
-                  className={`rounded px-3 ${scope === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
-              ))}
-            </div>
-            <PipelineViewToggle />
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="relative w-full max-w-xs">
-            <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
-            <input className="input pl-9" placeholder="Search this list…" aria-label="Search this list" value={q} onChange={(e) => setQ(e.target.value)} />
-          </div>
-          <select className="input h-[38px] w-56 py-0" aria-label="Show one staffing event" value={type} onChange={(e) => setType(e.target.value)}>
+      <PipelineHeader title="Solution Architect Coordination" subtitle="Every staffed pursuit: RFI responses, white papers, gate reviews, SOO, SOW, ROM and proposals. Click a row to write or respond."
+        scope={scope} onScope={setScope}
+        add={<AddExistingButton title="Staff a ticket" onPick={(t) => setOpen({ ticket_id: t.id, staff: true })} />}
+        search={{ value: q, onChange: setQ }}
+        filter={{ options: filter.options, value: filter.value, onChange: filter.setValue }} tags={tags} onTags={setTags}
+        sort={{ options: Object.entries(SORTS).map(([k, o]) => [k, o.label]), value: sort, onChange: setSort }}
+        extra={<>
+          <select className="input h-[38px] w-48 py-0" aria-label="Show one staffing event" value={type} onChange={(e) => setType(e.target.value)}>
             <option value="">Every staffing event</option>
             {PROCESS_TYPES.map((t) => <option key={t} value={t}>{t} ({milestoneOf(t).tag})</option>)}
-          </select>
-          <select className="input h-[38px] w-44 py-0" aria-label="Sort the list" value={sort} onChange={(e) => setSort(e.target.value)}>
-            {Object.entries(SORTS).map(([k, o]) => <option key={k} value={k}>{o.label}</option>)}
           </select>
           <label className="flex items-center gap-1.5 text-sm text-slate-600">
             <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Show done instead
@@ -143,7 +112,7 @@ export default function SolutionArchitectCoordination() {
             </span>
           )}
           {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
-        </div>
+        </>}>
         <p className="text-xs text-slate-400">
           {showDone ? 'Done staffing events. Reopen one to put it back on the list.'
             : sort !== 'priority' ? 'Sorted by ' + SORTS[sort].label.toLowerCase() + '. Switch to Priority order to drag rows into order.'
@@ -151,7 +120,7 @@ export default function SolutionArchitectCoordination() {
             : canRankMaster ? 'The master list: as a team lead, drag a row by its handle to set the order everyone sees.'
             : 'The master list, in the order team leads set. Switch to My tickets to order your own.'}
         </p>
-      </div>
+      </PipelineHeader>
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
@@ -190,7 +159,7 @@ export default function SolutionArchitectCoordination() {
         </div>
       </div>
 
-      {open && <TicketTimeline key={`${open.ticket_id}-${open.id}`} ticketId={open.ticket_id} stepId={open.id} onClose={() => { setOpen(null); load(); }} onChanged={load} />}
+      {open && <TicketTimeline key={`${open.ticket_id}-${open.id}`} ticketId={open.ticket_id} stepId={open.id ?? null} startStaffing={!!open.staff} onClose={() => { setOpen(null); load(); }} onChanged={load} />}
     </div>
   );
 }
@@ -213,7 +182,7 @@ function Row({ row: r, n, draggable, selected, onOpen, run }) {
       </td>
       <td className="px-3 py-3">
         <div className="font-semibold text-slate-900">{r.title}</div>
-        <div className="mt-0.5 text-xs text-slate-500">{[r.organization, r.stage, r.director && fullName(r.director), r.territory?.name].filter(Boolean).join(' · ')}</div>
+        <div className="mt-0.5 text-xs text-slate-500">{[r.organization, r.stage, r.owner && fullName(r.owner), r.territory?.name].filter(Boolean).join(' · ')}</div>
         <LabelList labels={r.labels} className="mt-1.5" />
       </td>
       <td className="px-3 py-3">

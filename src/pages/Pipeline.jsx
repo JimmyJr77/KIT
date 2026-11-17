@@ -1,25 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
 // With the board in priority order a ticket is dropped on another ticket (to go just above it) as well as on a column.
 const CARD = 'card:';
 // While a ticket is dragged, the header becomes buckets: dropping on one staffs the ticket for that event (see BucketBar).
 const BUCKET = 'bucket:';
 const cardFirst = (args) => { const hits = pointerWithin(args); const cards = hits.filter((h) => String(h.id).startsWith(CARD)); return cards.length ? cards : hits; };
-import { Search, ListOrdered, Plus, Clock, Settings, ArrowDown, ArrowUp, Star, Trophy, ChevronsLeft, ChevronsRight, UserPlus, X } from 'lucide-react';
+import { ListOrdered, Clock, Star, Trophy, ChevronsLeft, ChevronsRight, UserPlus, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
-import { fullName, fullStamp, ticketKind } from '../lib/format.js';
+import { fullStamp, ticketKind } from '../lib/format.js';
 import { activityTimer, daysSince } from '../lib/activityTimer.js';
 import { usd } from '../lib/travelCalc.js';
-import PageHeader from '../components/PageHeader.jsx';
+import PipelineHeader, { AddButton, useOwnerTerritoryFilter } from '../components/PipelineHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
-import MultiSelect from '../components/MultiSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel, { PIPELINE_CLOSED_HINT } from './NewTicketPanel.jsx';
 import PwinSettings from './PwinSettings.jsx';
-import { LabelList, TagFilter, byTags, usePriorityTagHidden } from '../components/Labels.jsx';
-import { PipelineViewToggle } from './ProcessView.jsx';
+import { LabelList, byTags, usePriorityTagHidden } from '../components/Labels.jsx';
 import NextStepBadge from '../components/NextStepBadge.jsx';
 import { bucketsFor } from '../lib/process.js';
 
@@ -69,12 +67,11 @@ const savedSort = () => {
 
 export default function Pipeline() {
   const meta = useApi('/priorities/meta');
-  const users = useApi('/users');
-  const territories = useApi('/territories');
   const sacMeta = useApi('/sac/meta');
   const [staffed, setStaffed] = useState(''); // what the last drop on a bucket did
   const [scope, setScope] = useState('all');
-  const [filters, setFilters] = useState([]); // "o:<user id>" for account owners, "t:<territory id>" for territories
+  const filter = useOwnerTerritoryFilter(); // account owners and territories
+  const filters = filter.value;
   const [q, setQ] = useState('');
   const [tags, setTags] = useState([]);
   const [tickets, setTickets] = useState(null);
@@ -83,7 +80,10 @@ export default function Pipeline() {
   const [dragId, setDragId] = useState(null);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Settings from another BD Pipeline page come here with ?settings=1.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [settingsOpen, setSettingsOpenState] = useState(() => searchParams.get('settings') === '1');
+  const setSettingsOpen = (v) => { setSettingsOpenState(v); if (!v && searchParams.has('settings')) setSearchParams({}, { replace: true }); };
   const [cardWidth, setCardWidthState] = useState(savedWidth);
   const setCardWidth = (v) => { setCardWidthState(v); try { localStorage.setItem('kit.pipeline.cardWidth', v); } catch { /* not kept */ } };
   const [minimized, setMinimized] = useState(savedMinimized);
@@ -119,20 +119,11 @@ export default function Pipeline() {
     return () => clearTimeout(h);
   }, [scope, filters, q]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // BD account owners (everyone on the BD team), alphabetical, then the territories (Pipedrive's "Account"), in their order.
-  const filterOptions = useMemo(() => [
-    ...(users.data?.users || []).filter((u) => (u.teams || []).some((t) => t.name === 'BD'))
-      .sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }))
-      .map((u) => ({ value: `o:${u.id}`, label: fullName(u), group: 'BD account owners' })),
-    ...(territories.data?.territories || []).map((t) => ({ value: `t:${t.id}`, label: t.name, group: 'Territories' })),
-  ], [users.data, territories.data]);
-
   // One board per pipeline: KIT's own, plus one for each Pipedrive pipeline. KIT's own shows only when it has pipeline tickets or
   // is the only one.
   const keyOf = (id) => (id == null ? 'kit' : String(id));
   // What the board shows: open pipeline tickets (won and lost ones have left the board), narrowed to the chosen tags.
   const shown = useMemo(() => (tickets || []).filter((t) => !isClosed(t)).filter(byTags(tags)), [tickets, tags]);
-  const closed = useMemo(() => (tickets || []).filter(isClosed), [tickets]);
   const pipelines = useMemo(() => {
     const list = meta.data?.pipelines || [];
     const counts = new Map();
@@ -144,7 +135,6 @@ export default function Pipeline() {
 
   const stages = (pipeline?.statuses || []).filter((s) => s !== 'Lost');
   const lastStage = stages[stages.length - 1];
-  const wonHere = closed.filter((t) => t.deal_status === 'won' && keyOf(t.pipeline_id) === pipeline?.key);
 
   const markWon = async (t) => {
     if (!confirm(`Mark “${t.opportunity_title}” won? It moves into Delivery as a contract.${t.pipedrive_id ? ' Pipedrive follows.' : ''}`)) return;
@@ -219,64 +209,34 @@ export default function Pipeline() {
     <div className="flex h-full flex-col">
       <DndContext sensors={sensors} collisionDetection={ranking ? cardFirst : pointerWithin}
         onDragStart={({ active }) => { setDragId(active.id); setStaffed(''); }} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
-      <div className="relative space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4">
+      <div className="relative">
         {dragging && <BucketBar ticket={dragging} stage={reportStage(dragging)} />}
-        <PageHeader title="BD Pipeline" subtitle="Pipeline tickets by stage. Drag a ticket to move it, or onto a staffing bucket in the header to send it to SAC.">
-          <div className="w-80 text-left">
-            <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or territory…" />
-          </div>
-          <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
-            {[['mine', 'My tickets'], ['all', 'All tickets']].map(([k, l]) => (
-              <button key={k} type="button" onClick={() => setScope(k)}
-                className={`rounded px-3 ${scope === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
-            ))}
-          </div>
-          <PipelineViewToggle />
-          <button type="button" className="btn h-9 py-0" onClick={() => setSettingsOpen(true)}><Settings size={15} /> Settings</button>
-        </PageHeader>
-        <div className="flex flex-wrap items-center gap-4">
-          <button type="button" onClick={() => setCreating(true)} disabled={!!meta.data?.pipelineTicketsClosed} aria-label="New ticket"
-            title={meta.data?.pipelineTicketsClosed ? PIPELINE_CLOSED_HINT : 'New ticket'}
-            className="btn-primary h-[38px] w-[38px] shrink-0 p-0"><Plus size={18} /></button>
-          <div className="relative w-full max-w-md">
-            <Search size={15} className="absolute top-2.5 left-3 text-slate-400" />
-            <input className="input pl-9" placeholder="Search by opportunity or organization…" value={q} onChange={(e) => setQ(e.target.value)} />
-          </div>
-          <TagFilter value={tags} onChange={setTags} className="w-72" />
-          <div className="flex items-center gap-1">
-            <select className="input h-[38px] w-44 py-0" aria-label="Sort tickets" value={sort.key}
-              onChange={(e) => setSort({ key: e.target.value, dir: SORTS[e.target.value].dir })}>
-              {Object.entries(SORTS).map(([k, o]) => <option key={k} value={k}>{o.label}</option>)}
-            </select>
-            <button type="button" className="btn h-[38px] w-[38px] shrink-0 p-0" onClick={() => setSort({ ...sort, dir: sort.dir === 'asc' ? 'desc' : 'asc' })}
-              title={`${SORTS[sort.key].words[sort.dir === 'asc' ? 0 : 1]} (click to reverse)`}
-              aria-label={`${SORTS[sort.key].words[sort.dir === 'asc' ? 0 : 1]}. Reverse the order.`}>
-              {sort.dir === 'asc' ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
-            </button>
-          </div>
-          {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
-          {staffed && (
-            <span className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-1.5 text-sm text-emerald-800">
-              <UserPlus size={14} /> {staffed} <Link to="/pipeline/sac" className="font-semibold underline">Open SAC</Link>
-              <button type="button" onClick={() => setStaffed('')} aria-label="Dismiss" className="rounded p-0.5 hover:bg-emerald-100"><X size={13} /></button>
-            </span>
-          )}
-          {wonHere.length > 0 && (
-            <Link to="/closed-deals" className="ml-auto flex items-center gap-1.5 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100" title="Won deals leave the board; they're contracts in Delivery">
-              <Trophy size={13} /> {wonHere.length} won · {money(wonHere.reduce((s, t) => s + (t.value || 0), 0))}
-            </Link>
-          )}
-        </div>
-        {pipelines.length > 1 && (
-          <div className="flex flex-wrap gap-1" role="tablist" aria-label="Pipelines">
-            {pipelines.map((p) => (
-              <button key={p.key} type="button" role="tab" aria-selected={p.key === pipeline?.key} onClick={() => choosePipeline(p.key)}
-                className={`rounded-md px-3 py-1.5 text-sm transition ${p.key === pipeline?.key ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                {p.name} <span className="opacity-70">{p.count}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <PipelineHeader title="BD Pipeline" subtitle="Pipeline tickets by stage. Drag a ticket to move it, or onto a staffing bucket in the header to send it to SAC."
+          scope={scope} onScope={setScope} onSettings={() => setSettingsOpen(true)}
+          add={<AddButton onClick={() => setCreating(true)} disabled={!!meta.data?.pipelineTicketsClosed} title={meta.data?.pipelineTicketsClosed ? PIPELINE_CLOSED_HINT : 'New ticket'} />}
+          search={{ value: q, onChange: setQ }}
+          filter={{ options: filter.options, value: filter.value, onChange: filter.setValue }} tags={tags} onTags={setTags}
+          sort={{ options: Object.entries(SORTS).map(([k, o]) => [k, o.label]), value: sort.key, onChange: (k) => setSort({ key: k, dir: SORTS[k].dir }),
+            dir: sort.dir, dirLabel: SORTS[sort.key].words[sort.dir === 'asc' ? 0 : 1], onDir: () => setSort({ ...sort, dir: sort.dir === 'asc' ? 'desc' : 'asc' }) }}
+          extra={<>
+            {error && <span className="rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
+            {staffed && (
+              <span className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-1.5 text-sm text-emerald-800">
+                <UserPlus size={14} /> {staffed} <Link to="/pipeline/sac" className="font-semibold underline">Open SAC</Link>
+                <button type="button" onClick={() => setStaffed('')} aria-label="Dismiss" className="rounded p-0.5 hover:bg-emerald-100"><X size={13} /></button>
+              </span>
+            )}
+          </>}
+          tabs={pipelines.length > 1 && (
+            <div className="flex flex-wrap gap-1" role="tablist" aria-label="Pipelines">
+              {pipelines.map((p) => (
+                <button key={p.key} type="button" role="tab" aria-selected={p.key === pipeline?.key} onClick={() => choosePipeline(p.key)}
+                  className={`rounded-md px-3 py-1.5 text-sm transition ${p.key === pipeline?.key ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                  {p.name} <span className="opacity-70">{p.count}</span>
+                </button>
+              ))}
+            </div>
+          )} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">

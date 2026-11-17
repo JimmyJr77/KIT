@@ -34,12 +34,12 @@ const eventKey = (e) => `${e.type}-${e.activity?.id ?? e.comment?.id ?? e.file?.
  * note be picked as the one the ticket's row shows there, and outlines the one showing. `stepId` opens the Staffing events
  * pane on that event (from the SAC list).
  */
-export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, stepId = null, onClose, onChanged, notePick = null }) {
+export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, stepId = null, startStaffing = false, onClose, onChanged, notePick = null }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
-  const [tool, setTool] = useState(activityId !== undefined ? 'activities' : stepId ? 'process' : initialTool); // a pane off the left edge
+  const [tool, setTool] = useState(activityId !== undefined ? 'activities' : stepId || startStaffing ? 'process' : initialTool); // a pane off the left edge
   const [openStep, setOpenStep] = useState(stepId); // the staffing event the Staffing events pane opens on
-  const [staffing, setStaffing] = useState(false); // opened from Staff Ticket: the new-event form is put forward
+  const [staffing, setStaffing] = useState(startStaffing); // opened from Staff Ticket: the new-event form is put forward
   const [openActivity, setOpenActivity] = useState(activityId ?? null); // the activity the Activity pane opens on
   const [processOpen, setProcessOpen] = useState(false);
   const [processKey, setProcessKey] = useState(0);
@@ -144,7 +144,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
       <div className="fixed inset-0 z-[60] flex flex-col bg-slate-50" role="dialog" aria-label={`Process view of ${t.opportunity_title}`}>
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-6 py-2.5">
           <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => setProcessOpen(false)}><ArrowLeft size={13} /> Back to ticket</button>
-          <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-700"><Workflow size={15} className="text-brand-600" /> Process view</span>
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-700"><Workflow size={15} className="text-brand-600" /> Process steps &amp; shaping history</span>
           <span className="w-28 text-right text-[11px] text-slate-400">Esc to go back</span>
         </header>
         <div className="min-h-0 flex-1">
