@@ -5,7 +5,6 @@ import { useApi } from '../lib/data.js';
 import MultiSelect from '../components/MultiSelect.jsx';
 import { fullName, shortDate, stamp, todayIso } from '../lib/format.js';
 import { usd, quarterFor } from '../lib/travelCalc.js';
-import PageHeader from '../components/PageHeader.jsx';
 import { MentionText } from '../components/MentionTextarea.jsx';
 import { nameOnLight } from '../lib/brand.js';
 import { TagFilter, byTags, LabelList } from '../components/Labels.jsx';
@@ -161,7 +160,13 @@ export default function CloseToClosing() {
         <p className="text-[10px] text-slate-600">{summaryLine}</p>
       </div>
       <div className="space-y-4 border-b border-slate-200 bg-white px-8 pt-8 pb-4 print:hidden">
-        <PageHeader title="Close to closing" subtitle="Every ticket in Under Evaluation, plus any you add. A ticket stays here when its deal closes.">
+        {/* The title, with the controls held at the top right as on the board: the title gives way before they wrap. */}
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0 flex-1 basis-56">
+            <h1 className="text-2xl font-bold text-slate-900">Close to closing</h1>
+            <p className="mt-0.5 text-sm text-slate-500">Every ticket in Under Evaluation, plus any you add. A ticket stays here when its deal closes.</p>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <div className="w-80 text-left">
             <MultiSelect compact options={filterOptions} value={filters} onChange={setFilters} placeholder="Filter by account owner or territory…" />
           </div>
@@ -175,7 +180,8 @@ export default function CloseToClosing() {
             {building ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} Download
           </button>
           <PipelineViewToggle />
-        </PageHeader>
+          </div>
+        </div>
         <div className="flex flex-wrap items-center gap-4">
           <TicketSearch value={null} skip={listed} placeholder="Add a ticket: search by opportunity or organization…"
             onChange={(t) => t && run(() => api.post('/c2c', { ticket_id: t.id }))} />
@@ -269,7 +275,7 @@ function Row({ row: r, selected, onOpen, run }) {
       <td className="px-3 py-3 print:px-1.5 print:py-1.5 text-slate-700">
         {outcome ? <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-semibold ring-1 print:px-1.5 print:py-0.5 print:text-[8px] ${outcome.tone}`} title={r.outcome === 'awarded' ? undefined : `Was in ${r.stage}`}>{outcome.label}</span> : r.stage || '—'}
       </td>
-      <td className="px-3 py-3 print:px-1.5 print:py-1.5 whitespace-nowrap text-slate-700">{closeDate(r.close_date)}</td>
+      <td className="px-3 py-3 print:px-1.5 print:py-1.5 whitespace-nowrap text-slate-700" onClick={r.can_edit ? stop : undefined}><CloseDate row={r} run={run} /></td>
       <td className="px-3 py-3 print:px-1.5 print:py-1.5" onClick={stop}>
         {/* On paper, and for anyone who can't set it, the status is a plain pill. */}
         <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 print:inline-block print:px-1.5 print:py-0.5 print:text-[8px] ${r.closed || !r.can_edit ? 'inline-block whitespace-nowrap' : 'hidden'} ${status?.tone || UNSET}`}
@@ -308,6 +314,29 @@ function Notes({ row: r }) {
         </div>
       ))}
     </div>
+  );
+}
+
+/** When the deal is expected to close. Its owner (or an admin) clicks the date, or the dash where one would be, to set it. It saves to the ticket as its projected win date. */
+function CloseDate({ row: r, run }) {
+  const [value, setValue] = useState(null); // null: not editing
+  if (!r.can_edit) return closeDate(r.close_date);
+  const save = () => {
+    const next = value;
+    setValue(null);
+    if (next === (r.close_date || '') || (next && !/^\d{4}-\d{2}-\d{2}$/.test(next))) return;
+    run(async () => { await api.put(`/tickets/${r.ticket_id}/assignment`, { projected_win_date: next || null }); return api.get('/c2c'); });
+  };
+  if (value === null) {
+    return (
+      <button type="button" onClick={() => setValue(r.close_date || '')} title="Click to set the est. close date: it saves to the ticket"
+        className="-mx-1.5 w-full rounded px-1.5 py-0.5 text-left hover:bg-white hover:ring-1 hover:ring-slate-300">{closeDate(r.close_date)}</button>
+    );
+  }
+  return (
+    <input autoFocus type="date" className="input -mx-1.5 h-7 w-[calc(100%+0.75rem)] px-1.5 py-0 text-sm print:hidden" value={value} aria-label={`Est. close date of ${r.title}`}
+      onChange={(e) => setValue(e.target.value)} onBlur={save}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setValue(null); }} />
   );
 }
 
