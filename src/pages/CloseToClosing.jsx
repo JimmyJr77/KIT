@@ -31,8 +31,9 @@ const OUTCOMES = {
 const UNSET = 'bg-white text-slate-500 ring-slate-300';
 /** "18 mo", "5 yr", or the deal's own wording when it can't be read as months. */
 const duration = (r) => (r.term_months ? (r.term_months % 12 === 0 ? `${r.term_months / 12} yr` : `${r.term_months} mo`) : r.term_text || '—');
-/** The note a row shows: the one picked for it, else its latest. */
-const shownNote = (r) => r.notes.find((n) => n.id === r.note_id) || r.notes[0] || null;
+/** The notes a row shows, newest first: the ones picked for it, else its latest. */
+const shownNotes = (r) => { const picked = r.notes.filter((n) => r.note_ids.includes(n.id)); return picked.length ? picked : r.notes.slice(0, 1); };
+const noteBy = (n) => [n.author && fullName(n.author), stamp(n.created_at)].filter(Boolean).join(' · ');
 const closeDate = (iso) => (iso ? shortDate(iso, { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
 // Ways to order the table. `dir` is the direction each starts in; rows missing the value sorted on go to the bottom either
 // way, and ties go by name. Status runs On-Track down to Off-Track Trending Down, then not set, then Closed.
@@ -124,12 +125,11 @@ export default function CloseToClosing() {
         date: new Date().toLocaleDateString('en-US', { dateStyle: 'long' }),
         summary: summaryLine, logo: nameOnLight,
         rows: sorted.map((r) => {
-          const note = shownNote(r);
           return {
             title: r.title, sub: [r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · '), tags: (r.labels || []).join(' · '),
             value: money(r.value), duration: duration(r), category: OUTCOMES[r.outcome]?.label || r.stage || '—', closeDate: closeDate(r.close_date),
             status: r.closed ? CLOSED.label : STATUS[r.status]?.label || 'Not set',
-            note: note?.body || '', noteBy: note ? [note.author && fullName(note.author), stamp(note.created_at)].filter(Boolean).join(' · ') : '',
+            notes: shownNotes(r).map((n) => ({ body: n.body, by: noteBy(n) })),
           };
         }),
       });
@@ -216,7 +216,7 @@ export default function CloseToClosing() {
                 <th className="w-36 px-3 py-2.5 print:w-[11%] print:px-1.5 print:py-1">Category</th>
                 <th className="w-36 px-3 py-2.5 whitespace-nowrap print:w-[10%] print:px-1.5 print:py-1"><SortHead k="close" sort={sort} onSort={sortOn}>Est. Close Date</SortHead></th>
                 <th className="w-52 px-3 py-2.5 print:w-[13%] print:px-1.5 print:py-1"><SortHead k="status" sort={sort} onSort={sortOn}>Status</SortHead></th>
-                <th className="px-3 py-2.5 print:px-1.5 print:py-1">Notes</th>
+                <th className="px-3 py-2.5 print:px-1.5 print:py-1">Status note</th>
                 <th className="w-9 print:hidden" />
               </tr>
             </thead>
@@ -232,11 +232,11 @@ export default function CloseToClosing() {
         </div>
       </div>
 
-      {/* In the pane, any comment or note can be picked as the one its row shows; the one showing is outlined. */}
+      {/* In the pane, a click on a comment or note makes it the row's status note (shift-click for several); those showing are outlined. */}
       <div className="print:hidden">
       {openId && <TicketTimeline key={openId} ticketId={openId} onClose={() => { setOpenId(null); load(); }} onChanged={load}
-        notePick={openRow && { shownId: shownNote(openRow)?.id ?? null, pickedId: openRow.note_id,
-          onPick: (id) => run(() => api.put(`/c2c/${openId}`, { note_id: id })) }} />}
+        notePick={openRow && { shownIds: shownNotes(openRow).map((n) => n.id), pickedIds: openRow.note_ids,
+          onPick: (ids) => run(() => api.put(`/c2c/${openId}`, { note_ids: ids })) }} />}
       </div>
     </div>
   );
@@ -295,14 +295,18 @@ function Row({ row: r, selected, onOpen, run }) {
   );
 }
 
-/** The note a row shows: the latest, unless another is picked in the ticket's pane. Notes are written on the ticket. */
+/** A row's status note: its latest note, unless one or more are picked in the ticket's pane. Notes are written on the ticket. */
 function Notes({ row: r }) {
-  const shown = shownNote(r);
-  if (!shown) return <div className="text-sm text-slate-400 print:text-[9px]">No notes yet</div>;
+  const shown = shownNotes(r);
+  if (!shown.length) return <div className="text-sm text-slate-400 print:text-[9px]">No notes yet</div>;
   return (
-    <div className="space-y-1">
-      <div className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700 print:line-clamp-6 print:text-[9px]" title={shown.body}><MentionText text={shown.body} /></div>
-      <div className="text-[11px] text-slate-400 print:text-[7px] print:text-slate-500">{[shown.author && fullName(shown.author), stamp(shown.created_at), shown.updated_at && 'edited'].filter(Boolean).join(' · ')}</div>
+    <div className="space-y-2.5 print:space-y-1.5">
+      {shown.map((n) => (
+        <div key={n.id} className="space-y-1">
+          <div className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700 print:line-clamp-6 print:text-[9px]" title={n.body}><MentionText text={n.body} /></div>
+          <div className="text-[11px] text-slate-400 print:text-[7px] print:text-slate-500">{[noteBy(n), n.updated_at && 'edited'].filter(Boolean).join(' · ')}</div>
+        </div>
+      ))}
     </div>
   );
 }

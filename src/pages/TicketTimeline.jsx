@@ -30,7 +30,7 @@ const eventKey = (e) => `${e.type}-${e.activity?.id ?? e.comment?.id ?? e.file?.
  * Right-hand pane with everything that has happened on a master ticket, newest first.
  * `focus` ("c-12" for a comment) scrolls to and highlights one item; `activityId` opens that activity in the Activity pane;
  * `initialTool` opens the pane on one of its tools (strategy, process…). A pipeline ticket's Process view opens over the pane
- * and closing it returns here. `notePick` ({ shownId, pickedId, onPick }), from the Close to closing list, lets a comment or
+ * and closing it returns here. `notePick` ({ shownIds, pickedIds, onPick }), from the Close to closing list, lets a comment or
  * note be picked as the one the ticket's row shows there, and outlines the one showing.
  */
 export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, onClose, onChanged, notePick = null }) {
@@ -299,11 +299,18 @@ function Event({ event: e, ticket, onChanged, onOpenActivity, notePick }) {
   const canPin = e.type === 'comment' && e.comment.kind === 'note' && (isOwner || e.comment.pinned) && canEditTicket(user, ticket);
   // On the Close to closing list: this comment or note can be the one the ticket's row shows.
   const pickable = !!notePick && e.type === 'comment' && !e.comment.parent_id && ['comment', 'note'].includes(e.comment.kind);
-  const shownInList = pickable && notePick.shownId === e.comment.id;
+  const shownInList = pickable && notePick.shownIds.includes(e.comment.id);
   // Clicking the note itself picks it (not while selecting its text, or on a link in it).
   const pickForList = (ev) => {
-    if (ev.target.closest?.('a') || String(window.getSelection?.() || '')) return;
-    if (notePick.pickedId !== e.comment.id) notePick.onPick(e.comment.id);
+    if (ev.target.closest?.('a')) return;
+    const id = e.comment.id;
+    // Shift-click adds this note to the ones showing, or takes it out; a plain click shows this note alone.
+    if (ev.shiftKey) {
+      window.getSelection?.()?.removeAllRanges();
+      return notePick.onPick(shownInList ? notePick.shownIds.filter((x) => x !== id) : [...notePick.shownIds, id]);
+    }
+    if (String(window.getSelection?.() || '')) return;
+    if (!(notePick.pickedIds.length === 1 && notePick.pickedIds[0] === id)) notePick.onPick([id]);
   };
   const pin = async () => { await api.put(`/tickets/comments/${e.comment.id}/pin`, { pinned: !e.comment.pinned }); onChanged(); };
 
@@ -349,8 +356,9 @@ function Event({ event: e, ticket, onChanged, onOpenActivity, notePick }) {
                   </button>
                 )}
                 {pickable && (
-                  <button type="button" onClick={() => notePick.onPick(notePick.pickedId === e.comment.id ? null : e.comment.id)} aria-pressed={shownInList}
-                    title={notePick.pickedId === e.comment.id ? 'Picked for Close to closing. Click to go back to showing the latest note.' : shownInList ? 'Showing in Close to closing as the latest note. Click to keep it there.' : 'Show this note in Close to closing'}
+                  <button type="button" aria-pressed={shownInList}
+                    onClick={() => notePick.onPick(notePick.pickedIds.includes(e.comment.id) ? notePick.pickedIds.filter((x) => x !== e.comment.id) : shownInList ? [e.comment.id] : [...notePick.pickedIds, e.comment.id])}
+                    title={notePick.pickedIds.includes(e.comment.id) ? 'Picked as a status note in Close to closing. Click to take it out.' : shownInList ? 'Showing in Close to closing as the latest note. Click to keep it there.' : 'Add this note to the status note in Close to closing'}
                     className={`ml-1 inline-flex items-center rounded px-1 text-[11px] ${shownInList ? 'bg-brand-100 font-medium text-brand-800' : 'text-slate-400 hover:text-slate-700'}`}>
                     {shownInList ? 'Shown in C2C' : 'Show in C2C'}
                   </button>
@@ -361,7 +369,8 @@ function Event({ event: e, ticket, onChanged, onOpenActivity, notePick }) {
                 : (
                   <p onClick={pickable ? pickForList : undefined} onKeyDown={pickable ? (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pickForList(ev); } } : undefined}
                     role={pickable ? 'button' : undefined} tabIndex={pickable ? 0 : undefined} aria-pressed={pickable ? shownInList : undefined}
-                    title={pickable ? (shownInList ? 'This note is the one showing in Close to closing' : 'Click to show this note in Close to closing') : undefined}
+                    onMouseDown={pickable ? (ev) => { if (ev.shiftKey) ev.preventDefault(); } : undefined}
+                    title={pickable ? (shownInList ? 'Showing as the status note in Close to closing. Shift-click to take it out.' : 'Click to make this the status note in Close to closing. Shift-click to add it to the ones showing.') : undefined}
                     className={`mt-1.5 rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap text-slate-800 ${pickable ? 'cursor-pointer ' : ''}${shownInList ? 'outline-2 outline-offset-2 outline-brand-500 ' : pickable ? 'hover:outline-2 hover:outline-offset-2 hover:outline-brand-200 ' : ''}${about ? 'border-l-4 border-violet-500 bg-violet-50 ring-1 ring-violet-200' : isOwner || isNote ? 'bg-amber-50 ring-1 ring-amber-300' : 'bg-white ring-1 ring-slate-200'}`}>
                     <MentionText text={post.body} />
                   </p>

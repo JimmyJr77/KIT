@@ -1882,6 +1882,9 @@ CREATE TABLE IF NOT EXISTS marketing_leads (
   closed_at TEXT         -- set aside by Marketing without becoming a ticket
 );
 `);
+// Several notes can be picked for a C2C row: note_ids is a JSON array of ticket_comments ids (it replaces note_id, kept for
+// rows picked before). Empty or null: the row shows the latest note.
+addColumn('c2c_tickets', 'note_ids', 'TEXT');
 addColumn('meetings', 'objectives', 'TEXT'); // what we want out of the meeting
 
 /** Whether an admin has stopped people creating pipeline tickets in KIT. Deals pulled from Pipedrive still come in. */

@@ -15,7 +15,7 @@ const TONES = {
 
 /**
  * Build and download the PDF. `rows` are plain text, already ordered: { title, sub, tags, value, duration, category,
- * closeDate, status, note, noteBy }. `summary` is the line under the title and `date` today's date, both as shown. `logo`
+ * closeDate, status, notes: [{ body, by }] }. `summary` is the line under the title and `date` today's date, both as shown. `logo`
  * is the Knexus wordmark as a data URL (1848 × 260), set at the top as on the reports.
  */
 export async function downloadC2cPdf({ rows, summary, date, fileName, logo }) {
@@ -34,16 +34,23 @@ export async function downloadC2cPdf({ rows, summary, date, fileName, logo }) {
   doc.text(`Prepared ${plain(date)}`, width - margin, margin + 40, { align: 'right' });
   doc.text(doc.splitTextToSize(plain(summary), width - margin * 2), margin, margin + 53);
 
+  const byLines = new Set();
   autoTable(doc, {
     startY: margin + 66,
     margin: { left: margin, right: margin, top: margin, bottom: margin + 8 },
-    head: [['Opportunity', 'Value', 'Duration', 'Category', 'Est. Close Date', 'Status', 'Notes']],
+    head: [['Opportunity', 'Value', 'Duration', 'Category', 'Est. Close Date', 'Status', 'Status note']],
     body: rows.map((r) => {
-      const note = plain(r.note).trim();
+      // Each status note, then who wrote it and when on a line of its own (drawn lighter).
+      const notes = (r.notes || []).map((n) => {
+        const body = plain(n.body).trim();
+        const by = plain(n.by).trim();
+        if (by) byLines.add(by);
+        return `${body.length > NOTE_MAX ? `${body.slice(0, NOTE_MAX).trimEnd()}…` : body}${by ? `\n${by}` : ''}`;
+      }).filter(Boolean);
       return [
         [plain(r.title), plain(r.sub), plain(r.tags)].filter(Boolean).join('\n'),
         plain(r.value), plain(r.duration), plain(r.category), plain(r.closeDate), plain(r.status),
-        note ? `${note.length > NOTE_MAX ? `${note.slice(0, NOTE_MAX).trimEnd()}…` : note}${r.noteBy ? `\n${plain(r.noteBy)}` : ''}` : '—',
+        notes.length ? notes.join('\n\n') : '—',
       ];
     }),
     theme: 'plain',
@@ -89,10 +96,9 @@ export async function downloadC2cPdf({ rows, summary, date, fileName, logo }) {
           y += lineHeight;
         });
       } else {
-        // Notes: the last line (who wrote it, and when) is lighter.
-        const by = String(row.raw[6]).includes('\n') && row.raw[6] !== '—';
-        lines.forEach((line, i) => {
-          d.setFont('helvetica', 'normal').setTextColor(...(by && i === lines.length - 1 ? MUTED : INK));
+        // Status notes: the line under each (who wrote it, and when) is lighter.
+        lines.forEach((line) => {
+          d.setFont('helvetica', 'normal').setTextColor(...(byLines.has(line.trim()) ? MUTED : INK));
           d.text(line, x, y);
           y += lineHeight;
         });

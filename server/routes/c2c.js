@@ -31,10 +31,13 @@ function addEvaluating() {
 /** Where the deal itself says the ticket has got to (shown as its category), or null while it's still in a stage. */
 const dealOutcome = (t) => (t.deal_status === 'won' ? 'paid' : t.deal_status === 'lost' ? 'closed' : t.pipeline_status === 'Awarded' ? 'awarded' : null);
 
+/** The notes picked for a row: note_ids, or the single note_id of a row picked before there could be several. */
+const pickedIds = (c) => { const ids = json.parse(c.note_ids, null); return Array.isArray(ids) ? ids.map(Number) : c.note_id ? [c.note_id] : []; };
+
 function list(user) {
   addEvaluating();
   const stage = reportStager();
-  const rows = db.prepare(`SELECT c.status AS c_status, c.note_id, c.created_at AS added_at, t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name
+  const rows = db.prepare(`SELECT c.status AS c_status, c.note_id, c.note_ids, c.created_at AS added_at, t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name
     FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id LEFT JOIN users o ON o.id = t.created_by WHERE ${LISTABLE}`).all();
   // "My tickets", as on the board: ones this person owns, directs, or has a priority card on.
   const carded = new Set(db.prepare(`SELECT DISTINCT c.ticket_id FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id
@@ -65,7 +68,7 @@ function list(user) {
       owner: t.owner_first_name ? { id: t.created_by, first_name: t.owner_first_name, last_name: t.owner_last_name } : null,
       can_edit: canEditTicket(user, t), territory_id: t.territory_id,
       mine: t.created_by === user.id || t.bd_director_id === user.id || carded.has(t.id),
-      notes: mine, note_id: mine.some((n) => n.id === t.note_id) ? t.note_id : null,
+      notes: mine, note_ids: pickedIds(t).filter((id) => mine.some((n) => n.id === id)),
     };
   });
 }
@@ -104,7 +107,7 @@ function setDuration(user, ticketId, text) {
 
 /**
  * Body: any of status (one of the standings, or null to clear it), duration (the ticket's contract term, as text) and
- * note_id (the note the row shows, null for the latest). Status and duration are the ticket owner's or an admin's to set;
+ * note_ids (the notes the row shows, none for the latest). Status and duration are the ticket owner's or an admin's to set;
  * anyone picks the note.
  */
 r.put('/:ticketId', (req, res) => {
@@ -121,10 +124,11 @@ r.put('/:ticketId', (req, res) => {
     if (['won', 'lost'].includes(db.prepare('SELECT deal_status FROM tickets WHERE id = ?').get(c.ticket_id)?.deal_status)) return res.status(400).json({ error: 'This deal is closed' });
     db.prepare('UPDATE c2c_tickets SET status = ? WHERE ticket_id = ?').run(b.status ?? null, c.ticket_id);
   }
-  if ('note_id' in b) {
-    const note = b.note_id == null ? null : db.prepare("SELECT id FROM ticket_comments WHERE id = ? AND ticket_id = ? AND parent_id IS NULL AND kind IN ('comment', 'note')").get(Number(b.note_id) || 0, c.ticket_id);
-    if (b.note_id != null && !note) return res.status(400).json({ error: 'That note is no longer on this ticket' });
-    db.prepare('UPDATE c2c_tickets SET note_id = ? WHERE ticket_id = ?').run(note?.id ?? null, c.ticket_id);
+  if ('note_ids' in b) {
+    const ok = db.prepare("SELECT id FROM ticket_comments WHERE id = ? AND ticket_id = ? AND parent_id IS NULL AND kind IN ('comment', 'note')");
+    const ids = [...new Set((Array.isArray(b.note_ids) ? b.note_ids : []).map(Number).filter(Boolean))].slice(0, 20);
+    if (ids.some((id) => !ok.get(id, c.ticket_id))) return res.status(400).json({ error: 'That note is no longer on this ticket' });
+    db.prepare('UPDATE c2c_tickets SET note_ids = ?, note_id = NULL WHERE ticket_id = ?').run(json.str(ids), c.ticket_id);
   }
   res.json({ rows: list(req.user) });
 });
