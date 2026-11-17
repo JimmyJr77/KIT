@@ -40,17 +40,18 @@ const author = (row, prefix = '') => (row[`${prefix}first_name`]
   ? { id: row[`${prefix}author_id`] ?? row.author_id, first_name: row[`${prefix}first_name`], last_name: row[`${prefix}last_name`] }
   : null);
 
-export const COMMENT_SQL = `SELECT m.*, u.first_name, u.last_name, c.title AS card_title, tk.opportunity_title AS ticket_title,
+export const COMMENT_SQL = `SELECT m.*, u.first_name, u.last_name, c.title AS card_title, tk.opportunity_title AS ticket_title, ps.step_type AS process_step_type,
     (SELECT COUNT(*) FROM ticket_comments x WHERE x.parent_id = m.id) AS reply_count,
     (SELECT MAX(x.created_at) FROM ticket_comments x WHERE x.parent_id = m.id) AS last_reply_at,
     (SELECT GROUP_CONCAT(a.user_id) FROM card_assignees a WHERE a.card_id = m.card_id) AS card_assignee_ids
   FROM ticket_comments m LEFT JOIN users u ON u.id = m.author_id LEFT JOIN priority_cards c ON c.id = m.card_id
-  JOIN tickets tk ON tk.id = m.ticket_id`;
+  JOIN tickets tk ON tk.id = m.ticket_id LEFT JOIN ticket_process_steps ps ON ps.id = m.process_step_id`;
 
 export const commentOut = (m) => ({
   id: m.id, ticket_id: m.ticket_id, ticket_title: m.ticket_title, card_id: m.card_id, card_title: m.card_title, parent_id: m.parent_id,
   kind: m.kind, body: m.body, pinned: !!m.pinned, created_at: m.created_at, updated_at: m.updated_at ?? null, author: author(m), synced: !!m.pipedrive_id,
   target_type: m.target_type ?? null, target_id: m.target_id ?? null,
+  step: m.process_step_type ? { id: m.process_step_id, type: m.process_step_type } : null, // the staffing event a SAC note is about
   reply_count: m.reply_count ?? 0, last_reply_at: m.last_reply_at ?? null,
   card_assignee_ids: m.card_assignee_ids ? String(m.card_assignee_ids).split(',').map(Number) : [],
 });
@@ -601,8 +602,14 @@ r.post('/:id/comments', (req, res) => {
   } else if (cardId && !db.prepare('SELECT 1 FROM priority_cards WHERE id = ? AND ticket_id = ?').get(cardId, t.id)) {
     return res.status(400).json({ error: 'That priority is not on this ticket' });
   }
-  const id = db.prepare(`INSERT INTO ticket_comments (ticket_id, card_id, parent_id, kind, body, author_id, target_type, target_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(t.id, cardId, parentId, kind, body, req.user.id, target?.type ?? null, target?.id ?? null).lastInsertRowid;
+  // A note from the SAC list names the staffing event it's about (process_step_id).
+  let stepId = null;
+  if (b.process_step_id && kind === 'note') {
+    stepId = db.prepare('SELECT id FROM ticket_process_steps WHERE id = ? AND ticket_id = ?').get(Number(b.process_step_id) || 0, t.id)?.id;
+    if (!stepId) return res.status(400).json({ error: 'That staffing event is no longer on this ticket' });
+  }
+  const id = db.prepare(`INSERT INTO ticket_comments (ticket_id, card_id, parent_id, kind, body, author_id, target_type, target_id, process_step_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(t.id, cardId, parentId, kind, body, req.user.id, target?.type ?? null, target?.id ?? null, stepId).lastInsertRowid;
   recordWork(req.user, { kind, ticket_id: t.id, card_id: cardId, ref_id: id, summary: body });
   notifyMentions(req.user, body, { ticket_id: t.id, card_id: cardId, comment_id: id });
   notifyTicketOwner(req.user, t, body, { ticket_id: t.id, card_id: cardId, comment_id: id });
@@ -748,7 +755,10 @@ r.put('/process/:pid', (req, res) => {
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
-/** Its documents stay on the ticket; its process tag comes off, unless another open event of its type is there. */
+/**
+ * Removes a staffing event outright (the SAC list's Remove): its work, architects and place in every order go with it, and its
+ * process tag comes off unless another open event of its type is there. Its documents and notes stay on the ticket.
+ */
 r.delete('/process/:pid', ownerOnly(ofStep), (req, res) => {
   const p = processRow(req.params.pid);
   if (!p) return res.status(404).json({ error: 'Staffing event not found' });

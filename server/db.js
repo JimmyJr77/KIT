@@ -1049,6 +1049,8 @@ addColumn('users', 'developer', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('ticket_contacts', 'is_primary', 'INTEGER NOT NULL DEFAULT 0'); // the deal's main contact person
 addColumn('contacts', 'pipedrive_id', 'INTEGER');
 addColumn('ticket_comments', 'pinned', 'INTEGER NOT NULL DEFAULT 0'); // kind 'note' is a Pipedrive note; notes can be pinned
+// A note written from the SAC list is about one staffing event; it's still an ordinary note on the ticket (and goes to Pipedrive as one).
+addColumn('ticket_comments', 'process_step_id', 'INTEGER REFERENCES ticket_process_steps(id) ON DELETE SET NULL');
 addColumn('ticket_comments', 'pipedrive_id', 'INTEGER');
 // Pipedrive activities are tasks with a type (call, meeting, task, deadline, email, lunch), a due date and an assignee.
 addColumn('ticket_tasks', 'activity_type', 'TEXT');

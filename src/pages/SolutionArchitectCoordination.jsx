@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Check, FileText, PenLine, Circle, RotateCcw } from 'lucide-react';
+import { GripVertical, Check, FileText, PenLine, Circle, RotateCcw, Trash2, Plus } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
@@ -12,6 +12,7 @@ import { LabelList, byTags } from '../components/Labels.jsx';
 import { PROCESS_TYPES, CRITICALITY, milestoneOf } from '../lib/process.js';
 import { DueDate, CriticalityPill } from './TicketPlanning.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
+import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx';
 import PipelineHeader, { AddExistingButton, useOwnerTerritoryFilter } from '../components/PipelineHeader.jsx';
 
 const CRIT_RANK = Object.fromEntries(CRITICALITY.map((c, i) => [c.key, i]));
@@ -39,7 +40,8 @@ const keep = (key, v) => { try { localStorage.setItem(key, v); } catch { /* not 
  * SAC, Solution Architect Coordination: every open staffing event on a pipeline ticket (RFI responses, white papers, gate
  * reviews, SOO, SOW, ROM, proposals) as one list to work down. Tickets join when staffed: from the ticket pane's Staff
  * Ticket, a drop on a board bucket, or a process tag. Each person drags their own tickets into order on My tickets; team
- * leads and admins order the master list on All tickets. A click on a row opens that event's blocks of work.
+ * leads and admins order the master list on All tickets. A click on a row opens that event's blocks of work. Notes are
+ * written and edited in the row (each one is a note on the ticket), and the ticket's owner can remove an event outright.
  */
 export default function SolutionArchitectCoordination() {
   const { user } = useAuth();
@@ -127,30 +129,31 @@ export default function SolutionArchitectCoordination() {
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <table className="w-full min-w-[98rem] table-fixed text-left text-sm">
+            <table className="w-full min-w-[120rem] table-fixed text-left text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold tracking-wide text-slate-500 uppercase">
                 <tr>
                   <th className="w-12 py-2.5 pl-3">#</th>
-                  <th className="w-[20%] px-3 py-2.5">Opportunity</th>
+                  <th className="w-[16%] px-3 py-2.5">Opportunity</th>
                   <th className="w-44 px-3 py-2.5">Staffing event</th>
                   <th className="w-36 px-3 py-2.5">Due date</th>
                   <th className="w-36 px-3 py-2.5">Category</th>
                   <th className="w-44 px-3 py-2.5">How critical</th>
                   <th className="w-32 px-3 py-2.5">Architects</th>
                   <th className="px-3 py-2.5">Request</th>
+                  <th className="w-72 px-3 py-2.5">Notes</th>
                   <th className="w-56 px-3 py-2.5">Work</th>
                   <th className="w-24 px-3 py-2.5" />
                 </tr>
               </thead>
               <SortableContext items={shown.map((r) => r.id)} strategy={verticalListSortingStrategy}>
                 <tbody className="divide-y divide-slate-100">
-                  {rows === null && <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
+                  {rows === null && <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
                   {rows?.length === 0 && (
-                    <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">
+                    <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">
                       {showDone ? 'Nothing is done yet.' : 'Nothing is staffed yet. Use Staff Ticket in a pipeline ticket, drag a ticket onto a bucket on the board, or give it a process tag.'}
                     </td></tr>
                   )}
-                  {rows?.length > 0 && !shown.length && <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No staffing events match.</td></tr>}
+                  {rows?.length > 0 && !shown.length && <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">No staffing events match.</td></tr>}
                   {shown.map((r, i) => (
                     <Row key={r.id} row={r} n={i + 1} draggable={canDrag && (scope === 'all' || r.mine)} selected={open?.id === r.id} user={user} architects={architects}
                       onOpen={() => setOpen({ ticket_id: r.ticket_id, id: r.id })} run={run} />
@@ -211,6 +214,7 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects }) {
       <td className="px-3 py-3">
         {r.request ? <p className="line-clamp-3 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.request}>{r.request}</p> : <span className="text-xs text-slate-400">No request written</span>}
       </td>
+      <td className="px-3 py-3" onClick={stop}><NotesCell row={r} run={run} /></td>
       <td className="px-3 py-3">
         <ul className="space-y-0.5">
           {def.fields.map(([key, label, hint]) => {
@@ -228,11 +232,107 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects }) {
         </ul>
       </td>
       <td className="px-3 py-3 text-right" onClick={stop}>
-        {r.completed_at
-          ? <button type="button" className="btn px-2 py-1 text-xs" onClick={() => put({ done: false })} title="Put it back on the list"><RotateCcw size={12} /> Reopen</button>
-          : <button type="button" className="btn px-2 py-1 text-xs" onClick={() => confirm(`Mark ${r.step_type} for “${r.title}” done? It leaves this list.`) && put({ done: true })} title="Mark it done: it leaves this list"><Check size={12} /> Done</button>}
+        <div className="flex flex-col items-end gap-1.5">
+          {r.completed_at
+            ? <button type="button" className="btn px-2 py-1 text-xs" onClick={() => put({ done: false })} title="Put it back on the list"><RotateCcw size={12} /> Reopen</button>
+            : <button type="button" className="btn px-2 py-1 text-xs" onClick={() => confirm(`Mark ${r.step_type} for “${r.title}” done? It leaves this list.`) && put({ done: true })} title="Mark it done: it leaves this list"><Check size={12} /> Done</button>}
+          {r.can_edit && (
+            <button type="button" onClick={() => remove(r, run)} title="Remove this staffing event and its tag from the ticket"
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-red-50 hover:text-red-700"><Trash2 size={12} /> Remove</button>
+          )}
+        </div>
       </td>
     </tr>
+  );
+}
+
+/**
+ * Remove: the staffing event goes outright, not into Done. Its work, architects and place in every order go with it and its
+ * process tag comes off the ticket; documents and notes stay on the ticket. The ticket's owner or an admin can do it.
+ */
+const remove = (r, run) => {
+  const tag = milestoneOf(r.step_type).tag;
+  if (!confirm(`Remove ${r.step_type} from “${r.title}”?\n\nThe staffing event is deleted with its written work and architects, and the ${tag} tag comes off the ticket. Its documents and notes stay on the ticket. This can’t be undone.`)) return;
+  run(() => api.del(`/tickets/process/${r.id}`));
+};
+
+const noteBy = (n) => [n.author && fullName(n.author), stamp(n.created_at), n.updated_at && 'edited'].filter(Boolean).join(' · ');
+
+/**
+ * The event's notes, newest first, written right here: Add note (or a click on "No notes yet") opens a box, and sending it adds
+ * a note to the ticket about this event. A click on a note you wrote edits it. The latest shows; the rest open below it.
+ */
+function NotesCell({ row: r, run }) {
+  const [editing, setEditing] = useState(null); // null, 'new', or the id of the note being edited
+  const [all, setAll] = useState(false);
+  const shown = all ? r.notes : r.notes.slice(0, 1);
+  // A note that doesn't save stays in its box with the reason; one that does closes it and the list reloads.
+  const send = (call) => call().then(() => { setEditing(null); run(async () => {}); });
+  const add = (body) => send(() => api.post(`/tickets/${r.ticket_id}/comments`, { kind: 'note', body, process_step_id: r.id }));
+  const edit = (id, body) => send(() => api.put(`/tickets/comments/${id}`, { body }));
+  return (
+    <div className="space-y-2">
+      {editing === 'new' && <NoteBox onSave={add} onCancel={() => setEditing(null)} label={`New note on ${r.step_type} for ${r.title}`} />}
+      {shown.map((n) => (editing === n.id
+        ? <NoteBox key={n.id} initial={n.body} onSave={(body) => edit(n.id, body)} onCancel={() => setEditing(null)} label="Edit your note" />
+        : (
+          <div key={n.id} className="space-y-0.5">
+            {n.mine
+              ? <button type="button" onClick={() => setEditing(n.id)} title="Click to edit your note"
+                  className="-mx-1.5 block w-[calc(100%+0.75rem)] rounded px-1.5 py-0.5 text-left text-sm break-words whitespace-pre-wrap text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-300">
+                  <span className="line-clamp-4"><MentionText text={n.body} /></span>
+                </button>
+              : <div className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700" title={n.body}><MentionText text={n.body} /></div>}
+            <div className="text-[11px] text-slate-400">{noteBy(n)}</div>
+          </div>
+        )))}
+      <div className="flex items-center gap-3 text-xs">
+        {editing !== 'new' && (
+          <button type="button" onClick={() => setEditing('new')} className="flex items-center gap-1 font-medium text-brand-700 hover:underline">
+            <Plus size={12} /> {r.notes.length ? 'Add note' : 'Add a note'}
+          </button>
+        )}
+        {r.notes.length > 1 && (
+          <button type="button" onClick={() => setAll(!all)} className="text-slate-500 hover:text-slate-800 hover:underline">
+            {all ? 'Show latest only' : `${r.notes.length - 1} earlier`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Where a note is written in the table: ⌘/Ctrl+Enter or Save sends it, Escape (or Cancel) drops it. */
+function NoteBox({ initial = '', onSave, onCancel, label }) {
+  const [text, setText] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const ref = useRef(null);
+  useEffect(() => { const el = ref.current; el?.focus(); el?.setSelectionRange(el.value.length, el.value.length); }, []);
+  const changed = text.trim() !== initial.trim();
+  const save = async () => {
+    if (!text.trim() || busy) return;
+    if (!changed) return onCancel();
+    setBusy(true);
+    setError('');
+    try { await onSave(text.trim()); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  const cancel = () => { if (!changed || confirm('Discard this note?')) onCancel(); };
+  return (
+    <div className="rounded-lg border border-brand-500 bg-white ring-2 ring-brand-100">
+      <MentionTextarea inputRef={ref} rows={3} value={text} onChange={(e) => setText(e.target.value)} disabled={busy} aria-label={label}
+        placeholder="Write a note… (@ to mention)"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+          if (e.key === 'Escape') { e.stopPropagation(); cancel(); }
+        }}
+        className="block w-full resize-y rounded-t-lg border-0 bg-transparent px-2.5 py-1.5 text-sm focus:ring-0 focus:outline-none" />
+      <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-2 py-1">
+        {error && <span className="mr-auto text-xs text-red-700">{error}</span>}
+        <button type="button" className="text-xs text-slate-500 hover:text-slate-800" onClick={cancel} disabled={busy}>Cancel</button>
+        <button type="button" className="btn-primary px-2 py-0.5 text-xs" onClick={save} disabled={busy || !text.trim()}>{busy ? 'Saving…' : 'Save'}</button>
+      </div>
+    </div>
   );
 }
 

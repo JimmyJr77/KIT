@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, ArrowUp, ArrowDown, Download, Loader2 } from 'lucide-react';
+import { X, ArrowUp, ArrowDown, Download, Loader2, ListPlus } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useAuth } from '../lib/auth.jsx';
 import { fullName, shortDate, stamp, todayIso } from '../lib/format.js';
 import { usd, quarterFor } from '../lib/travelCalc.js';
 import { MentionText } from '../components/MentionTextarea.jsx';
@@ -71,7 +72,12 @@ export default function CloseToClosing() {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
   const [openId, setOpenId] = useState(null);
-  const take = (d) => setRows(d.rows);
+  const [importing, setImporting] = useState(false);
+  const [anyone, setAnyone] = useState(false); // an admin or BD lead adds from anyone's tickets
+  const take = (d) => { setRows(d.rows); setAnyone(!!d.anyone); };
+  const { user } = useAuth();
+  // The add search finds tickets in this person's purview: the ones they own or direct, or anyone's for an admin or BD lead.
+  const purview = useMemo(() => (anyone ? null : (xs) => xs.filter((t) => t.created_by === user.id || t.bd_director_id === user.id)), [anyone, user.id]);
   const load = () => api.get('/c2c').then(take).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (call) => { setError(''); try { take(await call()); } catch (e) { setError(e.message); } };
@@ -146,9 +152,12 @@ export default function CloseToClosing() {
         </div>
         <p className="text-[10px] text-slate-600">{summaryLine}</p>
       </div>
-      <PipelineHeader title="Close to closing" subtitle="Every ticket in Under Evaluation, plus any you add. A ticket stays here when its deal closes, unless you take it off."
+      <PipelineHeader title="Close to closing" subtitle="Every ticket in Under Evaluation, plus any you add or import. A ticket stays here when its deal closes, unless you take it off."
         scope={scope} onScope={setScope}
-        add={<AddExistingButton title="Add a ticket to Close to closing" skip={listed} onPick={(t) => run(() => api.post('/c2c', { ticket_id: t.id }))} />}
+        add={<>
+          <AddExistingButton title="Add a ticket to Close to closing" skip={listed} refine={purview} onPick={(t) => run(() => api.post('/c2c', { ticket_id: t.id }))} />
+          <button type="button" className="btn h-[38px] py-0" onClick={() => setImporting(true)} title="Pick from your Proposal and Under Evaluation tickets, or search all of your tickets"><ListPlus size={15} /> Import</button>
+        </>}
         search={{ value: q, onChange: setQ }}
         filter={{ options: filter.options, value: filter.value, onChange: filter.setValue }} tags={tags} onTags={setTags}
         sort={{ options: Object.entries(SORTS).map(([k, o]) => [k, o.label]), value: sort.key, onChange: (k) => setSort({ key: k, dir: SORTS[k].dir }),
@@ -192,11 +201,116 @@ export default function CloseToClosing() {
         </div>
       </div>
 
+      {importing && <ImportDialog onClose={() => setImporting(false)} onDone={(d) => { take(d); setImporting(false); }} />}
+
       {/* In the pane, a click on a comment or note makes it the row's status note (shift-click for several); those showing are outlined. */}
       <div className="print:hidden">
       {openId && <TicketTimeline key={openId} ticketId={openId} onClose={() => { setOpenId(null); load(); }} onChanged={load}
         notePick={openRow && { shownIds: shownNotes(openRow).map((n) => n.id), pickedIds: openRow.note_ids,
           onPick: (ids) => run(() => api.put(`/c2c/${openId}`, { note_ids: ids })) }} />}
+      </div>
+    </div>
+  );
+}
+
+const STAGE_TONE = { 'Under Evaluation': 'bg-indigo-50 text-indigo-800 ring-indigo-200', Proposal: 'bg-sky-50 text-sky-800 ring-sky-200' };
+
+/**
+ * The import: the Proposal and Under Evaluation tickets of the person looking (anyone's, for an admin or a BD lead) as one
+ * list to tick. Ticked tickets are on Close to closing; saving adds the newly ticked and takes the unticked off.
+ */
+function ImportDialog({ onClose, onDone }) {
+  const { user } = useAuth();
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [who, setWho] = useState('all');
+  const [q, setQ] = useState(''); // typed, it finds any of the person's tickets, whatever stage they're in
+  const [on, setOn] = useState(() => new Set()); // ticket ids ticked
+  useEffect(() => {
+    api.get('/c2c/import').then((d) => {
+      setData(d);
+      setOn(new Set(d.tickets.filter((t) => t.on_list).map((t) => t.ticket_id)));
+      if (d.anyone && d.tickets.some((t) => t.offered && (t.owner?.id === user.id || t.director?.id === user.id))) setWho(String(user.id));
+    }).catch((e) => setError(e.message));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const key = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [onClose]);
+
+  const tickets = data?.tickets || [];
+  // Whose tickets to show: everyone who owns or directs one on offer.
+  const people = useMemo(() => {
+    const byId = new Map();
+    tickets.forEach((t) => [t.owner, t.director].forEach((p) => p && byId.set(p.id, p)));
+    return [...byId.values()].sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }));
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const words = q.trim().toLowerCase();
+  const rank = (t) => (!t.offered ? 2 : t.stage === 'Under Evaluation' ? 0 : 1);
+  // Nothing typed: the Proposal and Under Evaluation tickets (and any ticked or unticked here). Typed: any ticket that matches.
+  const shown = useMemo(() => tickets.filter((t) => who === 'all' || t.owner?.id === Number(who) || t.director?.id === Number(who))
+    .filter((t) => (words ? `${t.title} ${t.organization || ''}`.toLowerCase().includes(words) : t.offered || on.has(t.ticket_id) !== t.on_list))
+    .sort((a, b) => rank(a) - rank(b) || a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })), [data, who, words, on]); // eslint-disable-line react-hooks/exhaustive-deps
+  const add = tickets.filter((t) => !t.on_list && on.has(t.ticket_id));
+  const hide = tickets.filter((t) => t.on_list && !on.has(t.ticket_id));
+  const allOn = shown.length > 0 && shown.every((t) => on.has(t.ticket_id));
+  const toggle = (id) => setOn((s) => { const n = new Set(s); if (!n.delete(id)) n.add(id); return n; });
+  const toggleAll = () => setOn((s) => { const n = new Set(s); shown.forEach((t) => (allOn ? n.delete(t.ticket_id) : n.add(t.ticket_id))); return n; });
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try { onDone(await api.post('/c2c/import', { add: add.map((t) => t.ticket_id), hide: hide.map((t) => t.ticket_id) })); }
+    catch (e) { setError(e.message); setSaving(false); }
+  };
+  const changes = [add.length && `${add.length} to add`, hide.length && `${hide.length} to take off`].filter(Boolean).join(' · ');
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4 print:hidden" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl bg-white shadow-xl" role="dialog" aria-label="Import tickets to Close to closing">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">Import tickets</h2>
+            <p className="mt-0.5 text-sm text-slate-500">{data?.anyone ? 'Open' : 'Your open'} tickets in Proposal and Under Evaluation. Search to find {data?.anyone ? 'any ticket' : 'any of your tickets'} in another stage. Ticked ones are on Close to closing; untick one to leave it off.</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X size={18} /></button>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-sm">
+          <label className="flex cursor-pointer items-center gap-2 font-medium text-slate-700">
+            <input type="checkbox" checked={allOn} disabled={!shown.length} onChange={toggleAll} /> Select all
+          </label>
+          <input className="input ml-auto h-8 w-64 py-0" placeholder="Search all stages by opportunity or org…" aria-label="Search tickets in any stage" value={q} onChange={(e) => setQ(e.target.value)} />
+          {data?.anyone && (
+            <select className="input h-8 w-56 py-0" aria-label="Whose tickets to show" value={who} onChange={(e) => setWho(e.target.value)}>
+              <option value="all">Everyone’s tickets</option>
+              {people.map((p) => <option key={p.id} value={p.id}>{fullName(p)}{p.id === user.id ? ' (me)' : ''}</option>)}
+            </select>
+          )}
+        </div>
+        <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
+          {!data && !error && <li className="px-5 py-8 text-center text-sm text-slate-400">Loading…</li>}
+          {data && !shown.length && <li className="px-5 py-8 text-center text-sm text-slate-400">{words ? 'No tickets match.' : data.anyone ? 'No open tickets are in Proposal or Under Evaluation.' : 'You have no open tickets in Proposal or Under Evaluation.'}</li>}
+          {shown.map((t) => (
+            <li key={t.ticket_id}>
+              <label className={`flex cursor-pointer items-center gap-3 px-5 py-2.5 ${on.has(t.ticket_id) ? 'bg-brand-50/50' : 'hover:bg-slate-50'}`}>
+                <input type="checkbox" checked={on.has(t.ticket_id)} onChange={() => toggle(t.ticket_id)} aria-label={`Include ${t.title}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-slate-900">{t.title}</div>
+                  <div className="truncate text-xs text-slate-500">{[t.organization, t.owner && fullName(t.owner), t.close_date && `Est. close ${closeDate(t.close_date)}`].filter(Boolean).join(' · ')}</div>
+                </div>
+                <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${OUTCOMES[t.outcome]?.tone || STAGE_TONE[t.stage] || 'bg-slate-50 text-slate-600 ring-slate-200'}`} title={!t.outcome && t.stage_name !== t.stage ? `In ${t.stage_name}` : undefined}>{OUTCOMES[t.outcome]?.label || t.stage || 'No stage'}</span>
+                <span className="w-24 shrink-0 text-right text-sm font-medium text-emerald-700 tabular-nums">{money(t.value)}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 px-5 py-3">
+          {error && <span className="mr-auto rounded-md bg-red-50 px-3 py-1.5 text-sm text-red-700">{error}</span>}
+          <span className="text-sm text-slate-500">{changes || 'No changes'}</span>
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn-primary" onClick={save} disabled={saving || !changes}>{saving ? 'Saving…' : 'Save'}</button>
+        </div>
       </div>
     </div>
   );

@@ -375,6 +375,7 @@ function Event({ event: e, ticket, onChanged, onOpenActivity, notePick }) {
                     <button type="button" onClick={() => about.activity_id && onOpenActivity(about.activity_id)} className="font-medium text-violet-700 hover:underline">{about.subject || 'an activity'}</button></>
                   : isOwner || isNote ? 'added a note' : 'commented'}
                 {!about && e.comment.card_title && <> on <span className="font-medium text-slate-700">{e.comment.card_title}</span></>}
+                {!about && e.comment.step && <> on <span className="font-medium text-slate-700">{e.comment.step.type}</span></>}
                 {about && <span className="ml-1 rounded bg-violet-100 px-1.5 text-[10px] font-semibold tracking-wide text-violet-800 uppercase">Activity comment</span>}
                 {canPin && (
                   <button type="button" onClick={pin} title={e.comment.pinned ? 'Unpin this note' : 'Pin this note to the top'}

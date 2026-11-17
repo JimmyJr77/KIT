@@ -126,7 +126,7 @@ export function AddButton({ title = 'New ticket', onClick, disabled = false }) {
 }
 
 /** An add button that opens a search for an existing pipeline ticket, for lists tickets are added to (C2C, SAC). */
-export function AddExistingButton({ title, onPick, skip = null }) {
+export function AddExistingButton({ title, onPick, skip = null, refine = null }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useClickAway(ref, () => setOpen(false));
@@ -136,7 +136,7 @@ export function AddExistingButton({ title, onPick, skip = null }) {
       {open && (
         <div className="absolute top-full left-0 z-30 mt-1 w-[28rem] rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
           <div className="mb-1.5 px-1 text-xs font-semibold text-slate-600">{title}</div>
-          <TicketSearch autoFocus value={null} skip={skip} placeholder="Search by opportunity or org…" onChange={(t) => { if (t) { setOpen(false); onPick(t); } }} />
+          <TicketSearch autoFocus value={null} skip={skip} refine={refine} placeholder="Search by opportunity or org…" onChange={(t) => { if (t) { setOpen(false); onPick(t); } }} />
         </div>
       )}
     </div>

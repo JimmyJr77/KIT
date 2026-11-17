@@ -32,6 +32,10 @@ function list(user, { done = false } = {}) {
   const ids = rows.map((x) => x.id);
   const files = ids.length ? db.prepare(`SELECT id, process_step_id, process_field, original_name, size FROM ticket_files
     WHERE process_step_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at, id`).all(...ids) : [];
+  // Notes on each event, newest first: written from this list, and kept on the ticket as its notes.
+  const notes = ids.length ? db.prepare(`SELECT m.id, m.process_step_id, m.body, m.created_at, m.updated_at, m.author_id, u.first_name, u.last_name
+    FROM ticket_comments m LEFT JOIN users u ON u.id = m.author_id
+    WHERE m.kind = 'note' AND m.process_step_id IN (${ids.map(() => '?').join(',')}) ORDER BY m.created_at DESC, m.id DESC`).all(...ids) : [];
   const users = new Map(db.prepare('SELECT id, first_name, last_name FROM users').all().map((u) => [u.id, u]));
   return rows.map((p) => {
     const reviews = cleanReviews(json.parse(p.reviews, {}));
@@ -40,6 +44,8 @@ function list(user, { done = false } = {}) {
       labels: json.parse(p.labels, []), step_type: p.step_type, due_date: p.step_date, criticality: p.criticality || 'queued',
       request: p.notes || '', fields: json.parse(p.fields, {}), decision: p.decision || '', pricing: p.pricing || '',
       files: files.filter((f) => f.process_step_id === p.id).map((f) => ({ id: f.id, field: f.process_field, name: f.original_name, size: f.size })),
+      notes: notes.filter((m) => m.process_step_id === p.id).map((m) => ({ id: m.id, body: m.body, created_at: m.created_at, updated_at: m.updated_at ?? null,
+        author: person(m.author_id, m.first_name, m.last_name), mine: m.author_id === user.id })),
       // The solution architects staffed to it: who's named under Solution Architect & Technical.
       architects: reviews.technical.people.map((id) => users.get(id)).filter(Boolean),
       owner: person(p.owner_id, p.o_first, p.o_last), director: person(p.bd_director_id, p.d_first, p.d_last),

@@ -1,6 +1,6 @@
 // Close to closing (C2C): the BD Pipeline's list of deals near a decision. Every open pipeline ticket in Under Evaluation
 // (or a stage reports count as Under Evaluation) joins the list on its own; any other pipeline ticket can be added by hand.
-// Anyone can take a ticket off the list: it comes back when it moves into a stage that belongs here, or when it's added again.
+// Anyone can take a ticket off the list: it comes back when it moves into Under Evaluation again, or when it's added again.
 // Once on the list a ticket stays when its deal closes: its category then reads from the deal (Awarded, Paid (Won),
 // Closed - Not awarded) instead of its stage, and a paid or closed deal's status is Closed. Notes are the ticket's own
 // comments and notes.
@@ -18,6 +18,8 @@ const r = Router();
 /** The standings someone sets by hand, while the deal is open. */
 const SET_STATUSES = ['on_track', 'off_up', 'off_steady', 'off_down'];
 const EVALUATION = 'Under Evaluation';
+/** The stages the import offers: a ticket in either can be brought onto the list, or left off it, from one screen. */
+const IMPORT_STAGES = ['Under Evaluation', 'Proposal'];
 const LISTABLE = "t.ticket_type = 'bid' AND t.archive_set_id IS NULL AND t.archived_at IS NULL";
 
 /** The stage a ticket is in, as kept against one taken off the list. */
@@ -25,8 +27,9 @@ const stageKey = (t) => `${t.pipeline_id ?? ''}:${t.pipeline_status ?? ''}`;
 const RESTORE = 'UPDATE c2c_tickets SET removed_at = NULL, removed_stage = NULL';
 
 /**
- * Put every open ticket now in Under Evaluation on the list. One taken off the list stays off while it sits in the stage
- * it was removed in, and comes back once it's moved into a stage that belongs here.
+ * Put every open ticket now in Under Evaluation on the list. One taken off the list comes back on its own only by moving
+ * into Under Evaluation after it was taken off: from another stage it was removed in, or having left Under Evaluation and
+ * returned (its history shows a stage outside it since). Anything else is added back by hand.
  */
 function addEvaluating() {
   const stage = reportStager();
@@ -36,12 +39,13 @@ function addEvaluating() {
     WHERE ${LISTABLE} AND t.deal_status = 'open' AND t.pipeline_status IS NOT NULL AND t.id NOT IN (SELECT ticket_id FROM c2c_tickets)`).all()
     .filter(evaluating).forEach((t) => add.run(t.id));
   const restore = db.prepare(`${RESTORE} WHERE ticket_id = ?`);
-  const moved = db.prepare('UPDATE c2c_tickets SET removed_stage = NULL WHERE ticket_id = ?');
-  db.prepare(`SELECT t.id, t.pipeline_id, t.pipeline_status, t.deal_status, c.removed_stage FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id
-    WHERE c.removed_at IS NOT NULL AND ${LISTABLE}`).all().forEach((t) => {
-    if (t.removed_stage === stageKey(t)) return; // still where it was taken off
-    if (evaluating(t)) restore.run(t.id);
-    else if (t.removed_stage != null) moved.run(t.id); // it's left that stage, so going back to it counts as a move
+  const since = db.prepare('SELECT DISTINCT pipeline_status FROM ticket_history WHERE ticket_id = ? AND changed_at >= ? AND pipeline_status IS NOT NULL');
+  db.prepare(`SELECT t.id, t.pipeline_id, t.pipeline_status, t.deal_status, c.removed_stage, c.removed_at FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id
+    WHERE c.removed_at IS NOT NULL AND ${LISTABLE}`).all().filter(evaluating).forEach((t) => {
+    // The stage it was taken off in is kept as "<pipeline id>:<stage>"; none kept means it had already left that stage.
+    const at = t.removed_stage == null ? null : t.removed_stage.slice(t.removed_stage.indexOf(':') + 1);
+    const removedEvaluating = at != null && stage.of(t.pipeline_id, at) === EVALUATION;
+    if (!removedEvaluating || since.all(t.id, t.removed_at).some((h) => stage.of(t.pipeline_id, h.pipeline_status) !== EVALUATION)) restore.run(t.id);
   });
 }
 
@@ -90,15 +94,76 @@ function list(user) {
   });
 }
 
-r.get('/', (req, res) => res.json({ rows: list(req.user) }));
+/** The list, and whether this person adds from anyone's tickets. */
+const page = (user) => ({ rows: list(user), anyone: importsForAnyone(user) });
 
-/** Body: { ticket_id }. Adds a pipeline ticket to the list, or puts back one that was taken off. */
+r.get('/', (req, res) => res.json(page(req.user)));
+
+/** Body: { ticket_id }. Adds a pipeline ticket of this person's (anyone's, for an admin or a BD lead) to the list, or puts back one that was taken off. */
 r.post('/', (req, res) => {
   const t = db.prepare(`SELECT t.id FROM tickets t WHERE t.id = ? AND ${LISTABLE}`).get(Number(req.body?.ticket_id) || 0);
   if (!t) return res.status(400).json({ error: 'Pick a pipeline ticket that isn’t archived' });
+  if (!importable(req.user).has(t.id)) return res.status(403).json({ error: 'Only the ticket’s owner or BD director, a BD lead or an admin adds it to this list' });
   db.prepare('INSERT OR IGNORE INTO c2c_tickets (ticket_id, added_by) VALUES (?, ?)').run(t.id, req.user.id);
   db.prepare(`${RESTORE} WHERE ticket_id = ? AND removed_at IS NOT NULL`).run(t.id);
-  res.json({ rows: list(req.user) });
+  res.json(page(req.user));
+});
+
+/** Admins and the BD team's leads import from anyone's tickets; everyone else from the ones they own or direct. */
+const importsForAnyone = (user) => user.role === 'admin'
+  || !!db.prepare("SELECT 1 FROM user_teams ut JOIN teams t ON t.id = ut.team_id WHERE ut.user_id = ? AND t.name = 'BD' AND ut.role = 'lead'").get(user.id);
+
+/**
+ * Every pipeline ticket this person can put on the list, by id: the ones they own or direct (anyone's, for an admin or a
+ * BD lead), whatever stage they're in. `offered` marks the open ones in Proposal or Under Evaluation (or a stage reports
+ * count as one), which the import lists before anything is searched for.
+ */
+function importable(user) {
+  const stage = reportStager();
+  const anyone = importsForAnyone(user);
+  const rows = db.prepare(`SELECT t.id, t.opportunity_title, t.organization, t.value, t.pipeline_id, t.pipeline_status, t.deal_status, t.projected_win_date, t.win_date_undetermined,
+      t.created_by, t.bd_director_id, o.first_name AS owner_first_name, o.last_name AS owner_last_name, d.first_name AS director_first_name, d.last_name AS director_last_name,
+      (c.ticket_id IS NOT NULL AND c.removed_at IS NULL) AS on_list
+    FROM tickets t LEFT JOIN users o ON o.id = t.created_by LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN c2c_tickets c ON c.ticket_id = t.id
+    WHERE ${LISTABLE} AND (@anyone = 1 OR t.created_by = @me OR t.bd_director_id = @me)`)
+    .all({ anyone: anyone ? 1 : 0, me: user.id });
+  const person = (id, first, last) => (id && first ? { id, first_name: first, last_name: last } : null);
+  return new Map(rows.map((t) => {
+    const reported = t.pipeline_status == null ? null : stage.of(t.pipeline_id, t.pipeline_status);
+    return [t.id, {
+      ticket_id: t.id, title: t.opportunity_title, organization: t.organization, value: t.value, stage: reported, stage_name: t.pipeline_status, outcome: dealOutcome(t),
+      offered: t.deal_status === 'open' && IMPORT_STAGES.includes(reported),
+      close_date: t.win_date_undetermined ? null : t.projected_win_date, on_list: !!t.on_list,
+      owner: person(t.created_by, t.owner_first_name, t.owner_last_name), director: person(t.bd_director_id, t.director_first_name, t.director_last_name),
+      removed_stage: stageKey(t),
+    }];
+  }));
+}
+
+/** What the import shows: every ticket this person can pick from, and whether each is on the list. */
+r.get('/import', (req, res) => {
+  addEvaluating();
+  res.json({ anyone: importsForAnyone(req.user), tickets: [...importable(req.user).values()].map(({ removed_stage, ...t }) => t) });
+});
+
+/**
+ * Body: { add: [ticket ids], hide: [ticket ids] }. Puts the first on the list and takes the second off it, as the X on a
+ * row does. Only tickets the import offers this person count.
+ */
+r.post('/import', (req, res) => {
+  const mine = importable(req.user);
+  const ids = (xs) => [...new Set((Array.isArray(xs) ? xs : []).map(Number).filter(Boolean))];
+  const add = ids(req.body?.add);
+  const hide = ids(req.body?.hide).filter((id) => !add.includes(id));
+  if ([...add, ...hide].some((id) => !mine.has(id))) return res.status(400).json({ error: 'One of those tickets isn’t yours to import, or has been archived. Open the import again.' });
+  db.transaction(() => {
+    add.forEach((id) => {
+      db.prepare('INSERT OR IGNORE INTO c2c_tickets (ticket_id, added_by) VALUES (?, ?)').run(id, req.user.id);
+      db.prepare(`${RESTORE} WHERE ticket_id = ? AND removed_at IS NOT NULL`).run(id);
+    });
+    hide.forEach((id) => db.prepare("UPDATE c2c_tickets SET removed_at = datetime('now'), removed_stage = ? WHERE ticket_id = ? AND removed_at IS NULL").run(mine.get(id).removed_stage, id));
+  })();
+  res.json(page(req.user));
 });
 
 const entry = (id) => db.prepare('SELECT c.*, t.created_by, t.ticket_type, t.pipeline_id, t.pipeline_status FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id WHERE c.ticket_id = ? AND c.removed_at IS NULL').get(Number(id) || 0);
@@ -148,7 +213,7 @@ r.put('/:ticketId', (req, res) => {
     if (ids.some((id) => !ok.get(id, c.ticket_id))) return res.status(400).json({ error: 'That note is no longer on this ticket' });
     db.prepare('UPDATE c2c_tickets SET note_ids = ?, note_id = NULL WHERE ticket_id = ?').run(json.str(ids), c.ticket_id);
   }
-  res.json({ rows: list(req.user) });
+  res.json(page(req.user));
 });
 
 /**
@@ -159,7 +224,7 @@ r.delete('/:ticketId', (req, res) => {
   const c = entry(req.params.ticketId);
   if (!c) return res.status(404).json({ error: 'That ticket isn’t on the list' });
   db.prepare("UPDATE c2c_tickets SET removed_at = datetime('now'), removed_stage = ? WHERE ticket_id = ?").run(stageKey(c), c.ticket_id);
-  res.json({ rows: list(req.user) });
+  res.json(page(req.user));
 });
 
 export default r;
