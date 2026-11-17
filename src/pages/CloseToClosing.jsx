@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, ArrowUp, ArrowDown, Download, Loader2, ListPlus } from 'lucide-react';
+import { X, ArrowUp, ArrowDown, Download, Loader2, ListPlus, Plus } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, shortDate, stamp, todayIso } from '../lib/format.js';
 import { usd, quarterFor } from '../lib/travelCalc.js';
 import { MentionText } from '../components/MentionTextarea.jsx';
+import NoteBox from '../components/NoteBox.jsx';
 import { nameOnLight } from '../lib/brand.js';
 import { byTags, LabelList } from '../components/Labels.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
@@ -357,7 +358,7 @@ function Row({ row: r, selected, onOpen, run }) {
           </select>
         )}
       </td>
-      <td className="px-3 py-3 print:px-1.5 print:py-1.5"><Notes row={r} /></td>
+      <td className="px-3 py-3 print:px-1.5 print:py-1.5" onClick={stop}><Notes row={r} run={run} /></td>
       <td className="py-3 pr-2 print:hidden" onClick={stop}>
         <button type="button" aria-label={`Take ${r.title} off the list`} title="Take off this list"
           onClick={() => confirm(`Take “${r.title}” off Close to closing? The ticket itself isn’t changed. It comes back if it moves into a stage that belongs here, or if you add it again.`) && run(() => api.del(`/c2c/${r.ticket_id}`))}
@@ -367,18 +368,44 @@ function Row({ row: r, selected, onOpen, run }) {
   );
 }
 
-/** A row's status note: its latest note, unless one or more are picked in the ticket's pane. Notes are written on the ticket. */
-function Notes({ row: r }) {
+/**
+ * A row's status note: its latest note, unless one or more are picked in the ticket's pane. Notes are the ticket's own, and
+ * are written right here: Add note opens a box and sending it adds a note to the ticket, which becomes the row's status note
+ * (it joins the picked ones when some are picked). A click on a note you wrote edits it.
+ */
+function Notes({ row: r, run }) {
+  const [editing, setEditing] = useState(null); // null, 'new', or the id of the note being edited
   const shown = shownNotes(r);
-  if (!shown.length) return <div className="text-sm text-slate-400 print:text-[9px]">No notes yet</div>;
+  // A note that doesn't save stays in its box with the reason; one that does closes it and the list reloads.
+  const add = async (body) => {
+    const { comment } = await api.post(`/tickets/${r.ticket_id}/comments`, { kind: 'note', body });
+    setEditing(null);
+    run(() => (r.note_ids.length ? api.put(`/c2c/${r.ticket_id}`, { note_ids: [comment.id, ...r.note_ids] }) : api.get('/c2c')));
+  };
+  const edit = async (id, body) => { await api.put(`/tickets/comments/${id}`, { body }); setEditing(null); run(() => api.get('/c2c')); };
+  const text = 'text-sm break-words whitespace-pre-wrap text-slate-700 print:text-[9px]';
   return (
     <div className="space-y-2.5 print:space-y-1.5">
-      {shown.map((n) => (
-        <div key={n.id} className="space-y-1">
-          <div className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700 print:line-clamp-6 print:text-[9px]" title={n.body}><MentionText text={n.body} /></div>
-          <div className="text-[11px] text-slate-400 print:text-[7px] print:text-slate-500">{[noteBy(n), n.updated_at && 'edited'].filter(Boolean).join(' · ')}</div>
-        </div>
-      ))}
+      {editing === 'new' && <NoteBox onSave={add} onCancel={() => setEditing(null)} label={`New status note on ${r.title}`} />}
+      {!shown.length && editing !== 'new' && <div className="hidden text-sm text-slate-400 print:block print:text-[9px]">No notes yet</div>}
+      {shown.map((n) => (editing === n.id
+        ? <NoteBox key={n.id} initial={n.body} onSave={(body) => edit(n.id, body)} onCancel={() => setEditing(null)} label="Edit your note" />
+        : (
+          <div key={n.id} className="space-y-1">
+            {n.mine
+              ? <button type="button" onClick={() => setEditing(n.id)} title="Click to edit your note"
+                  className={`-mx-1.5 block w-[calc(100%+0.75rem)] rounded px-1.5 py-0.5 text-left hover:bg-white hover:ring-1 hover:ring-slate-300 print:mx-0 print:w-full print:p-0 ${text}`}>
+                  <span className="line-clamp-4 print:line-clamp-6"><MentionText text={n.body} /></span>
+                </button>
+              : <div className={`line-clamp-4 print:line-clamp-6 ${text}`} title={n.body}><MentionText text={n.body} /></div>}
+            <div className="text-[11px] text-slate-400 print:text-[7px] print:text-slate-500">{[noteBy(n), n.updated_at && 'edited'].filter(Boolean).join(' · ')}</div>
+          </div>
+        )))}
+      {editing !== 'new' && (
+        <button type="button" onClick={() => setEditing('new')} className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline print:hidden">
+          <Plus size={12} /> {r.notes.length ? 'Add note' : 'Add a note'}
+        </button>
+      )}
     </div>
   );
 }
