@@ -7,7 +7,8 @@ import { api } from '../lib/api.js';
 import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
-import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, CRITICALITY, DEFAULT_CRITICALITY, defaultCriticality, criticalityOf, milestoneOf } from '../lib/process.js';
+import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, CRITICALITY, DEFAULT_CRITICALITY, SA_FIELD, defaultCriticality, criticalityOf, milestoneOf } from '../lib/process.js';
+import { SaChecks, SaFiles, SaAttach } from '../components/SaResponse.jsx';
 import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { MarketingDrawer } from './TicketMarketing.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
@@ -216,7 +217,7 @@ function LinkFromCrm({ ticket, linked, onLinked }) {
 
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 const today = () => new Date().toLocaleDateString('en-CA');
-const stepForm = (s) => ({ step_type: s.step_type, step_date: s.step_date || '', notes: s.notes, reviews: s.reviews, decision: s.decision || '', pricing: s.pricing || '',
+const stepForm = (s) => ({ step_type: s.step_type, step_date: s.step_date || '', notes: s.notes, sa_notes: s.sa_notes || '', sa_response: s.sa_response || '', reviews: s.reviews, decision: s.decision || '', pricing: s.pricing || '',
   criticality: s.criticality || DEFAULT_CRITICALITY, fields: { ...(s.fields || {}) }, done: !!s.done });
 const DECISION_STYLE = { Proceed: 'bg-emerald-100 text-emerald-800', Revise: 'bg-amber-100 text-amber-800', 'No-Bid': 'bg-red-100 text-red-800' };
 /** Open ones first, by due date (undated last); done ones after, latest first. */
@@ -467,7 +468,11 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
     fd.append('file', file);
     try { await apply(api.post(`/tickets/process/${s.id}/files${field ? `?field=${encodeURIComponent(field)}` : ''}`, fd)); } catch (e) { setError(e.message); }
   };
-  const otherFiles = s.files.filter((f) => !f.field || !def.fields.some(([k]) => k === f.field));
+  const addLink = (url, name) => apply(api.post(`/tickets/process/${s.id}/links`, { url, name, field: SA_FIELD }));
+  const addSaFile = (file) => { const fd = new FormData(); fd.append('file', file); return apply(api.post(`/tickets/process/${s.id}/files?field=${SA_FIELD}`, fd)); };
+  const removeFile = (f) => apply(api.del(`/tickets/process/files/${f.id}`)).catch((e) => setError(e.message));
+  const saFiles = s.files.filter((f) => f.field === SA_FIELD);
+  const otherFiles = s.files.filter((f) => !f.field || (f.field !== SA_FIELD && !def.fields.some(([k]) => k === f.field)));
 
   return (
     <div className="space-y-4 border-t border-slate-100 px-3 pt-3 pb-3">
@@ -505,6 +510,17 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
 
       <WorkBlock id={`ps-notes-${s.id}`} label="Request" rows={4} value={form.notes} onChange={(v) => set('notes', v)}
         placeholder="What's needed from the solution architect: the ask, the customer's deadline, open questions…" />
+
+      {/* The Solution Architect Response: the architect's notes, links and documents, then where they landed. Anyone can write it. */}
+      <section className="rounded-lg border border-brand-100 bg-brand-50/40 p-2.5">
+        <div className="mb-1.5 text-xs font-semibold text-slate-700">Solution Architect Response</div>
+        <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-sa-${s.id}`}>SA Notes</label>
+        <textarea id={`ps-sa-${s.id}`} rows={4} className="input min-h-24 resize-y bg-white text-sm leading-relaxed" value={form.sa_notes} onChange={(e) => set('sa_notes', e.target.value)}
+          placeholder="The solution architect's thoughts on the request. Add a link or a document below." />
+        <SaFiles files={saFiles} className="mt-1.5" canRemove={(f) => !readOnly || f.uploaded_by?.id === user.id} onRemove={removeFile} />
+        <SaAttach className="mt-1.5" onLink={addLink} onUpload={addSaFile} />
+        <SaChecks className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-brand-100 pt-2" value={form.sa_response} onChange={(v) => set('sa_response', v)} about={s.step_type} />
+      </section>
 
       {def.fields.map(([key, label, hint]) => (
         <WorkBlock key={key} id={`ps-f-${s.id}-${key}`} label={label} hint={hint} value={form.fields[key] || ''} onChange={(v) => setField(key, v)}

@@ -16,7 +16,7 @@ import { statusesFor, listPipelines, defaultPipeline, pipelineForNew, kitPipelin
 import '../sample/registry.js'; // sample_rows, so sample tickets aren't moved off KIT's own pipeline
 import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields } from '../services/pipedriveFields.js';
-import { PROCESS_TYPES, DECISIONS, cleanReviews, cleanFields, milestoneOf } from '../../src/lib/process.js';
+import { PROCESS_TYPES, DECISIONS, SA_RESPONSES, SA_FIELD, cleanReviews, cleanFields, milestoneOf } from '../../src/lib/process.js';
 import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTags } from '../staffing.js';
 import { NEXT_STEP_SQL } from '../activities.js';
 import { canEditTicket, ownerOnlyMessage } from '../../src/lib/ticketAccess.js';
@@ -668,7 +668,7 @@ r.delete('/comments/:id', (req, res) => {
 // ---- Staffing events (once milestones): RFI responses, white papers, gate reviews, SOO, SOW, ROM and proposals, each with
 // its due date, criticality, blocks of work (text or documents), reviews, notes and documents. Every open one is on the SAC list.
 
-const fileOut = (f) => ({ id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, created_at: f.created_at, field: f.process_field ?? null,
+const fileOut = (f) => ({ id: f.id, name: f.original_name, size: f.size, mime_type: f.mime_type, created_at: f.created_at, field: f.process_field ?? null, url: f.url ?? null,
   uploaded_by: f.first_name ? { id: f.uploaded_by, first_name: f.first_name, last_name: f.last_name } : null });
 const processRow = (id) => db.prepare('SELECT * FROM ticket_process_steps WHERE id = ?').get(id);
 const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
@@ -681,7 +681,7 @@ export function listProcess(ticketId) {
     FROM ticket_process_steps p LEFT JOIN users a ON a.id = p.author_id LEFT JOIN users e ON e.id = p.updated_by
     WHERE p.ticket_id = ? ORDER BY COALESCE(p.step_date, substr(p.created_at, 1, 10)), p.created_at, p.id`).all(ticketId)
     .map((p) => ({
-      id: p.id, step_type: p.step_type, step_date: p.step_date, notes: p.notes || '', reviews: cleanReviews(json.parse(p.reviews, {})),
+      id: p.id, step_type: p.step_type, step_date: p.step_date, notes: p.notes || '', sa_notes: p.sa_notes || '', sa_response: p.sa_response || '', reviews: cleanReviews(json.parse(p.reviews, {})),
       decision: p.decision || '', pricing: p.pricing || '', criticality: p.criticality || 'queued', fields: json.parse(p.fields, {}),
       done: !!p.completed_at, completed_at: p.completed_at ?? null,
       created_at: p.created_at, updated_at: p.updated_at,
@@ -711,7 +711,8 @@ const OWNER_KEYS = ['step_type', 'step_date', 'criticality', 'decision'];
 
 /**
  * Body may hold step_type, step_date (due date), criticality, decision (Proceed, Revise, No-Bid or none), reviews, notes,
- * pricing, fields ({ key: text }) and done. Anyone can write the work (fields, reviews, notes, pricing) and mark it done, so
+ * sa_notes and sa_response (the Solution Architect Response: approve, deny, more_info or none), pricing, fields ({ key: text })
+ * and done. Anyone can write the work (fields, reviews, notes, the response, pricing) and mark it done, so
  * solution architects answer from the SAC list; the rest is the ticket owner's or an admin's. Marking it done takes its
  * process tag off the ticket (and the event off the SAC list); reopening it puts the tag back. `architects` (user ids) sets
  * who's staffed to it, the people under Solution Architect & Technical, leaving the rest of the reviews alone.
@@ -728,6 +729,7 @@ r.put('/process/:pid', (req, res) => {
   }
   if (b.step_type !== undefined && b.step_type !== p.step_type && !PROCESS_TYPES.includes(b.step_type)) return res.status(400).json({ error: 'Choose a staffing event' });
   if (b.decision !== undefined && b.decision && !DECISIONS.includes(b.decision)) return res.status(400).json({ error: 'Choose a decision' });
+  if (b.sa_response !== undefined && b.sa_response && !SA_RESPONSES.some((x) => x.key === b.sa_response)) return res.status(400).json({ error: 'Choose approve, deny or need more info' });
   if (b.criticality !== undefined && !isCriticality(b.criticality)) return res.status(400).json({ error: 'Choose how critical it is' });
   const type = b.step_type ?? p.step_type;
   if (Array.isArray(b.architects) && b.reviews === undefined) {
@@ -735,12 +737,14 @@ r.put('/process/:pid', (req, res) => {
     b.reviews = { ...reviews, technical: { ...reviews.technical, people: b.architects } };
   }
   const done = b.done === undefined ? !!p.completed_at : !!b.done;
-  db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, decision = ?, pricing = ?, criticality = ?, fields = ?,
+  db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, sa_notes = ?, sa_response = ?, decision = ?, pricing = ?, criticality = ?, fields = ?,
       completed_at = ?, completed_by = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`).run(
     type,
     b.step_date !== undefined ? isoDate(b.step_date) : p.step_date,
     b.reviews !== undefined ? json.str(cleanReviews(b.reviews)) : p.reviews,
     typeof b.notes === 'string' ? b.notes.trim() : p.notes,
+    typeof b.sa_notes === 'string' ? b.sa_notes.trim() : p.sa_notes,
+    b.sa_response !== undefined ? (b.sa_response || null) : p.sa_response,
     b.decision !== undefined ? (b.decision || null) : p.decision,
     typeof b.pricing === 'string' ? b.pricing.trim() : p.pricing,
     b.criticality ?? p.criticality,
@@ -770,7 +774,10 @@ r.delete('/process/:pid', ownerOnly(ofStep), (req, res) => {
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
-/** A document for a staffing event; with ?field=<key>, the answer to one of its blocks of work. Anyone can add one. */
+/** The block of work a document or link answers: one of the event's own, or the Solution Architect Response. */
+const stepField = (p, key) => (key === SA_FIELD || milestoneOf(p.step_type).fields.some(([k]) => k === key) ? String(key) : null);
+
+/** A document for a staffing event; with ?field=<key>, the answer to one of its blocks of work (sa_response: the Solution Architect Response). Anyone can add one. */
 r.post('/process/:pid/files', upload.single('file'), (req, res) => {
   const p = processRow(req.params.pid);
   if (!req.file) return res.status(400).json({ error: 'Choose a file to upload' });
@@ -778,12 +785,41 @@ r.post('/process/:pid/files', upload.single('file'), (req, res) => {
     fs.rmSync(req.file.path, { force: true });
     return res.status(404).json({ error: 'Staffing event not found' });
   }
-  const field = milestoneOf(p.step_type).fields.some(([k]) => k === req.query.field) ? String(req.query.field) : null;
+  const field = stepField(p, req.query.field);
   const id = db.prepare(`INSERT INTO ticket_files (ticket_id, original_name, stored_name, mime_type, size, uploaded_by, process_step_id, process_field)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(p.ticket_id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id, p.id, field).lastInsertRowid;
   recordWork(req.user, { kind: 'file', ticket_id: p.ticket_id, ref_id: id, summary: req.file.originalname });
   touch(p.ticket_id);
   res.json({ steps: listProcess(p.ticket_id) });
+});
+
+/** Body: { url, name?, field? }. A link to a document kept elsewhere (Drive, SharePoint…), for a staffing event. Anyone can add one. */
+r.post('/process/:pid/links', (req, res) => {
+  const p = processRow(req.params.pid);
+  if (!p) return res.status(404).json({ error: 'Staffing event not found' });
+  let url;
+  try { url = new URL(String(req.body?.url || '').trim()); } catch { url = null; }
+  if (!url || !['http:', 'https:'].includes(url.protocol)) return res.status(400).json({ error: 'Paste a link that starts with https://' });
+  const name = String(req.body?.name || '').trim().slice(0, 200) || (url.hostname + (url.pathname.length > 1 ? url.pathname : '')).slice(0, 200);
+  const id = db.prepare(`INSERT INTO ticket_files (ticket_id, original_name, stored_name, uploaded_by, process_step_id, process_field, url)
+    VALUES (?, ?, '', ?, ?, ?, ?)`).run(p.ticket_id, name, req.user.id, p.id, stepField(p, req.body?.field), url.href).lastInsertRowid;
+  recordWork(req.user, { kind: 'file', ticket_id: p.ticket_id, ref_id: id, summary: name });
+  touch(p.ticket_id);
+  res.json({ steps: listProcess(p.ticket_id) });
+});
+
+/** Takes a link or document off a staffing event (and the ticket). Whoever added it can, as can the ticket's owner or an admin. */
+r.delete('/process/files/:id', (req, res) => {
+  const f = db.prepare('SELECT * FROM ticket_files WHERE id = ? AND process_step_id IS NOT NULL').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Not found' });
+  const t = ticketRow(f.ticket_id);
+  if (f.uploaded_by !== req.user.id) {
+    const denied = ticketEditDenied(req.user, t);
+    if (denied) return res.status(403).json({ error: denied });
+  }
+  dropFile(req.user, f);
+  touch(f.ticket_id);
+  res.json({ steps: listProcess(f.ticket_id) });
 });
 
 // ---- Process view: the whole pursuit left to right, from how the lead came in, through strategy and shaping, to each milestone
@@ -873,15 +909,19 @@ r.post('/:id/files', ownerOnly(), upload.single('file'), (req, res) => {
 r.delete('/files/:id', ownerOnly(ofFile), (req, res) => {
   const f = db.prepare('SELECT * FROM ticket_files WHERE id = ?').get(req.params.id);
   if (!f) return res.status(404).json({ error: 'Not found' });
+  dropFile(req.user, f);
+  res.json({ ok: true });
+});
+
+function dropFile(user, f) {
   const deal = db.prepare('SELECT pipedrive_id FROM tickets WHERE id = ?').get(f.ticket_id)?.pipedrive_id;
   db.prepare("DELETE FROM work_log WHERE kind = 'file' AND ref_id = ?").run(f.id);
   db.prepare('DELETE FROM ticket_files WHERE id = ?').run(f.id);
-  recordTicketUpdate(req.user, ticketRow(f.ticket_id), 'Document removed');
+  recordTicketUpdate(user, ticketRow(f.ticket_id), 'Document removed');
   queueDelete('file', f.pipedrive_id, deal);
   queueDelete('note', f.pipedrive_note_id, deal); // a linked document went as a note with its link
   if (f.stored_name && !f.url) fs.rmSync(path.join(uploadDir, f.stored_name), { force: true });
-  res.json({ ok: true });
-});
+}
 
 r.get('/files/:id', (req, res) => {
   const f = db.prepare('SELECT * FROM ticket_files WHERE id = ?').get(req.params.id);

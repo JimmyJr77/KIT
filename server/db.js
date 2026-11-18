@@ -1909,6 +1909,10 @@ addColumn('meetings', 'objectives', 'TEXT'); // what we want out of the meeting
   addColumn('ticket_process_steps', 'completed_at', 'TEXT');
   addColumn('ticket_process_steps', 'completed_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
   addColumn('ticket_process_steps', 'sac_rank', 'INTEGER');
+  // The Solution Architect Response: what the architect writes back (sa_notes) and where they landed (sa_response: approve,
+  // deny or more_info). Its links and documents are ticket_files with process_field 'sa_response'.
+  addColumn('ticket_process_steps', 'sa_notes', 'TEXT');
+  addColumn('ticket_process_steps', 'sa_response', 'TEXT');
   addColumn('ticket_files', 'process_field', 'TEXT');
   // Milestones recorded before were a record of what had happened: those dated before today (or undated) count as done, so
   // only ones still ahead join the SAC list.

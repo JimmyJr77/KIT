@@ -158,6 +158,15 @@ export function cleanFields(type, input) {
   return out;
 }
 
+/** The Solution Architect Response on a staffing event: where the architect landed on the request. */
+export const SA_RESPONSES = [
+  { key: 'approve', label: 'Approve', tone: 'text-emerald-700' },
+  { key: 'deny', label: 'Deny', tone: 'text-red-700' },
+  { key: 'more_info', label: 'Need more info', tone: 'text-amber-700' },
+];
+/** The process_field of a link or document attached to the Solution Architect Response. */
+export const SA_FIELD = 'sa_response';
+
 /** What a gate review decided. */
 export const DECISIONS = ['Proceed', 'Revise', 'No-Bid'];
 
