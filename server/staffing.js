@@ -1,7 +1,8 @@
 // Staffing events on a pipeline ticket (ticket_process_steps): RFI responses, white papers, gate reviews, SOO, SOW, ROM and
 // proposals a solution architect is staffed to. Each goes with a process tag, and every open one is on the SAC list
 // (Solution Architect Coordination). Making one tags the ticket; tagging a ticket with a process tag makes one. Its tag
-// comes off the ticket when the event is marked done or deleted, unless another open event of that type still needs it.
+// comes off the ticket when the event is marked done or deleted, unless another open event of that type still needs it; and
+// taking the tag off the ticket takes its open events off the list.
 import { db, json } from './db.js';
 import { reportStager } from './pipelines.js';
 import { recordWork } from './worklog.js';
@@ -66,14 +67,38 @@ export function addStaffingEvent(user, ticketId, type, { dueDate = null, critica
   })();
 }
 
+/** Whether anything has been put into a staffing event: text, a decision, a response, people, documents or notes. */
+function hasWork(p) {
+  const text = [p.notes, p.sa_notes, p.sa_response, p.pricing, p.decision].some((v) => String(v || '').trim());
+  const fields = Object.values(json.parse(p.fields, {})).some((v) => String(v || '').trim());
+  const people = Object.values(cleanReviews(json.parse(p.reviews, {}))).some((a) => a.people.length || a.approved.length || a.notes);
+  return text || fields || people
+    || !!db.prepare('SELECT 1 FROM ticket_files WHERE process_step_id = ?').get(p.id)
+    || !!db.prepare('SELECT 1 FROM ticket_comments WHERE process_step_id = ?').get(p.id);
+}
+
 /**
- * After someone changes a ticket's tags: each process tag newly on it queues its staffing event (and so puts the ticket on
- * the SAC list), unless one of that type is already open. Taking a tag off leaves the event alone.
+ * After someone changes a ticket's tags. Each process tag newly on it queues its staffing event (and so puts the ticket on
+ * the SAC list), unless one of that type is already open. Each process tag taken off takes its open events off the SAC
+ * list: one nobody has put anything into is deleted, and one with work in it is marked done, so the work is kept (reopening
+ * it puts the tag back).
  */
 export function queueFromTags(user, ticketId, before, after) {
-  const had = new Set(json.parse(before, []).map((l) => String(l).toLowerCase()));
+  const lower = (labels) => new Set(json.parse(labels, []).map((l) => String(l).toLowerCase()));
+  const had = lower(before);
+  const has = lower(after);
   json.parse(after, []).filter((l) => !had.has(String(l).toLowerCase())).map(eventForTag).filter(Boolean)
     .forEach((def) => addStaffingEvent(user, ticketId, def.type, { reuse: true }));
+  [...had].filter((l) => !has.has(l)).map(eventForTag).filter(Boolean).forEach((def) => db.transaction(() => {
+    db.prepare('SELECT * FROM ticket_process_steps WHERE ticket_id = ? AND step_type = ? AND completed_at IS NULL').all(ticketId, def.type).forEach((p) => {
+      if (hasWork(p)) {
+        db.prepare("UPDATE ticket_process_steps SET completed_at = datetime('now'), completed_by = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?").run(user?.id ?? null, user?.id ?? null, p.id);
+      } else {
+        db.prepare('DELETE FROM ticket_process_steps WHERE id = ?').run(p.id);
+        db.prepare("DELETE FROM work_log WHERE kind = 'process' AND ref_id = ?").run(p.id);
+      }
+    });
+  })());
 }
 
 /**
