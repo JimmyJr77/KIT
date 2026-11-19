@@ -4,6 +4,8 @@
 //   (both as they stood at each week's end, from the ticket history).
 //   What moved that week: won, lost, moved forward (left to right on the board), downgraded (moved back a
 //   stage), removed from the board (archived here or in Pipedrive, or deleted in Pipedrive), and next steps completed.
+//   A ticket lost, removed or moved while still before Qualified isn't on these lists: Prospecting isn't the pipeline.
+//   Next steps count whatever the ticket's stage, Prospecting included.
 // The week runs Monday to Sunday. The week's numbers come for the whole scope and for each person (by BD director). Each
 // list names its tickets, so the report carries its own cheat sheet.
 import { db } from './db.js';
@@ -16,6 +18,9 @@ import { addDays } from '../src/lib/travelCalc.js';
 const sum = (xs, f) => xs.reduce((s, x) => s + (f(x) || 0), 0);
 const day = (d) => (d ? d.slice(0, 10) : null);
 
+/** A stage before Qualified. An unknown stage (no history) isn't taken for one. */
+const early = (stage) => !!stage && stage !== 'Lost' && !QUALIFIED_STAGES.includes(stage);
+
 /** The Monday starting the week that holds `date`. */
 export const mondayOf = (date) => weekStartFor(date, 1);
 
@@ -25,8 +30,10 @@ export const mondayOf = (date) => weekStartFor(date, 1);
  * won, lost, forward or back (a stage or more), or just moved (it came back to where it started). A new pipeline ticket
  * hasn't moved; its first stage is where it starts. `removed` also lists the tickets taken off the board in the week.
  * With `inBooksOnly`, tickets archived since are left out (as on the dashboard).
+ * With `qualifiedOnly`, a ticket that never touched the qualified pipeline in its move is left out: lost, removed or
+ * shuffled while still in Prospecting (or another stage before Qualified). Moving into Qualified, or back out of it, stays.
  */
-export function weekMoves({ keep = () => true, from, to, inBooksOnly = false }) {
+export function weekMoves({ keep = () => true, from, to, inBooksOnly = false, qualifiedOnly = false }) {
   // A stage blended into a standard one counts as that stage, so going into or out of it from that stage isn't a move.
   const stager = reportStager();
   const order = new Map(listPipelines().map((p) => [p.id, p.statuses.filter((x) => x !== 'Lost' && stager.of(p.id, x) === x)]));
@@ -46,12 +53,15 @@ export function weekMoves({ keep = () => true, from, to, inBooksOnly = false }) 
   const removed = [];
   for (const t of list) {
     const base = { id: t.id, title: t.opportunity_title, organization: t.organization, directorId: t.bd_director_id, director: t.director, value: t.value };
+    const h = (hist.get(t.id) || []).map((r) => ({ ...r, pipeline_status: stager.of(t.pipeline_id, r.pipeline_status) }));
     const removedOn = day(t.archived_at);
-    if (removedOn && removedOn >= from && removedOn <= to) {
+    // Where it was when it came off the board (a lost ticket: its last stage before that).
+    const current = stager.of(t.pipeline_id, t.pipeline_status);
+    const stoodAt = current === 'Lost' ? [...h].reverse().find((r) => r.pipeline_status !== 'Lost')?.pipeline_status ?? null : current;
+    if (removedOn && removedOn >= from && removedOn <= to && !(qualifiedOnly && early(stoodAt))) {
       removed.push({ ...base, stage: t.pipeline_status, on: removedOn,
         how: t.pipedrive_deleted_at ? 'Deleted in Pipedrive' : t.pipedrive_archived_at ? 'Archived in Pipedrive' : 'Archived in KIT' });
     }
-    const h = (hist.get(t.id) || []).map((r) => ({ ...r, pipeline_status: stager.of(t.pipeline_id, r.pipeline_status) }));
     const first = h.findIndex((r, i) => i > 0 && within(r.changed_at) && r.pipeline_status !== h[i - 1].pipeline_status);
     const won = t.deal_status === 'won' && within(t.won_at);
     const lost = t.deal_status === 'lost' && within(t.lost_at);
@@ -65,6 +75,7 @@ export function weekMoves({ keep = () => true, from, to, inBooksOnly = false }) 
     const stages = order.get(t.pipeline_id ?? null) || [];
     const a = stages.indexOf(before);
     const b = stages.indexOf(after);
+    if (qualifiedOnly && !won && early(before) && (lost || early(after))) continue;
     const kind = won ? 'won' : lost ? 'lost' : a >= 0 && b > a ? 'forward' : a >= 0 && b >= 0 && b < a ? 'back' : 'moved';
     moves.push({ ...base, kind, from: before, to: won ? 'Awarded' : lost ? 'Lost' : after, on: day(won ? t.won_at : lost ? t.lost_at : h[first].changed_at),
       lostReason: lost ? t.lost_reason : null });
@@ -135,7 +146,7 @@ export function tacticalReport({ week, director = null, weeks = 13 } = {}) {
   const end = addDays(start, 6);
   const to = end < today ? end : today;
   const keep = (t) => !director || t.bd_director_id === director;
-  const { moves, removed } = weekMoves({ keep, from: start, to });
+  const { moves, removed } = weekMoves({ keep, from: start, to, qualifiedOnly: true });
   const steps = stepsDone(keep, start, to);
   const q = qualifiedByWeek(to, weeks, director);
   const stages = stagesByWeek(to, weeks, director);
