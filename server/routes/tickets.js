@@ -324,6 +324,25 @@ r.put('/:id/assignment', ownerOnly(), (req, res) => {
   res.json({ ticket: ticketRow(t.id) });
 });
 
+/**
+ * Body: { title }. Renames a pipeline or work ticket. On a Pipedrive deal the new title goes with the next send, like any
+ * other deal field.
+ */
+r.put('/:id/title', ownerOnly(), (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  if (t.ticket_type === 'account') return res.status(400).json({ error: 'A priority account is renamed from its account, not here' });
+  const title = String(req.body?.title ?? '').trim().replace(/\s+/g, ' ').slice(0, 255);
+  if (!title) return res.status(400).json({ error: 'Give the ticket a name' });
+  if (title !== t.opportunity_title) {
+    db.prepare("UPDATE tickets SET opportunity_title = ?, updated_at = datetime('now') WHERE id = ?").run(title, t.id);
+    recordTicketUpdate(req.user, t, 'Name');
+    recordAction(req, { ticket_id: t.id, summary: `Renamed to ${title} (from ${t.opportunity_title})`,
+      undo: { method: 'PUT', path: `/tickets/${t.id}/title`, body: { title: t.opportunity_title } }, guard: { table: 'tickets', id: t.id, fields: { opportunity_title: title } } });
+  }
+  res.json({ ticket: ticketRow(t.id) });
+});
+
 // ---- Strategy and win assessment
 
 const touch = (id) => db.prepare("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").run(id);

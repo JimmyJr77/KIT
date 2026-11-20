@@ -80,7 +80,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
 
   return (
     <TicketAccess.Provider value={access}>
-    <SidePanel wide onClose={close} title={t ? t.opportunity_title : 'Loading…'}
+    <SidePanel wide onClose={close} title={t ? <TicketName ticket={t} canEdit={canEdit && t.ticket_type !== 'account'} onChanged={refresh} /> : 'Loading…'}
       onEscape={processOpen ? () => setProcessOpen(false) : tool ? closeTool : close}
       mainHidden={mainHidden && !!tool}
       rail={t && <>
@@ -628,9 +628,75 @@ function OutcomeBar({ ticket: t, onChanged }) {
   );
 }
 
+/** The ticket's name at the top of its pane. Its owner or an admin renames it in place: Enter saves, Escape leaves it. */
+function TicketName({ ticket, canEdit, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(ticket.opportunity_title);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const start = () => { setName(ticket.opportunity_title); setError(''); setEditing(true); };
+  const save = async () => {
+    const title = name.trim();
+    if (busy) return;
+    if (!title || title === ticket.opportunity_title) return setEditing(false);
+    setBusy(true);
+    try { await api.put(`/tickets/${ticket.id}/title`, { title }); setEditing(false); onChanged(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  if (!editing) {
+    return (
+      <span className="group inline-flex max-w-full items-start gap-1.5">
+        <span className="min-w-0 break-words">{ticket.opportunity_title}</span>
+        {canEdit && (
+          <button type="button" onClick={start} title="Rename this ticket" aria-label="Rename this ticket"
+            className="mt-0.5 shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-brand-700"><Pencil size={13} /></button>
+        )}
+      </span>
+    );
+  }
+  return (
+    <span className="block">
+      <input className="input h-9 w-full text-sm font-semibold" value={name} autoFocus maxLength={255} disabled={busy} aria-label="Ticket name"
+        onChange={(e) => setName(e.target.value)} onBlur={save}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } if (e.key === 'Escape') { e.stopPropagation(); setEditing(false); } }} />
+      {error && <span className="mt-1 block text-xs font-normal text-red-600">{error}</span>}
+    </span>
+  );
+}
+
+/** Archiving a pipeline ticket takes typing ARCHIVE first, so it can't be done with a stray click. */
+function ConfirmArchive({ ticket, onCancel, onConfirm }) {
+  const [typed, setTyped] = useState('');
+  const ok = typed.trim() === 'ARCHIVE';
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onCancel(); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onCancel]);
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 p-4" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <form role="dialog" aria-label="Archive this ticket" className="w-full max-w-sm space-y-3 rounded-xl bg-white p-4 text-left shadow-xl"
+        onSubmit={(e) => { e.preventDefault(); if (ok) onConfirm(); }}>
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900"><Archive size={15} /> Archive this ticket?</h3>
+        <p className="text-sm break-words text-slate-600">
+          <span className="font-medium text-slate-800">{ticket.opportunity_title}</span> comes off the boards and goes to Closed deals under Other. It can be restored from there.
+        </p>
+        <div>
+          <label className="label" htmlFor="archive-confirm">Type ARCHIVE to confirm</label>
+          <input id="archive-confirm" className="input h-9 text-sm" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" placeholder="ARCHIVE" />
+        </div>
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn h-8 px-3 py-0 text-sm" onClick={onCancel}>Cancel</button>
+          <button type="submit" className="btn-primary h-8 px-3 py-0 text-sm" disabled={!ok}>Archive ticket</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function ArchiveBar({ ticket, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [confirming, setConfirming] = useState(false); // the "type ARCHIVE" popup, for a pipeline ticket
   const isBid = ticket.ticket_type === 'bid';
   const set = async (archived) => {
     setBusy(true);
@@ -661,11 +727,12 @@ function ArchiveBar({ ticket, onChanged }) {
   return (
     <div className="space-y-1">
       <div className="flex justify-end">
-        <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500" onClick={() => set(true)} disabled={busy}
+        <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500" onClick={() => (isBid ? setConfirming(true) : set(true))} disabled={busy}
           title={isBid ? 'Take this deal off the boards. It goes to Closed deals under Other, and can be restored from here.' : 'Move this ticket to the Done archive. Restore it from there any time.'}>
           <Archive size={13} /> {isBid ? 'Archive ticket' : 'Move to the Done archive'}
         </button>
       </div>
+      {confirming && <ConfirmArchive ticket={ticket} onCancel={() => setConfirming(false)} onConfirm={() => { setConfirming(false); set(true); }} />}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
     </div>
   );
