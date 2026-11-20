@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { X, ArrowUp, Plus, ExternalLink } from 'lucide-react';
 import { api } from '../lib/api.js';
 
@@ -14,6 +14,13 @@ export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket
   const [subject, setSubject] = useState('');
   const [added, setAdded] = useState({ subject: '', due_date: '' });
   const step = open?.[0] || null;
+  // The next step's box grows with its text, so all of it shows however long it is.
+  const box = useRef(null);
+  useLayoutEffect(() => {
+    if (!box.current) return;
+    box.current.style.height = 'auto';
+    box.current.style.height = `${box.current.scrollHeight + 2}px`;
+  }, [subject, step?.id]);
 
   const load = () => api.get(`/activities?ticket=${ticket.id}`).then((d) => {
     const list = d.activities.filter((a) => !a.done);
@@ -50,7 +57,7 @@ export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket
   const date = 'rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 focus:border-brand-500 focus:outline-none';
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-label={`Next step on ${ticket.opportunity_title}`} className="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl">
+      <div role="dialog" aria-label={`Next step on ${ticket.opportunity_title}`} className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-4 shadow-xl">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Next step</div>
@@ -64,22 +71,24 @@ export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket
         {open && !step && <p className="mt-3 text-sm text-slate-500">No next step yet. Add one below.</p>}
         {step && (
           <div className="mt-3">
-            <div className="flex items-center gap-2">
-              <input type="checkbox" className="h-4 w-4 shrink-0" checked={false} disabled={busy} title="Mark complete"
+            <div className="flex items-start gap-2">
+              <input type="checkbox" className="mt-1.5 h-4 w-4 shrink-0" checked={false} disabled={busy} title="Mark complete"
                 onChange={() => run(() => api.put(`/activities/${step.id}`, { done: true }))} aria-label={`Mark “${step.subject}” complete`} />
-              <input className="min-w-0 flex-1 rounded-md border border-transparent px-1.5 py-1 text-sm font-semibold text-slate-900 hover:border-slate-300 focus:border-brand-500 focus:outline-none"
-                value={subject} onChange={(e) => setSubject(e.target.value)} onBlur={rename} aria-label="Next step"
-                onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }} />
+              <textarea ref={box} rows={1} className="min-w-0 flex-1 resize-none overflow-hidden rounded-md border border-transparent px-1.5 py-1 text-sm leading-snug font-semibold break-words text-slate-900 hover:border-slate-300 focus:border-brand-500 focus:outline-none"
+                value={subject} onChange={(e) => setSubject(e.target.value.replace(/\n/g, ' '))} onBlur={rename} aria-label="Next step"
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }} />
+            </div>
+            <label className="mt-1 flex items-center gap-2 pl-6 text-xs text-slate-500">Due
               <input type="date" className={date} value={step.due_date || ''} disabled={busy} aria-label="Due date"
                 onChange={(e) => run(() => api.put(`/activities/${step.id}`, { due_date: e.target.value || null }))} />
-            </div>
+            </label>
             {step.subtasks.length > 0 && (
-              <ul className="mt-1.5 space-y-1 pl-6">
+              <ul className="mt-2 space-y-1 pl-6">
                 {step.subtasks.map((s) => (
                   <li key={s.id} className="flex items-start gap-2 text-sm">
                     <input type="checkbox" className="mt-0.5 h-3.5 w-3.5 shrink-0" checked={!!s.done} disabled={busy}
                       onChange={() => run(() => api.put(`/activities/subtasks/${s.id}`, { done: !s.done }))} aria-label={`Mark “${s.text}” ${s.done ? 'not done' : 'done'}`} />
-                    <span className={s.done ? 'text-slate-400 line-through' : 'text-slate-700'}>{s.text}</span>
+                    <span className={`min-w-0 break-words ${s.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{s.text}</span>
                   </li>
                 ))}
               </ul>
@@ -90,8 +99,8 @@ export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket
         {open?.length > 1 && (
           <ul className="mt-3 space-y-0.5 border-t border-slate-100 pt-2">
             {open.slice(1).map((a) => (
-              <li key={a.id} className="group flex items-center gap-2 text-xs text-slate-600">
-                <span className="min-w-0 flex-1 truncate" title={a.subject}>{a.subject}</span>
+              <li key={a.id} className="flex items-start gap-2 text-xs text-slate-600">
+                <span className="min-w-0 flex-1 break-words">{a.subject}</span>
                 {a.due_date && <span className="shrink-0 text-slate-400">{a.due_date.slice(5).replace('-', '/')}</span>}
                 <button type="button" disabled={busy} onClick={() => makeNext(a)} title="Make this the next step" aria-label={`Make “${a.subject}” the next step`}
                   className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-brand-700"><ArrowUp size={13} /></button>
