@@ -74,7 +74,7 @@ export default function PriorityAccounts({ userId, name, readOnly = false }) {
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <div className="mr-auto">
             <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Star size={17} className="fill-amber-400 text-amber-500" /> Priority tickets</h2>
-            <p className="text-xs text-slate-500">Pipeline or work tickets, from the accounts above or anywhere else{edit ? ', in whatever order you like. Drag to reorder.' : '.'}</p>
+            <p className="text-xs text-slate-500">Pipeline or work tickets, from the accounts above or anywhere else. Highest priority is to the left, lower priority to the right.{edit ? ' Drag to reorder.' : ''}</p>
           </div>
           {edit && <button type="button" className="btn" onClick={() => setPicking(true)}><Plus size={15} /> Choose tickets</button>}
         </div>
@@ -579,19 +579,18 @@ function PriorityList({ list, edit, onReorder, onRemove, onOpen }) {
     <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
       <SortableContext items={ids} strategy={rectSortingStrategy}>
         <ol className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]">
-          {ids.map((id, i) => byId.get(id) && <SortableTicket key={id} n={i + 1} ticket={byId.get(id)} edit={edit} onRemove={onRemove} onOpen={onOpen} />)}
+          {ids.map((id) => byId.get(id) && <SortableTicket key={id} ticket={byId.get(id)} edit={edit} onRemove={onRemove} onOpen={onOpen} />)}
         </ol>
       </SortableContext>
     </DndContext>
   );
 }
 
-function SortableTicket({ n, ticket, edit, onRemove, onOpen }) {
+function SortableTicket({ ticket, edit, onRemove, onOpen }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: ticket.id, disabled: !edit });
   return (
     <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`group relative ${isDragging ? 'z-10 opacity-60' : ''}`}
       {...attributes} {...listeners}>
-      <span className="absolute -top-2 -left-2 z-10 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-800 px-1 text-[11px] font-semibold text-white">{n}</span>
       <div onClick={() => onOpen(ticket)} role="button" tabIndex={-1}>
         <TicketCard ticket={ticket} onOpenStep={(t) => onOpen(t, t.next_step?.id ?? null)} className={edit ? '' : 'cursor-pointer'} />
       </div>

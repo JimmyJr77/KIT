@@ -181,13 +181,12 @@ function TeamRollup({ people, me, reload }) {
       <div>
         <div className="mb-3">
           <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Star size={17} className="fill-amber-400 text-amber-500" /> Priority tickets</h2>
-          <p className="text-xs text-slate-500">Everyone&apos;s priority tickets together. Those on more lists come first, then those ranked higher. Faces show whose list each is on.</p>
+          <p className="text-xs text-slate-500">Everyone&apos;s priority tickets together. Highest priority is to the left, lower priority to the right: those on more lists come first, then those ranked higher. Faces show whose list each is on.</p>
         </div>
         {list.length ? (
           <ol className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]">
-            {list.map((x, i) => (
+            {list.map((x) => (
               <li key={x.id} className="relative flex flex-col">
-                <span className="absolute -top-2 -left-2 z-10 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-800 px-1 text-[11px] font-semibold text-white">{i + 1}</span>
                 <div role="button" tabIndex={-1} className="cursor-pointer" onClick={() => { setTicketStep(undefined); setTicketId(x.id); }}>
                   <TicketCard ticket={cardById.get(x.id)} onOpenStep={setQuick} />
                 </div>
