@@ -93,7 +93,7 @@ export default function NewTicketPanel({ bidOnly, stage = '', pipeline: asked = 
       footer={(
         <div className="space-y-2">
           {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-          <button className="btn-primary w-full" onClick={save} disabled={busy}>{busy ? 'Creating…' : `Create ${isWork ? 'work' : 'bid'} ticket`}</button>
+          <button className="btn-primary w-full" onClick={save} disabled={busy}>{busy ? 'Creating…' : `Create ${isWork ? 'work' : 'pipeline'} ticket`}</button>
         </div>
       )}>
       <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); save(); }}>
