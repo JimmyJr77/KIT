@@ -65,21 +65,34 @@ export default function Alerts() {
   };
 
   const unread = (alerts || []).filter((a) => !a.read).length;
+  const [tab, setTab] = useState('alerts'); // 'alerts', or 'actions' for your own recent actions
 
   return (
     <div className="space-y-5 p-8">
       <PageHeader title="Alerts" subtitle="@mentions, comments on your tickets, requests for your support, marketing support requests, travel requests, and contracts you’re put on in Delivery. Alerts about a priority come first, then the rest, newest first.">
-        {unread > 0 && <button className="btn" onClick={readAll}><CheckCheck size={15} /> Mark all as read</button>}
+        {tab === 'alerts' && unread > 0 && <button className="btn" onClick={readAll}><CheckCheck size={15} /> Mark all as read</button>}
       </PageHeader>
 
-      {alerts && !alerts.length && (
+      {/* The page's two views: what others sent you, and what you did yourself (with Undo). */}
+      <nav className="flex max-w-3xl gap-1 border-b border-slate-200" role="tablist" aria-label="Alerts or recent actions">
+        {[['alerts', `Alerts${unread ? ` (${unread})` : ''}`], ['actions', 'Recent actions']].map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${tab === k ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {tab === 'actions' && <RecentActions />}
+
+      {tab === 'alerts' && alerts && !alerts.length && (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-slate-400">
           <Bell size={28} className="mx-auto mb-2 text-slate-300" />
           No alerts yet. You’ll see one here when someone @mentions you or a team you’re on, comments on a ticket you own, asks Marketing for support, or puts you on a contract in Delivery.
         </div>
       )}
 
-      <ul className="max-w-3xl space-y-2">
+      <ul className={`max-w-3xl space-y-2 ${tab === 'alerts' ? '' : 'hidden'}`}>
         {alerts?.map((a, i) => (
           <li key={a.id}>
             {(i === 0 || !!alerts[i - 1].card_id !== !!a.card_id) && (
@@ -181,8 +194,6 @@ export default function Alerts() {
         ))}
       </ul>
 
-      <RecentActions />
-
       {lockTrip && <EstimateLockPanel key={lockTrip.id} trip={lockTrip} onClose={() => setLockTrip(null)} onSaved={(t) => { setLockTrip(null); setLocked(t.id); }} />}
       {open && isSupport(open) && <SupportPane key={open.id} alert={open} onClose={() => setOpen(null)} onDone={load} markRead={markRead} />}
       {open && isAsk(open) && open.support_id && (
@@ -214,13 +225,17 @@ function RecentActions() {
     catch (e) { setError({ id: a.id, message: e.message }); api.get('/alerts/actions').then((d) => setActions(d.actions)).catch(() => {}); }
     finally { setBusy(null); }
   };
-  if (!actions?.length) return null;
+  const shown = actions || [];
   return (
     <section className="max-w-3xl">
-      <h2 className="mt-6 mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">Your recent actions</h2>
       <p className="mb-2 text-xs text-slate-500">What you did on tickets in the last week. Only you see this. Undo puts it back in KIT, and in Pipedrive where it’s synced.</p>
-      <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white shadow-sm">
-        {actions.map((a) => (
+      {actions && !actions.length && (
+        <p className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-4 text-sm text-slate-400">
+          Nothing yet. When you add, edit, complete or reopen a task or subtask, move a ticket to another stage, rename a ticket, or mark a deal won or lost, it shows here with an Undo.
+        </p>
+      )}
+      <ul className={`divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white shadow-sm ${actions?.length ? '' : 'hidden'}`}>
+        {shown.map((a) => (
           <li key={a.id} className="flex items-start gap-3 px-4 py-2.5">
             <div className="min-w-0 flex-1">
               <div className={`text-sm break-words ${a.undone ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{a.summary}</div>
