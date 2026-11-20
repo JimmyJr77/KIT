@@ -75,13 +75,14 @@ export async function downloadC2cPdf({ rows, summary, date, fileName, logo, metr
     styles: { font: 'helvetica', fontSize: 8, textColor: INK, cellPadding: { top: 5, bottom: 5, left: 4, right: 4 }, valign: 'top', overflow: 'linebreak', lineColor: [203, 213, 225], lineWidth: { bottom: 0.5 } },
     headStyles: { fontSize: 7, fontStyle: 'bold', textColor: MUTED, fillColor: [248, 250, 252], lineColor: [148, 163, 184], lineWidth: { bottom: 0.75 } },
     columnStyles: {
-      0: { cellWidth: 170, fontStyle: 'bold' },
-      1: { cellWidth: 62, halign: 'right', textColor: [4, 120, 87] },
-      2: { cellWidth: 48 },
-      3: { cellWidth: 78 },
-      4: { cellWidth: 66 },
-      5: { cellWidth: 86, fontStyle: 'bold' },
-      6: { cellWidth: 58, fontStyle: 'bold' },
+      // 732pt across. The status note takes what the others leave: about 240pt, a third of the sheet.
+      0: { cellWidth: 136, fontStyle: 'bold' },
+      1: { cellWidth: 58, halign: 'right', textColor: [4, 120, 87] },
+      2: { cellWidth: 40 },
+      3: { cellWidth: 72 },
+      4: { cellWidth: 58 },
+      5: { cellWidth: 74, fontStyle: 'bold' },
+      6: { cellWidth: 52, fontStyle: 'bold' },
       7: { cellWidth: 'auto' },
     },
     didParseCell: ({ section, column, cell }) => {

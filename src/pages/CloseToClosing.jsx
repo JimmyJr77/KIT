@@ -53,7 +53,7 @@ const SORTS = {
   status: { label: 'Status', dir: 'asc', of: (r) => (r.closed ? 5 : STATUS_RANK[r.status] ?? 4) },
   expectation: { label: 'Expectation', dir: 'asc', of: (r) => EXPECTATION_RANK[r.expectation] ?? 3 },
 };
-/** This calendar quarter and the three after it: ["2026 Q4", "2027 Q1", …]. */
+/** This calendar quarter and the three after it: ["2026 Q4", "2027 Q1", …]. The quarter choice uses the first three. */
 function comingQuarters(today = todayIso()) {
   const [y, m] = today.split('-').map(Number);
   const first = y * 4 + Math.floor((m - 1) / 3);
@@ -101,15 +101,20 @@ export default function CloseToClosing() {
   // A column heading sorts by it; clicking the one already sorted on reverses it.
   const sortOn = (key) => setSort(sort.key === key ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: SORTS[key].dir });
 
-  const [quarter, setQuarter] = useState(''); // '' for every ticket, or a quarter its est. close date must fall in
-  const quarters = useMemo(() => comingQuarters(), []);
+  const [quarter, setQuarter] = useState(''); // '' for every ticket, or the quarters its est. close date must fall in (joined with |)
+  // The choices: this quarter, the next, the one after that, and this quarter and the next together.
+  const quarters = useMemo(() => {
+    const [now, next, after] = comingQuarters();
+    return [[now, `${now} (current)`], [next, next], [after, after], [`${now}|${next}`, `${now} + ${next} (next 2)`]];
+  }, []);
+  const quarterLabel = quarters.find(([k]) => k === quarter)?.[1] || quarter;
 
   const sorted = useMemo(() => {
     const words = q.trim().toLowerCase();
     return (rows || []).filter((r) => scope === 'all' || r.mine)
       .filter((r) => filter.passes(r.owner?.id, r.territory_id))
       .filter((r) => !words || `${r.title} ${r.organization || ''}`.toLowerCase().includes(words)).filter(byTags(tags))
-      .filter((r) => !quarter || quarterFor(r.close_date) === quarter).sort(compareBy(sort));
+      .filter((r) => !quarter || quarter.split('|').includes(quarterFor(r.close_date))).sort(compareBy(sort));
   }, [rows, q, tags, sort, quarter, scope, filter.value]); // eslint-disable-line react-hooks/exhaustive-deps
   const listed = useMemo(() => new Set((rows || []).map((r) => r.ticket_id)), [rows]);
   const open = sorted.filter((r) => !r.closed);
@@ -162,7 +167,7 @@ export default function CloseToClosing() {
     return () => style.remove();
   }, []);
   const openTotal = money(sorted.filter((r) => !r.closed).reduce((s, r) => s + (r.value || 0), 0));
-  const narrowed = [scope === 'mine' && 'my tickets', filter.value.length && filter.options.filter((o) => filter.value.includes(o.value)).map((o) => o.label).join(', '), q.trim() && `matching “${q.trim()}”`, tags.length && `tagged ${tags.join(', ')}`, quarter && `closing ${quarter}`].filter(Boolean);
+  const narrowed = [scope === 'mine' && 'my tickets', filter.value.length && filter.options.filter((o) => filter.value.includes(o.value)).map((o) => o.label).join(', '), q.trim() && `matching “${q.trim()}”`, tags.length && `tagged ${tags.join(', ')}`, quarter && `closing ${quarterLabel.replace(' (current)', '').replace(' (next 2)', '')}`].filter(Boolean);
   const summaryLine = `${sorted.length} ${sorted.length === 1 ? 'opportunity' : 'opportunities'} · ${sorted.filter((r) => !r.closed).length} open · ${openTotal}${narrowed.length ? ` · ${narrowed.join(', ')}` : ''} · sorted by ${SORTS[sort.key].label.toLowerCase()}, ${sort.dir === 'asc' ? 'ascending' : 'descending'}`;
 
   return (
@@ -190,9 +195,9 @@ export default function CloseToClosing() {
         sort={{ options: Object.entries(SORTS).map(([k, o]) => [k, o.label]), value: sort.key, onChange: (k) => setSort({ key: k, dir: SORTS[k].dir }),
           dir: sort.dir, onDir: () => setSort({ ...sort, dir: sort.dir === 'asc' ? 'desc' : 'asc' }) }}
         extra={<>
-          <select className="input h-[38px] w-40 py-0" aria-label="Show tickets expected to close in" title="Narrow the list by est. close date" value={quarter} onChange={(e) => setQuarter(e.target.value)}>
+          <select className="input h-[38px] w-60 py-0" aria-label="Show tickets expected to close in" title="Narrow the list by est. close date" value={quarter} onChange={(e) => setQuarter(e.target.value)}>
             <option value="">All close dates</option>
-            {quarters.map((k, i) => <option key={k} value={k}>{k}{i === 0 ? ' (current)' : ''}</option>)}
+            {quarters.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
           </select>
           <button type="button" className="btn h-[38px] py-0" onClick={download} disabled={!rows || building} title="Download the list as a PDF, as it's ordered and narrowed now">
             {building ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} Download
