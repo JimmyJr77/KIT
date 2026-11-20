@@ -19,6 +19,7 @@ import NewTicketPanel, { PIPELINE_CLOSED_HINT } from './NewTicketPanel.jsx';
 import PwinSettings from './PwinSettings.jsx';
 import { LabelList, byTags, usePriorityTagHidden } from '../components/Labels.jsx';
 import NextStepBadge from '../components/NextStepBadge.jsx';
+import NextStepQuick from '../components/NextStepQuick.jsx';
 import { bucketsFor } from '../lib/process.js';
 
 const NO_STAGE = '__none__';
@@ -76,7 +77,8 @@ export default function Pipeline() {
   const [tags, setTags] = useState([]);
   const [tickets, setTickets] = useState(null);
   const [openId, setOpenId] = useState(null);
-  const [openStep, setOpenStep] = useState(undefined); // the activity to open the ticket on, from its next-step circle
+  const [openStep, setOpenStep] = useState(undefined); // the activity to open the ticket on, from the next-step popup
+  const [quick, setQuick] = useState(null); // the ticket whose next-step popup is up, from its circle
   const [dragId, setDragId] = useState(null);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
@@ -243,7 +245,7 @@ export default function Pipeline() {
           {/* At a set width the board scrolls sideways for the columns that don't fit; fitted to the window, they share it. */}
           <div className={`flex h-full min-h-96 items-stretch gap-3 ${cardWidth === 'fit' ? '' : 'w-max min-w-full'}`}>
             {columns.map((c) => <Column key={c.key} column={c} onOpen={(id) => { setOpenStep(undefined); setOpenId(id); }}
-              onOpenStep={(t) => { setOpenStep(t.next_step?.id ?? null); setOpenId(t.id); }} dragId={dragId} now={now}
+              onOpenStep={setQuick} dragId={dragId} now={now}
               onWon={c.key === lastStage ? markWon : null} width={cardWidth} ranking={ranking}
               minimized={minimized.includes(`${pipeline?.key}|${c.key}`)} onMinimize={() => toggleMinimized(`${pipeline?.key}|${c.key}`)} />)}
           </div>
@@ -259,6 +261,8 @@ export default function Pipeline() {
           onCreated={(t) => { setCreating(false); load(); setOpenId(t.id); }} />
       )}
 
+      {quick && <NextStepQuick ticket={quick} onClose={() => setQuick(null)} onChanged={load}
+        onOpenTicket={() => { setOpenStep(quick.next_step?.id ?? null); setOpenId(quick.id); setQuick(null); }} />}
       {openId && <TicketTimeline key={`${openId}-${openStep}`} ticketId={openId} activityId={openStep} onClose={() => { setOpenId(null); load(); }} onChanged={load} />}
     </div>
   );
