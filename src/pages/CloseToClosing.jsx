@@ -135,7 +135,7 @@ export default function CloseToClosing() {
   const setMetricsOpen = (v) => { setMetricsOpenState(v); try { localStorage.setItem('kit.c2c.metrics', v ? 'shown' : 'hidden'); } catch { /* not kept */ } };
   const openRow = openId && rows?.find((r) => r.ticket_id === openId);
 
-  // Downloaded as a PDF, the list is in the order and with the filters the page has now, on landscape sheets.
+  // Downloaded as a PDF, the list is in the order and with the filters the page has now, on portrait sheets.
   const [building, setBuilding] = useState(false);
   const download = async () => {
     setBuilding(true);
@@ -149,7 +149,7 @@ export default function CloseToClosing() {
         metrics: metrics.map((m) => ({ label: m.label, value: money(m.value), count: `${m.n} ${m.n === 1 ? 'deal' : 'deals'}` })),
         rows: sorted.map((r) => {
           return {
-            title: r.title, sub: [r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · '), tags: (r.labels || []).join(' · '),
+            title: r.title, sub: [r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · '),
             value: money(r.value), duration: duration(r), category: OUTCOMES[r.outcome]?.label || r.stage || '—', closeDate: closeDate(r.close_date),
             status: r.closed ? CLOSED.label : STATUS[r.status]?.label || 'Not set',
             expectation: EXPECTATION[r.expectation]?.label || 'Not set',
