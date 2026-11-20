@@ -591,8 +591,9 @@ function write({ users, pipelines, stages, deals, persons, organizations, partic
   pipelines.forEach((p, i) => {
     const row = db.prepare('SELECT id FROM pipelines WHERE pipedrive_id = ?').get(p.id);
     const position = p.order_nr ?? i;
-    if (row) db.prepare('UPDATE pipelines SET name = ?, position = ? WHERE id = ?').run(p.name, position, row.id);
-    pipelineIds.set(p.id, row?.id ?? db.prepare('INSERT INTO pipelines (name, position, pipedrive_id) VALUES (?, ?, ?)').run(p.name, position, p.id).lastInsertRowid);
+    const probability = (p.deal_probability ?? p.is_deal_probability_enabled ?? true) ? 1 : 0; // off: Pipedrive refuses a probability on its deals
+    if (row) db.prepare('UPDATE pipelines SET name = ?, position = ?, deal_probability = ? WHERE id = ?').run(p.name, position, probability, row.id);
+    pipelineIds.set(p.id, row?.id ?? db.prepare('INSERT INTO pipelines (name, position, pipedrive_id, deal_probability) VALUES (?, ?, ?, ?)').run(p.name, position, p.id, probability).lastInsertRowid);
     if (!row) tally('pipelines');
   });
   // Stages follow Pipedrive's: matched by id, else a stage made in KIT under the same name in that pipeline; added when

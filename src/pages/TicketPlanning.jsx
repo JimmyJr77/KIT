@@ -1113,6 +1113,7 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
               <label>
                 <span className="label">Probability (%)</span>
                 <input className="input" type="number" min={0} max={100} value={form.probability} onChange={set('probability')} placeholder="Set by hand" />
+                {synced && data.probability_synced === false && <span className="mt-1 block text-xs text-slate-500">Stays in KIT: Pipedrive has deal probability turned off for this pipeline.</span>}
               </label>
               <label>
                 <span className="label">Currency</span>

@@ -10,6 +10,7 @@ import { requireAdmin } from '../auth.js';
 import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../src/lib/assessment.js';
 import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
 import { recordWork, recordTicketUpdate } from '../worklog.js';
+import { recordAction, UNDO_HEADER } from '../actions.js';
 import { notifyMentions, notifyTicketOwner } from '../mentions.js';
 import { ticketFields } from './priorities.js';
 import { statusesFor, listPipelines, defaultPipeline, pipelineForNew, kitPipelineAllowed, KIT_PIPELINE_CLOSED } from '../pipelines.js';
@@ -232,9 +233,12 @@ r.get('/', (req, res) => {
   });
   const model = pwinModel();
   const focus = ids.length ? null : focusTickets(req.user);
+  // The personal alias this person has each ticket in, while the ticket is still in that alias's stage.
+  const aliasOf = new Map(db.prepare(`SELECT p.ticket_id, p.alias_id FROM stage_alias_tickets p JOIN stage_aliases a ON a.id = p.alias_id JOIN tickets t ON t.id = p.ticket_id
+    WHERE p.user_id = ? AND t.pipeline_id IS a.pipeline_id AND t.pipeline_status = a.stage`).all(req.user.id).map((x) => [x.ticket_id, x.alias_id]));
   res.json({ tickets: rows.filter((t) => !focus || focus.has(t.id)).map((t) => {
     const lane = laneFor(t);
-    return { ...t, labels: json.parse(t.labels, []), next_step: json.parse(t.next_step, null), tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
+    return { ...t, alias_id: aliasOf.get(t.id) ?? null, labels: json.parse(t.labels, []), next_step: json.parse(t.next_step, null), tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
   }) });
 });
 
@@ -446,6 +450,12 @@ r.put('/:id/stage', ownerOnly(), (req, res) => {
     else if (stage !== 'Lost' && t.deal_status === 'lost') setOutcome(t.id, 'open');
   })();
   recordTicketUpdate(req.user, t, stage ? `Stage: ${stage}` : 'Stage cleared');
+  // A recent action, unless it came out of Lost: putting it back would lose the deal again, dated today.
+  if (stage !== t.pipeline_status && t.deal_status !== 'lost') {
+    recordAction(req, { ticket_id: t.id, summary: `Moved to ${stage || 'no stage'}${t.pipeline_status ? ` (from ${t.pipeline_status})` : ''}`,
+      undo: { method: 'PUT', path: `/tickets/${t.id}/stage`, body: { pipeline_status: t.pipeline_status } },
+      guard: { table: 'tickets', id: t.id, fields: { pipeline_status: stage } } });
+  }
   res.json({ ticket: ticketRow(t.id) });
 });
 
@@ -481,7 +491,17 @@ r.put('/:id/outcome', ownerOnly(), (req, res) => {
   const status = req.body?.deal_status;
   if (!['won', 'lost', 'open'].includes(status)) return res.status(400).json({ error: 'Choose won, lost or open' });
   setOutcome(t.id, status, req.body?.lost_reason);
+  // An undo of a close also puts the ticket back in the stage it was closed from (a win on KIT's pipeline moves it to Awarded).
+  if (status === 'open' && req.get(UNDO_HEADER) && statusesFor(t.pipeline_id).includes(req.body?.pipeline_status)) {
+    db.prepare('UPDATE tickets SET pipeline_status = ? WHERE id = ?').run(req.body.pipeline_status, t.id);
+  }
   recordWork(req.user, { kind: 'ticket', ticket_id: t.id, summary: `${t.opportunity_title}: ${status === 'open' ? 'reopened' : status}` });
+  // A recent action when an open deal was closed: undoing it reopens the deal. Reopening isn't one, since closing it
+  // again would date the win or loss today.
+  if ((t.deal_status || 'open') === 'open' && status !== 'open') {
+    recordAction(req, { ticket_id: t.id, summary: `Marked ${status}`, undo: { method: 'PUT', path: `/tickets/${t.id}/outcome`, body: { deal_status: 'open', pipeline_status: t.pipeline_status } },
+      guard: { table: 'tickets', id: t.id, fields: { deal_status: status } } });
+  }
   res.json({ ticket: ticketRow(t.id), program: db.prepare('SELECT id FROM delivery_programs WHERE ticket_id = ?').get(t.id) || null });
 });
 
@@ -936,6 +956,7 @@ r.get('/files/:id', (req, res) => {
 const orgOut = (o) => (o ? { ...o, labels: json.parse(o.labels, []) } : null);
 const detailsOf = (t) => ({
   lost_reason: t.lost_reason ?? null, probability: t.probability ?? null, currency: t.currency ?? null, source: t.source ?? null,
+  probability_synced: db.prepare('SELECT deal_probability FROM pipelines WHERE id = ?').get(t.pipeline_id ?? -1)?.deal_probability !== 0, // false: Pipedrive has deal probability off for this pipeline
   source_origin: t.source_origin ?? null, source_origin_id: t.source_origin_id ?? null, source_channel_id: t.source_channel_id ?? null,
   deal_status: t.deal_status || 'open', won_at: t.won_at ?? null, lost_at: t.lost_at ?? null, value: t.value ?? null, projected_win_date: t.projected_win_date ?? null,
   labels: json.parse(t.labels, []), custom_fields: json.parse(t.custom_fields, []), pipedrive_id: t.pipedrive_id ?? null,

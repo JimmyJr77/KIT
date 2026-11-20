@@ -891,6 +891,8 @@ CREATE TABLE IF NOT EXISTS pipeline_stages (
 CREATE INDEX IF NOT EXISTS pipeline_stages_pipeline ON pipeline_stages(pipeline_id, position);
 `);
 addColumn('tickets', 'pipeline_id', 'INTEGER REFERENCES pipelines(id) ON DELETE SET NULL');
+// Pipedrive's per-pipeline "deal probability" switch: off, and Pipedrive refuses a probability on that pipeline's deals.
+addColumn('pipelines', 'deal_probability', 'INTEGER NOT NULL DEFAULT 1');
 // Stages can be added, renamed, moved and deleted in KIT (BD Pipeline › Settings › Stages) as well as in Pipedrive.
 // position is the order KIT shows them in; pipedrive_order is where Pipedrive had the stage at the last pull, and
 // pipedrive_name the name it has there (a stage renamed in KIT differs until the rename is sent). A stage made in KIT has
@@ -904,6 +906,23 @@ addColumn('pipeline_stages', 'pipedrive_name', 'TEXT');
 //     stage a step of its own in the reports; null leaves them out (as with any stage Pipedrive has that isn't standard).
 addColumn('pipeline_stages', 'sync', 'INTEGER NOT NULL DEFAULT 1');
 addColumn('pipeline_stages', 'reports_as', 'TEXT');
+// Personal stage aliases (see routes/stages.js): a column only its owner sees on the board, tied to one real stage of
+// the pipeline (pipeline_id null: KIT's own). A ticket placed in one stays in that real stage for everyone else and in
+// every report; the placement holds only while the ticket is in the alias's stage.
+db.exec(`CREATE TABLE IF NOT EXISTS stage_aliases (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS stage_alias_tickets (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  alias_id INTEGER NOT NULL REFERENCES stage_aliases(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, ticket_id)
+);`);
 // Where a pipeline ticket sits in its stage's column when the BD Pipeline board is sorted by priority order: lowest
 // first, tickets nobody has placed (null) after them, newest first. It's the board's own order, shared by everyone, and
 // has nothing to do with anyone's priority tickets or the weekly priorities.
@@ -1898,6 +1917,19 @@ addColumn('c2c_tickets', 'removed_at', 'TEXT');
 addColumn('c2c_tickets', 'removed_stage', 'TEXT');
 // How the deal is expected to come out, set by hand: win, tossup or loss (null: not set).
 addColumn('c2c_tickets', 'expectation', 'TEXT');
+// Recent actions someone can undo from their Alerts page (see server/actions.js): undo is the request that reverses the
+// action, guard what the record looked like right after it.
+db.exec(`CREATE TABLE IF NOT EXISTS user_actions (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+  summary TEXT NOT NULL,
+  undo TEXT NOT NULL,
+  guard TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  undone_at TEXT
+);
+CREATE INDEX IF NOT EXISTS user_actions_user ON user_actions (user_id, created_at);`);
 addColumn('meetings', 'objectives', 'TEXT'); // what we want out of the meeting
 // ---- Staffing events (ticket_process_steps, once called milestones) and the SAC list (Solution Architect Coordination).
 // step_date is the event's due date. criticality: critical | moderate | queued | available. fields: JSON of the event's blocks

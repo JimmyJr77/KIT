@@ -2,6 +2,7 @@
 // then the rest, each newest first.
 import { Router } from 'express';
 import { db, json } from '../db.js';
+import { recentActions, unchanged, UNDO_HEADER } from '../actions.js';
 
 const r = Router();
 
@@ -33,6 +34,34 @@ r.get('/', (req, res) => {
       team_name: a.team_name, // set when a mention reached them through this team rather than by name
     })),
   });
+});
+
+/** Your own recent actions (the last week), newest first, each saying whether it can still be undone. */
+r.get('/actions', (req, res) => res.json({ actions: recentActions(req.user.id) }));
+
+/**
+ * Undo one of your own actions: its reversing request runs as you, through the route that made the change, so the same
+ * rules apply and Pipedrive gets the reversal on the next send. Refused once the record has changed again.
+ */
+r.post('/actions/:id/undo', async (req, res, next) => {
+  try {
+    const a = db.prepare('SELECT * FROM user_actions WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!a) return res.status(404).json({ error: 'That action isn’t on your list' });
+    if (a.undone_at) return res.status(400).json({ error: 'That was already undone' });
+    if (!unchanged(json.parse(a.guard, null))) return res.status(409).json({ error: 'This has been changed again since, so it can’t be undone from here. Open the ticket to change it.' });
+    const undo = json.parse(a.undo, null);
+    const back = await fetch(`http://127.0.0.1:${req.socket.localPort}/api${undo.path}`, {
+      method: undo.method,
+      headers: { 'content-type': 'application/json', cookie: req.headers.cookie || '', [UNDO_HEADER]: '1' },
+      body: undo.body ? JSON.stringify(undo.body) : undefined,
+    });
+    if (!back.ok) {
+      const why = await back.json().catch(() => ({}));
+      return res.status(back.status === 401 ? 500 : back.status).json({ error: why.error || 'Couldn’t undo that' });
+    }
+    db.prepare("UPDATE user_actions SET undone_at = datetime('now') WHERE id = ?").run(a.id);
+    res.json({ actions: recentActions(req.user.id) });
+  } catch (e) { next(e); }
 });
 
 r.get('/unread', (req, res) => {

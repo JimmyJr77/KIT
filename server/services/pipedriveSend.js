@@ -152,10 +152,17 @@ const DFILE_SQL = `SELECT f.*, p.pipedrive_project_id AS project_id, p.ticket_id
  * sync): there's nowhere in Pipedrive to move the deal to, so it stays in the stage it was in there.
  */
 function sendable(t, fields) {
+  if (fields.includes('probability') && !probabilityOn(t.pipeline_id)) fields = fields.filter((f) => f !== 'probability');
   if (!fields.includes('pipeline_status')) return fields;
   const own = db.prepare('SELECT 1 FROM pipeline_stages WHERE pipeline_id = ? AND name = ? AND pipedrive_id IS NULL AND sync = 0').get(t.pipeline_id, t.pipeline_status);
   return own ? fields.filter((f) => f !== 'pipeline_status') : fields;
 }
+
+/**
+ * Whether Pipedrive takes a deal probability on this pipeline. Where the pipeline has it switched off, Pipedrive refuses
+ * the whole deal update, so a probability set in KIT stays in KIT and the deal's other fields still go.
+ */
+export const probabilityOn = (pipelineId) => db.prepare('SELECT deal_probability FROM pipelines WHERE id = ?').get(pipelineId ?? -1)?.deal_probability !== 0;
 
 /** Stages KIT has added (and set to sync), renamed or deleted on Pipedrive's pipelines since Pipedrive last had them. */
 function stagePlan() {
@@ -729,7 +736,7 @@ async function send({ out, tickets }, phase) {
         const body = {
           title: t.opportunity_title, pipeline_id: pipeline, ...(stage ? { stage_id: stage } : {}), ...(owner ? { owner_id: owner } : {}),
           ...(t.value != null ? { value: t.value } : {}), ...(t.currency ? { currency: t.currency } : {}),
-          ...(t.projected_win_date ? { expected_close_date: t.projected_win_date } : {}), ...(t.probability != null ? { probability: t.probability } : {}),
+          ...(t.projected_win_date ? { expected_close_date: t.projected_win_date } : {}), ...(t.probability != null && probabilityOn(t.pipeline_id) ? { probability: t.probability } : {}),
           ...(['won', 'lost'].includes(t.deal_status) ? { status: t.deal_status } : {}), ...(t.deal_status === 'lost' && t.lost_reason ? { lost_reason: t.lost_reason } : {}),
         };
         const { data: made } = await call('deals', {}, { method: 'POST', body, v2: true });

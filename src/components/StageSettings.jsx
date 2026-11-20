@@ -6,8 +6,8 @@ import { useApi } from '../lib/data.js';
 const LEFT_OUT = '';
 
 /**
- * A pipeline's stages, in board order: add one anywhere, rename, move and delete them (admins and BD team leads; everyone
- * else reads the list). Each stage added here carries two choices: whether it syncs with Pipedrive (off unless ticked),
+ * A pipeline's stages, in board order: add one anywhere, rename, move and delete them (admins only; everyone else reads
+ * the list, and keeps personal aliases of their own underneath: see MyAliases). Each stage added here carries two choices: whether it syncs with Pipedrive (off unless ticked),
  * and how reports count it (as one of the standard stages, as a step of its own, or not at all).
  * KIT's own pipeline (no id) works the same, without the sync choice: nothing on it goes to Pipedrive.
  * `pipeline` is the board's current pipeline; `onChanged` runs after a change so the board follows.
@@ -56,7 +56,7 @@ export default function StageSettings({ pipeline, onChanged }) {
 
   if (!stages.data) return <p className="text-sm text-slate-400">{stages.error ? stages.error.message : 'Loading…'}</p>;
 
-  const reportsText = (s) => (s.reports_as === OWN ? 'Own step in reports' : s.reports_as ? `Reports as ${s.reports_as}` : 'Not in reports');
+  const reportsText = (s) => (s.reports_as === OWN ? 'Own step in reports' : s.reports_as ? `Team alias of ${s.reports_as}` : 'Not in reports');
   const formRow = () => {
     const s = form.stage;
     return (
@@ -82,7 +82,7 @@ export default function StageSettings({ pipeline, onChanged }) {
           <div>
             <label className="label" htmlFor="stage-reports">In reports</label>
             <select id="stage-reports" className="input h-9 py-0 text-sm" value={form.reports_as} onChange={(e) => setForm({ ...form, reports_as: e.target.value })}>
-              {choices.map((c) => <option key={c} value={c}>Count as {c}</option>)}
+              {choices.map((c) => <option key={c} value={c}>Team alias of {c} (counts as {c})</option>)}
               <option value={OWN}>Add to reports as its own step</option>
               <option value={LEFT_OUT}>Leave out of reports</option>
             </select>
@@ -146,9 +146,80 @@ export default function StageSettings({ pipeline, onChanged }) {
       </ol>
       {canManage ? (
         <button type="button" className="btn" onClick={() => startAdd(null)} disabled={busy}><Plus size={15} /> Add a stage at the start</button>
-      ) : <p className="text-xs text-slate-500">Admins and BD team leads add, rename, move and delete stages.</p>}
+      ) : <p className="text-xs text-slate-500">Only an admin adds, renames, moves and deletes stages and team-wide aliases, so every ticket sits in an approved stage that’s reported.</p>}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      <MyAliases pid={pid} aliases={stages.data.aliases || []} stageNames={stages.data.aliasStages || []} onChanged={async () => { await stages.reload({ quiet: true }); onChanged?.(); }} />
     </div>
+  );
+}
+
+/**
+ * Your own stage aliases on this pipeline: a column only you see on the board, beside the stage it belongs to. Each has
+ * to be tied to one of the pipeline's stages. A ticket you put in an alias is still in that stage for everyone else, in
+ * Pipedrive and in every report. Anyone can keep these; team-wide aliases are an admin's to add, in the list above.
+ */
+function MyAliases({ pid, aliases, stageNames, onChanged }) {
+  const [form, setForm] = useState(null); // { id?, name, stage }
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const run = async (fn) => {
+    setBusy(true);
+    setError('');
+    try { await fn(); await onChanged(); return true; } catch (e) { setError(e.message); return false; } finally { setBusy(false); }
+  };
+  const save = async () => {
+    if (!form.name.trim() || !form.stage || busy) return;
+    const done = await run(() => (form.id ? api.put(`/stages/aliases/${form.id}`, { name: form.name, stage: form.stage })
+      : api.post('/stages/aliases', { pipeline_id: pid, name: form.name, stage: form.stage })));
+    if (done) setForm(null);
+  };
+  const remove = (a) => confirm(`Delete your alias “${a.name}”?${a.tickets ? ` Its ${a.tickets} ticket${a.tickets === 1 ? '' : 's'} show in ${a.stage} again.` : ''}`) && run(() => api.del(`/stages/aliases/${a.id}`));
+  const formRow = (
+    <li className="space-y-2 bg-brand-50/50 px-3 py-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-40 flex-1">
+          <label className="label" htmlFor="alias-name">Alias name</label>
+          <input id="alias-name" className="input h-9 text-sm" placeholder="Name the alias…" value={form?.name || ''} autoFocus maxLength={60}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } if (e.key === 'Escape') { e.stopPropagation(); setForm(null); } }} />
+        </div>
+        <div>
+          <label className="label" htmlFor="alias-stage">Alias of</label>
+          <select id="alias-stage" className="input h-9 py-0 text-sm" value={form?.stage || ''} onChange={(e) => setForm({ ...form, stage: e.target.value })}>
+            {stageNames.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+      </div>
+      {form?.id && form.stage !== form.was && <p className="text-xs text-amber-700">Tied to another stage, the alias starts empty: its tickets stay in {form.was}.</p>}
+      <div className="flex items-center gap-2">
+        <button type="button" className="btn-primary h-8 px-3 py-0 text-sm" onClick={save} disabled={busy || !form?.name.trim() || !form?.stage}>{form?.id ? 'Save' : 'Add alias'}</button>
+        <button type="button" className="btn h-8 px-3 py-0 text-sm" onClick={() => setForm(null)}>Cancel</button>
+      </div>
+    </li>
+  );
+  return (
+    <section className="space-y-2 border-t border-slate-200 pt-4">
+      <h3 className="text-sm font-semibold text-slate-800">Your aliases</h3>
+      <p className="text-xs leading-snug text-slate-600">
+        A column of your own on the board, beside the stage it belongs to. Only you see it. A ticket you drag into one stays in that stage for everyone else, in Pipedrive and in every report.
+      </p>
+      {(aliases.length > 0 || form) && (
+        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+          {aliases.map((a) => (form?.id === a.id ? <Rows key={a.id}>{formRow}</Rows> : (
+            <li key={a.id} className="flex items-center gap-2 px-3 py-2">
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{a.name}</span>
+              <Chip tone="violet">Alias of {a.stage}</Chip>
+              <span className="shrink-0 text-xs text-slate-400 tabular-nums">{a.tickets} ticket{a.tickets === 1 ? '' : 's'}</span>
+              <IconButton label={`Edit ${a.name}`} title="Rename, or tie it to another stage" disabled={busy} onClick={() => setForm({ id: a.id, name: a.name, stage: a.stage, was: a.stage })}><Pencil size={14} /></IconButton>
+              <IconButton danger label={`Delete ${a.name}`} title="Delete" disabled={busy} onClick={() => remove(a)}><Trash2 size={14} /></IconButton>
+            </li>
+          )))}
+          {form && !form.id && formRow}
+        </ul>
+      )}
+      {!form && <button type="button" className="btn" onClick={() => setForm({ name: '', stage: stageNames[0] || '' })} disabled={busy || !stageNames.length}><Plus size={15} /> Add an alias</button>}
+      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+    </section>
   );
 }
 

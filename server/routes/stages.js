@@ -1,5 +1,8 @@
-// A pipeline's stages: the columns of the BD Pipeline board. Everyone reads them; admins and BD team leads add one
-// anywhere in the order, rename, move and delete them. These are Pipedrive's own stages: a stage added, renamed or
+// A pipeline's stages: the columns of the BD Pipeline board. Everyone reads them; only an admin adds one anywhere in the
+// order, renames, moves and deletes them, since every ticket has to sit in an admin-approved stage that gets reported.
+// That covers real stages (which can sync with Pipedrive) and team-wide aliases (a stage of KIT's own that reports count
+// as a standard stage, shown to everyone). Anyone can keep personal aliases instead (at the end of this file): a column
+// only they see, tied to one real stage. These are Pipedrive's own stages: a stage added, renamed or
 // deleted here is added, renamed or deleted there (pipedriveSend.js), and the other way round (pipedrive.js). Pipedrive
 // doesn't let its API say where a stage goes, so the order set here is KIT's until someone reorders the stages in Pipedrive.
 // KIT's own pipeline (no id, asked for as "kit") works the same way, except that nothing on it ever goes to Pipedrive.
@@ -8,7 +11,7 @@
 // about it is sent; on, it's made in Pipedrive with the next send. And how reports count it: blended into a standard
 // stage, as a step of its own, or not at all (see pipelines.js). A stage Pipedrive has always syncs.
 import { Router } from 'express';
-import { db, canManageBd } from '../db.js';
+import { db } from '../db.js';
 import { STANDARD_STAGES, BLEND_STAGES, OWN_STEP, KIT_PIPELINE_NAME, refreshReportStages } from '../pipelines.js';
 
 const r = Router();
@@ -30,13 +33,90 @@ const reorder = (ids) => ids.forEach((id, i) => db.prepare('UPDATE pipeline_stag
 r.get('/', (req, res) => {
   const p = pipelineOf(req.query.pipeline_id);
   if (!p) return res.status(404).json({ error: 'Pipeline not found' });
-  res.json({ stages: list(p.id), canManage: canManageBd(req.user), reportChoices: BLEND_STAGES, ownStep: OWN_STEP, kit: p.id == null });
+  res.json({ stages: list(p.id), canManage: req.user.role === 'admin', reportChoices: BLEND_STAGES, ownStep: OWN_STEP, kit: p.id == null,
+    aliases: aliasesOf(req.user, p.id), aliasStages: aliasStages(p.id) });
 });
 
 function manager(req, res, next) {
-  if (!canManageBd(req.user)) return res.status(403).json({ error: 'Only admins and BD team leads can change a pipeline’s stages' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an admin adds or changes a pipeline’s stages and team-wide aliases. You can add a personal alias, which only you see.' });
   next();
 }
+
+// ---- Personal aliases. Declared before the /:id routes, which would otherwise take "aliases" for a stage id.
+
+/** The real stages an alias can be tied to: the pipeline's own, in order, apart from Lost. */
+const aliasStages = (pipelineId) => rows(pipelineId).map((s) => s.name).filter((n) => n.toLowerCase() !== 'lost');
+/** Someone's aliases on a pipeline, in the order made, with how many tickets they've placed in each (still in its stage). */
+const aliasesOf = (user, pipelineId) => db.prepare(`SELECT a.id, a.name, a.stage,
+    (SELECT COUNT(*) FROM stage_alias_tickets p JOIN tickets t ON t.id = p.ticket_id
+      WHERE p.alias_id = a.id AND t.pipeline_id IS a.pipeline_id AND t.pipeline_status = a.stage AND t.ticket_type = 'bid' AND t.archive_set_id IS NULL) AS tickets
+  FROM stage_aliases a WHERE a.user_id = ? AND a.pipeline_id IS ? ORDER BY a.id`).all(user.id, pipelineId);
+const ownAlias = (req) => db.prepare('SELECT * FROM stage_aliases WHERE id = ? AND user_id = ?').get(Number(req.params.id ?? req.body?.alias_id) || 0, req.user.id);
+function aliasNameError(user, pipelineId, name, id = 0) {
+  if (!name) return 'Name the alias';
+  if (rows(pipelineId).some((s) => s.name.toLowerCase() === name.toLowerCase())) return `${name} is already a stage of this pipeline`;
+  if (db.prepare('SELECT 1 FROM stage_aliases WHERE user_id = ? AND pipeline_id IS ? AND name = ? COLLATE NOCASE AND id != ?').get(user.id, pipelineId, name, id)) return `You already have an alias called ${name}`;
+  return null;
+}
+
+/** Body: { pipeline_id, name, stage }. A personal alias of one of the pipeline's stages. */
+r.post('/aliases', (req, res) => {
+  const p = pipelineOf(req.body?.pipeline_id);
+  if (!p) return res.status(404).json({ error: 'Pipeline not found' });
+  const name = cleanName(req.body?.name);
+  const error = aliasNameError(req.user, p.id, name);
+  if (error) return res.status(400).json({ error });
+  if (!aliasStages(p.id).includes(req.body?.stage)) return res.status(400).json({ error: 'Pick the stage this alias belongs to' });
+  db.prepare('INSERT INTO stage_aliases (user_id, pipeline_id, name, stage) VALUES (?, ?, ?, ?)').run(req.user.id, p.id, name, req.body.stage);
+  res.json({ aliases: aliasesOf(req.user, p.id) });
+});
+
+/**
+ * Body: { ticket_id, alias_id }. Puts a ticket in one of your aliases (alias_id null takes it out). The ticket has to be in
+ * the alias's stage already: an alias never changes where a ticket really is.
+ */
+r.put('/aliases/place', (req, res) => {
+  const t = db.prepare("SELECT id, pipeline_id, pipeline_status FROM tickets WHERE id = ? AND ticket_type = 'bid'").get(Number(req.body?.ticket_id) || 0);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  if (req.body?.alias_id == null) {
+    db.prepare('DELETE FROM stage_alias_tickets WHERE user_id = ? AND ticket_id = ?').run(req.user.id, t.id);
+    return res.json({ alias_id: null });
+  }
+  const a = ownAlias(req);
+  if (!a) return res.status(404).json({ error: 'That alias isn’t yours' });
+  if ((a.pipeline_id ?? null) !== (t.pipeline_id ?? null) || a.stage !== t.pipeline_status) return res.status(400).json({ error: `${a.name} is an alias of ${a.stage}: the ticket has to be in ${a.stage} first` });
+  db.prepare('INSERT OR REPLACE INTO stage_alias_tickets (user_id, ticket_id, alias_id) VALUES (?, ?, ?)').run(req.user.id, t.id, a.id);
+  res.json({ alias_id: a.id });
+});
+
+/** Body: { name?, stage? }. Tied to another stage, the alias starts empty: its tickets stay where they really are. */
+r.put('/aliases/:id', (req, res) => {
+  const a = ownAlias(req);
+  if (!a) return res.status(404).json({ error: 'That alias isn’t yours' });
+  const b = req.body || {};
+  if (b.name !== undefined) {
+    const name = cleanName(b.name);
+    const error = aliasNameError(req.user, a.pipeline_id, name, a.id);
+    if (error) return res.status(400).json({ error });
+    db.prepare('UPDATE stage_aliases SET name = ? WHERE id = ?').run(name, a.id);
+  }
+  if (b.stage !== undefined && b.stage !== a.stage) {
+    if (!aliasStages(a.pipeline_id).includes(b.stage)) return res.status(400).json({ error: 'Pick the stage this alias belongs to' });
+    db.transaction(() => {
+      db.prepare('UPDATE stage_aliases SET stage = ? WHERE id = ?').run(b.stage, a.id);
+      db.prepare('DELETE FROM stage_alias_tickets WHERE alias_id = ?').run(a.id);
+    })();
+  }
+  res.json({ aliases: aliasesOf(req.user, a.pipeline_id) });
+});
+
+/** Its tickets go back to showing in the stage they're in. */
+r.delete('/aliases/:id', (req, res) => {
+  const a = ownAlias(req);
+  if (!a) return res.status(404).json({ error: 'That alias isn’t yours' });
+  db.prepare('DELETE FROM stage_aliases WHERE id = ?').run(a.id);
+  res.json({ aliases: aliasesOf(req.user, a.pipeline_id) });
+});
 
 /** reports_as from a request: a standard stage to blend into, 'own', or null (left out). undefined when it isn't one of those. */
 const reportChoice = (v) => (v == null || v === '' ? null : v === OWN_STEP || BLEND_STAGES.includes(v) ? v : undefined);
@@ -106,6 +186,7 @@ r.put('/:id', manager, (req, res) => {
         WHERE pipeline_id IS @p AND pipeline_status = @old`).run(at);
       db.prepare('DELETE FROM ticket_history WHERE id > ? AND ticket_id IN (SELECT id FROM tickets WHERE pipeline_id IS ?)').run(before, s.pipeline_id);
       db.prepare('UPDATE ticket_history SET pipeline_status = @name WHERE pipeline_status = @old AND ticket_id IN (SELECT id FROM tickets WHERE pipeline_id IS @p)').run(at);
+      db.prepare('UPDATE stage_aliases SET stage = @name WHERE pipeline_id IS @p AND stage = @old').run(at); // personal aliases of it follow
       // A standard name counts as itself.
       if (STANDARD_STAGES.includes(name)) db.prepare('UPDATE pipeline_stages SET reports_as = NULL WHERE id = ?').run(s.id);
     })();
@@ -140,6 +221,7 @@ r.delete('/:id', manager, (req, res) => {
   db.transaction(() => {
     if (s.pipedrive_id) db.prepare('INSERT OR REPLACE INTO stage_deletes (pipedrive_id, name) VALUES (?, ?)').run(s.pipedrive_id, s.pipedrive_name || s.name);
     db.prepare('DELETE FROM pipeline_stages WHERE id = ?').run(s.id);
+    db.prepare('DELETE FROM stage_aliases WHERE pipeline_id IS ? AND stage = ?').run(s.pipeline_id, s.name); // personal aliases of it go with it
     reorder(rows(s.pipeline_id).map((x) => x.id));
   })();
   refreshReportStages();

@@ -11,9 +11,15 @@ import {
 } from '../activities.js';
 import { COMMENT_SQL, commentOut } from './tickets.js';
 import { queueDelete } from '../services/pipedrive.js';
+import { recordAction, UNDO_HEADER } from '../actions.js';
 
 const r = Router();
 
+/** What an edited field is called in a recent action's summary. */
+const FIELD_WORDS = { text: 'name', activity_type: 'type', due_date: 'due date', due_time: 'time', assignee_id: 'assignee', waiting_client: 'waiting on client', video_call: 'video call', ticket_id: 'ticket' };
+/** An undo takes back the "completed" entry the action put on the week's board. */
+const unlogWork = (user, ticketId, summary) => db.prepare(`DELETE FROM work_log WHERE id = (SELECT id FROM work_log
+  WHERE user_id = ? AND kind = 'task' AND ticket_id = ? AND summary = ? ORDER BY id DESC LIMIT 1)`).run(user.id, ticketId, String(summary).slice(0, 280));
 const TEXT = ['location', 'video_call', 'description', 'note', 'organization', 'phone', 'email', 'goals'];
 
 const SELECT = `SELECT k.*, t.opportunity_title AS ticket_title, t.ticket_type, u.first_name || ' ' || u.last_name AS assignee_name,
@@ -113,6 +119,8 @@ r.post('/', (req, res) => {
     return newId;
   })();
   recordTicketUpdate(req.user, db.prepare('SELECT id, created_by FROM tickets WHERE id = ?').get(data.ticket_id), `Activity added: ${data.text}`);
+  recordAction(req, { ticket_id: data.ticket_id, summary: `Added task: ${data.text}`, undo: { method: 'DELETE', path: `/activities/${id}` },
+    guard: { table: 'ticket_tasks', id: Number(id), fields: { done: 0, text: data.text } } });
   res.json({ activity: one(id) });
 });
 
@@ -124,13 +132,17 @@ r.put('/order', (req, res) => {
   res.json({ ok: true });
 });
 
-/** Any of the fields, `participants` (contact ids), and `done`. Moving it to another ticket takes `ticket_id`. */
+/**
+ * Any of the fields, `participants` (contact ids), and `done`. Moving it to another ticket takes `ticket_id`. Reopened
+ * by an undo, it goes back where it was in the list.
+ */
 r.put('/:id', (req, res) => {
   const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(req.params.id);
   if (!k) return res.status(404).json({ error: 'Activity not found' });
   const b = req.body || {};
   const { data, error } = clean(b, true);
   if (error) return res.status(400).json({ error });
+  const undoing = !!req.get(UNDO_HEADER);
   db.transaction(() => {
     if (data.ticket_id && data.ticket_id !== k.ticket_id) data.position = nextPosition(data.ticket_id);
     const cols = Object.keys(data);
@@ -139,7 +151,8 @@ r.put('/:id', (req, res) => {
     if (typeof b.done === 'boolean' && b.done !== !!k.done) {
       // Reopened, it goes back to the bottom of the open list rather than jumping the queue.
       db.prepare("UPDATE ticket_tasks SET done = ?, done_at = CASE WHEN ? THEN datetime('now') ELSE NULL END, position = CASE WHEN ? THEN position ELSE ? END WHERE id = ?")
-        .run(b.done ? 1 : 0, b.done ? 1 : 0, b.done ? 1 : 0, nextPosition(k.ticket_id), k.id);
+        .run(b.done ? 1 : 0, b.done ? 1 : 0, b.done || undoing ? 1 : 0, nextPosition(k.ticket_id), k.id);
+      if (!b.done && undoing) unlogWork(req.user, k.ticket_id, k.text);
       if (b.done) {
         recordWork(req.user, { kind: 'task', ticket_id: data.ticket_id || k.ticket_id, summary: data.text || k.text });
         awardTokens(req.user, 'task', k.id);
@@ -151,6 +164,20 @@ r.put('/:id', (req, res) => {
   // Finishing it is logged above as a completed task; any other edit counts as an update to the ticket.
   if (!(typeof b.done === 'boolean' && b.done !== !!k.done && b.done)) {
     recordTicketUpdate(req.user, db.prepare('SELECT id, created_by FROM tickets WHERE id = ?').get(data.ticket_id || k.ticket_id), `Activity edited: ${data.text || k.text}`);
+  }
+  // What changed, as a recent action: undoing it puts those fields (and done) back as they were.
+  const changed = Object.keys(data).filter((c) => c !== 'position' && (data[c] ?? null) !== (k[c] ?? null));
+  const toggled = typeof b.done === 'boolean' && b.done !== !!k.done;
+  if (changed.length || toggled) {
+    const body = Object.fromEntries(changed.map((c) => [c === 'text' ? 'subject' : c, k[c]]));
+    const after = Object.fromEntries(changed.map((c) => [c, data[c]]));
+    if (toggled) { body.done = !!k.done; after.done = b.done ? 1 : 0; }
+    const name = data.text || k.text;
+    recordAction(req, {
+      ticket_id: data.ticket_id || k.ticket_id,
+      summary: toggled && !changed.length ? `${b.done ? 'Completed' : 'Reopened'}: ${name}` : `Edited task: ${name} (${[...changed.map((c) => FIELD_WORDS[c] || c.replace(/_/g, ' ')), ...(toggled ? [b.done ? 'completed' : 'reopened'] : [])].join(', ')})`,
+      undo: { method: 'PUT', path: `/activities/${k.id}`, body }, guard: { table: 'ticket_tasks', id: k.id, fields: after },
+    });
   }
   res.json({ activity: one(k.id) });
 });
@@ -178,12 +205,15 @@ r.post('/:id/subtasks', (req, res) => {
   if (!k) return res.status(404).json({ error: 'Activity not found' });
   const text = String(req.body?.text || '').trim();
   if (!text) return res.status(400).json({ error: 'Write the subtask first' });
-  db.transaction(() => {
+  const newId = db.transaction(() => {
     const pos = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM activity_subtasks WHERE task_id = ?').get(k.id).p;
-    db.prepare('INSERT INTO activity_subtasks (task_id, text, position, created_by) VALUES (?, ?, ?, ?)').run(k.id, text, pos, req.user.id);
+    const made = db.prepare('INSERT INTO activity_subtasks (task_id, text, position, created_by) VALUES (?, ?, ?, ?)').run(k.id, text, pos, req.user.id).lastInsertRowid;
     mirrorCards(k.id);
     touch(k.ticket_id);
+    return Number(made);
   })();
+  recordAction(req, { ticket_id: k.ticket_id, summary: `Added subtask: ${text}`, undo: { method: 'DELETE', path: `/activities/subtasks/${newId}` },
+    guard: { table: 'activity_subtasks', id: newId, fields: { done: 0, text } } });
   res.json({ activity: one(k.id) });
 });
 
@@ -202,11 +232,21 @@ r.put('/subtasks/:id', (req, res) => {
       if (b.done) {
         recordWork(req.user, { kind: 'task', ticket_id: s.ticket_id, summary: s.text });
         awardTokens(req.user, 'subtask', s.id);
-      }
+      } else if (req.get(UNDO_HEADER)) unlogWork(req.user, s.ticket_id, s.text);
     }
     mirrorCards(s.task_id);
     touch(s.ticket_id);
   })();
+  const renamed = typeof b.text === 'string' && b.text.trim() !== s.text;
+  const ticked = typeof b.done === 'boolean' && b.done !== !!s.done;
+  if (renamed || ticked) {
+    recordAction(req, {
+      ticket_id: s.ticket_id,
+      summary: ticked ? `${b.done ? 'Completed' : 'Reopened'} subtask: ${renamed ? b.text.trim() : s.text}` : `Renamed subtask: ${b.text.trim()}`,
+      undo: { method: 'PUT', path: `/activities/subtasks/${s.id}`, body: { ...(renamed ? { text: s.text } : {}), ...(ticked ? { done: !!s.done } : {}) } },
+      guard: { table: 'activity_subtasks', id: s.id, fields: { ...(renamed ? { text: b.text.trim() } : {}), ...(ticked ? { done: b.done ? 1 : 0 } : {}) } },
+    });
+  }
   res.json({ activity: one(s.task_id) });
 });
 

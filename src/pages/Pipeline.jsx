@@ -23,6 +23,8 @@ import NextStepQuick from '../components/NextStepQuick.jsx';
 import { bucketsFor } from '../lib/process.js';
 
 const NO_STAGE = '__none__';
+const ALIAS = 'alias:'; // a personal alias's column, by its id
+const NO_ALIASES = [];
 // How wide the board's columns (and so its tickets) are: each person's own choice, in the board's settings, kept in this
 // browser. Narrow, medium and wide are fixed widths, and the board scrolls sideways for what doesn't fit; "fit" shares the
 // window among the columns instead, however thin that makes them.
@@ -137,6 +139,10 @@ export default function Pipeline() {
 
   const stages = (pipeline?.statuses || []).filter((s) => s !== 'Lost');
   const lastStage = stages[stages.length - 1];
+  // Your personal aliases on this pipeline: columns only you see, each beside the stage it belongs to. A ticket in one is
+  // still in that stage for everyone else and in every report.
+  const stageInfo = useApi(pipeline ? `/stages?pipeline_id=${pipeline.id ?? 'kit'}` : null);
+  const aliases = stageInfo.data?.aliases || NO_ALIASES;
 
   const markWon = async (t) => {
     if (!confirm(`Mark “${t.opportunity_title}” won? It moves into Delivery as a contract.${t.pipedrive_id ? ' Pipedrive follows.' : ''}`)) return;
@@ -145,12 +151,14 @@ export default function Pipeline() {
   };
   const columns = useMemo(() => {
     const onBoard = shown.filter((t) => keyOf(t.pipeline_id) === pipeline?.key);
-    const byStage = (s) => onBoard.filter((t) => (t.pipeline_status || NO_STAGE) === s).sort(compareBy(sort));
-    const cols = stages.map((s) => ({ key: s, label: s, tickets: byStage(s) }));
+    const aliasOf = (t) => aliases.find((a) => a.id === t.alias_id && a.stage === t.pipeline_status);
+    const byStage = (s) => onBoard.filter((t) => (t.pipeline_status || NO_STAGE) === s && !aliasOf(t)).sort(compareBy(sort));
+    const cols = stages.flatMap((s) => [{ key: s, label: s, tickets: byStage(s) },
+      ...aliases.filter((a) => a.stage === s).map((a) => ({ key: `${ALIAS}${a.id}`, label: a.name, alias: a, tickets: onBoard.filter((t) => aliasOf(t) === a).sort(compareBy(sort)) }))]);
     const none = byStage(NO_STAGE);
     // Tickets with no stage get their own column, shown only when there are some.
     return none.length ? [{ key: NO_STAGE, label: 'No stage', tickets: none }, ...cols] : cols;
-  }, [shown, stages, pipeline?.key, sort]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shown, stages, pipeline?.key, sort, aliases]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ranking = sort.key === 'priority'; // tickets are dragged up and down their column to set the order
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
@@ -181,9 +189,12 @@ export default function Pipeline() {
     if (onCard === t.id) return;
     const column = onCard != null ? columns.find((c) => c.tickets.some((x) => x.id === onCard)) : columns.find((c) => c.key === over.id);
     if (!column) return;
-    const stage = column.key === NO_STAGE ? null : column.key;
+    // An alias column stands for its stage: the ticket moves there if it isn't in it, and is then placed in the alias.
+    const stage = column.alias ? column.alias.stage : column.key === NO_STAGE ? null : column.key;
     const stageMoved = (t.pipeline_status || null) !== stage;
-    if (!stageMoved && !ranking) return;
+    const aliasId = column.alias?.id ?? null;
+    const aliasMoved = (t.alias_id ?? null) !== aliasId;
+    if (!stageMoved && !aliasMoved && !ranking) return;
     // The column as it will show, and from that the ticket that follows this one in priority order (reversed when the board is).
     const shown = column.tickets.filter((x) => x.id !== t.id);
     shown.splice(onCard != null ? shown.findIndex((x) => x.id === onCard) : shown.length, 0, t);
@@ -194,10 +205,12 @@ export default function Pipeline() {
     setTickets((xs) => xs.map((x) => ({
       ...x, ...(place.has(x.id) ? { board_position: place.get(x.id) } : {}),
       ...(x.id === t.id && stageMoved ? { pipeline_status: stage, last_activity: new Date().toISOString().slice(0, 19).replace('T', ' ') } : {}),
+      ...(x.id === t.id ? { alias_id: aliasId } : {}),
     })));
     setError('');
     try {
       if (stageMoved) await api.put(`/tickets/${t.id}/stage`, { pipeline_status: stage });
+      if (aliasMoved) await api.put('/stages/aliases/place', { ticket_id: t.id, alias_id: aliasId });
       if (ranking) { await api.put(`/tickets/${t.id}/board-position`, { before_id }); load(); }
     } catch (e) {
       setTickets(prev);
@@ -246,7 +259,7 @@ export default function Pipeline() {
           <div className={`flex h-full min-h-96 items-stretch gap-3 ${cardWidth === 'fit' ? '' : 'w-max min-w-full'}`}>
             {columns.map((c) => <Column key={c.key} column={c} onOpen={(id) => { setOpenStep(undefined); setOpenId(id); }}
               onOpenStep={setQuick} dragId={dragId} now={now}
-              onWon={c.key === lastStage ? markWon : null} width={cardWidth} ranking={ranking}
+              onWon={(c.alias?.stage ?? c.key) === lastStage ? markWon : null} width={cardWidth} ranking={ranking}
               minimized={minimized.includes(`${pipeline?.key}|${c.key}`)} onMinimize={() => toggleMinimized(`${pipeline?.key}|${c.key}`)} />)}
           </div>
       </div>
@@ -254,7 +267,7 @@ export default function Pipeline() {
       </DndContext>
 
       {settingsOpen && <PwinSettings onClose={() => setSettingsOpen(false)} onSaved={load} pipeline={pipeline} cardWidth={cardWidth} onCardWidth={setCardWidth}
-        onStagesChanged={() => { meta.reload({ quiet: true }); load(); }} />}
+        onStagesChanged={() => { meta.reload({ quiet: true }); stageInfo.reload({ quiet: true }); load(); }} />}
 
       {creating && (
         <NewTicketPanel bidOnly pipeline={pipeline} onClose={() => setCreating(false)}
@@ -324,6 +337,7 @@ function Column({ column, onOpen, onOpenStep, dragId, now, onWon, width = 'wide'
         <div className="flex items-baseline gap-1.5">
           <h2 className={`text-sm font-semibold ${column.key === NO_STAGE ? 'text-slate-500 italic' : 'text-slate-800'}`}>{column.label}</h2>
           <span className="text-xs text-slate-400">{column.tickets.length}</span>
+          {column.alias && <span className="rounded-full bg-violet-50 px-1.5 py-px text-[10px] font-medium whitespace-nowrap text-violet-700" title={`Your alias of ${column.alias.stage}. Only you see this column; for everyone else, and in reports, these tickets are in ${column.alias.stage}.`}>{column.alias.stage}</span>}
         </div>
         <span className="flex min-w-0 items-center gap-1">
           <span className="truncate text-xs font-medium text-emerald-700 tabular-nums">{total ? money(total) : ''}</span>

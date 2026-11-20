@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, ArrowRight, CheckCheck, StickyNote, Megaphone, Ticket, CalendarDays, Loader2, Handshake, Receipt, Plane } from 'lucide-react';
+import { Bell, Undo2, ArrowRight, CheckCheck, StickyNote, Megaphone, Ticket, CalendarDays, Loader2, Handshake, Receipt, Plane } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { ago, fullName, fullStamp, ticketKind, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -181,6 +181,8 @@ export default function Alerts() {
         ))}
       </ul>
 
+      <RecentActions />
+
       {lockTrip && <EstimateLockPanel key={lockTrip.id} trip={lockTrip} onClose={() => setLockTrip(null)} onSaved={(t) => { setLockTrip(null); setLocked(t.id); }} />}
       {open && isSupport(open) && <SupportPane key={open.id} alert={open} onClose={() => setOpen(null)} onDone={load} markRead={markRead} />}
       {open && isAsk(open) && open.support_id && (
@@ -191,6 +193,56 @@ export default function Alerts() {
             footer={<GoButton alert={open} onGo={goTo} />} />
         : <NotePane key={open.id} alert={open} onClose={() => setOpen(null)} onGo={goTo} />)}
     </div>
+  );
+}
+
+/**
+ * Your own recent actions on tickets (tasks and subtasks added, edited, completed or reopened; stage moves; deals marked
+ * won or lost), newest first, each with an Undo. Only you see yours. Undoing puts the record back as it was in KIT, and
+ * Pipedrive follows on the next send, as it did for the action. One changed again since can't be undone from here.
+ */
+function RecentActions() {
+  const navigate = useNavigate();
+  const [actions, setActions] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null); // { id, message }
+  useEffect(() => { api.get('/alerts/actions').then((d) => setActions(d.actions)).catch(() => setActions([])); }, []);
+  const undo = async (a) => {
+    setBusy(a.id);
+    setError(null);
+    try { setActions((await api.post(`/alerts/actions/${a.id}/undo`, {})).actions); }
+    catch (e) { setError({ id: a.id, message: e.message }); api.get('/alerts/actions').then((d) => setActions(d.actions)).catch(() => {}); }
+    finally { setBusy(null); }
+  };
+  if (!actions?.length) return null;
+  return (
+    <section className="max-w-3xl">
+      <h2 className="mt-6 mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">Your recent actions</h2>
+      <p className="mb-2 text-xs text-slate-500">What you did on tickets in the last week. Only you see this. Undo puts it back in KIT, and in Pipedrive where it’s synced.</p>
+      <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white shadow-sm">
+        {actions.map((a) => (
+          <li key={a.id} className="flex items-start gap-3 px-4 py-2.5">
+            <div className="min-w-0 flex-1">
+              <div className={`text-sm break-words ${a.undone ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{a.summary}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+                {a.ticket_id && a.ticket_title && (
+                  <button type="button" className="max-w-full truncate hover:text-brand-700 hover:underline" onClick={() => navigate(`/tickets?open=${a.ticket_id}`)}>{a.ticket_title}</button>
+                )}
+                <span title={fullStamp(a.created_at)}>{ago(a.created_at)}</span>
+              </div>
+              {error?.id === a.id && <p className="mt-1 text-xs text-red-600">{error.message}</p>}
+            </div>
+            {a.undone ? <span className="shrink-0 py-1 text-xs text-slate-400">Undone</span>
+              : a.can_undo ? (
+                <button type="button" disabled={busy != null} onClick={() => undo(a)} aria-label={`Undo: ${a.summary}`}
+                  className="flex shrink-0 items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:border-brand-500 hover:text-brand-700 disabled:opacity-50">
+                  {busy === a.id ? <Loader2 size={12} className="animate-spin" /> : <Undo2 size={12} />} Undo
+                </button>
+              ) : <span className="shrink-0 py-1 text-xs text-slate-400" title="It has been changed again since, so it can’t be undone from here.">Changed since</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
