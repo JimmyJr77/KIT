@@ -11,6 +11,7 @@ import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel from './NewTicketPanel.jsx';
 import TicketLanes from './TicketLanes.jsx';
 import NextStepBadge from '../components/NextStepBadge.jsx';
+import NextStepQuick from '../components/NextStepQuick.jsx';
 import { LabelList } from '../components/Labels.jsx';
 
 /** Every master ticket the user created or has priorities on. */
@@ -54,8 +55,11 @@ export default function Tickets() {
   }, [scope, q, teamId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = (id) => setParams(id ? { open: String(id) } : {});
-  // The next-step circle opens the ticket on that activity (or on the Activity pane, when there's no next step).
-  const openStep = (t) => setParams({ open: String(t.id), activity: String(t.next_step?.id ?? 0) });
+  // The next-step circle opens a quick popup on that step; from there the ticket opens on the activity (or on the Activity
+  // pane, when there's no next step).
+  const [quick, setQuick] = useState(null);
+  const openStep = setQuick;
+  const openOnStep = (t) => setParams({ open: String(t.id), activity: String(t.next_step?.id ?? 0) });
   const activityParam = params.get('activity');
   // Archived tickets leave both views: work tickets are in the Done archive, pipeline tickets in Closed deals.
   const ofType = (tickets || []).filter((t) => types.includes(t.ticket_type === 'work' ? 'work' : 'bid'))
@@ -197,6 +201,7 @@ export default function Tickets() {
           onCreated={(t) => { setCreating(false); load(); open(t.id); }} />
       )}
 
+      {quick && <NextStepQuick ticket={quick} onClose={() => setQuick(null)} onChanged={load} onOpenTicket={() => { openOnStep(quick); setQuick(null); }} />}
       {openId && (
         <TicketTimeline key={`${openId}-${activityParam}`} ticketId={openId} focus={params.get('focus')} onClose={() => open(null)} onChanged={load}
           activityId={activityParam == null ? undefined : Number(activityParam) || null} />

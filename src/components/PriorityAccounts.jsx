@@ -8,6 +8,7 @@ import { usd } from '../lib/travelCalc.js';
 import SidePanel from './SidePanel.jsx';
 import { TicketCard, TicketKindTag } from '../pages/Pipeline.jsx';
 import TicketTimeline, { AccountTimeline } from '../pages/TicketTimeline.jsx';
+import NextStepQuick from './NextStepQuick.jsx';
 import { PlanRail, PlanDrawer, DrawerShell, CrmObjectives } from '../pages/TicketPlanning.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
@@ -31,6 +32,7 @@ export default function PriorityAccounts({ userId, name, readOnly = false }) {
   const [openAccount, setOpenAccount] = useState(null);
   const [picking, setPicking] = useState(false);
   const [ticketId, setTicketId] = useState(null);
+  const [quick, setQuick] = useState(null); // the ticket whose next-step popup is up, from its circle
   const [ticketStep, setTicketStep] = useState(undefined);
   const [cards, setCards] = useState([]); // full ticket rows for the priority list
   const url = `/priority-accounts${userId ? `?user=${userId}` : ''}`;
@@ -80,7 +82,7 @@ export default function PriorityAccounts({ userId, name, readOnly = false }) {
           <PriorityList list={list} edit={edit}
             onReorder={(ids) => save(api.put('/priority-accounts/list', { ticket_ids: ids }))}
             onRemove={(id) => save(api.put('/priority-accounts/list', { ticket_ids: data.list.filter((x) => x !== id) }))}
-            onOpen={(t, step) => { setTicketStep(step); setTicketId(t.id); }} />
+            onOpen={(t, step) => { if (step === undefined) { setTicketStep(undefined); setTicketId(t.id); } else setQuick(t); }} />
         ) : (
           <p className="rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
             {edit ? 'No priority tickets yet. Choose them from your accounts, or any open pipeline or work ticket.' : 'No priority tickets yet.'}
@@ -96,6 +98,8 @@ export default function PriorityAccounts({ userId, name, readOnly = false }) {
         <PickList tickets={inTiers} cards={list} chosen={data.list} onClose={() => setPicking(false)}
           onSave={(ids) => save(api.put('/priority-accounts/list', { ticket_ids: ids })).then(() => setPicking(false))} />
       )}
+      {quick && <NextStepQuick ticket={quick} onClose={() => setQuick(null)} onChanged={loadCards}
+        onOpenTicket={() => { setTicketStep(quick.next_step?.id ?? null); setTicketId(quick.id); setQuick(null); }} />}
       {ticketId && <TicketTimeline key={`${ticketId}-${ticketStep}`} ticketId={ticketId} activityId={ticketStep} onClose={() => { setTicketId(null); load(); loadCards(); }} onChanged={loadCards} />}
     </section>
   );

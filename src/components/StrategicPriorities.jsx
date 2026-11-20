@@ -6,6 +6,7 @@ import { usd } from '../lib/travelCalc.js';
 import PriorityAccounts, { AccountPanel } from './PriorityAccounts.jsx';
 import { TicketCard } from '../pages/Pipeline.jsx';
 import TicketTimeline from '../pages/TicketTimeline.jsx';
+import NextStepQuick from './NextStepQuick.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 import { isClosed } from '../lib/lanes.js';
@@ -86,6 +87,7 @@ function TeamRollup({ people, me, reload }) {
   const [error, setError] = useState('');
   const [ticketId, setTicketId] = useState(null);
   const [ticketStep, setTicketStep] = useState(undefined);
+  const [quick, setQuick] = useState(null); // the ticket whose next-step popup is up, from its circle
   const [cards, setCards] = useState([]);
 
   // Tiers merged by name (Tier 1 with Tier 1), in their usual order; accounts merged by name within a tier. Each merged account keeps
@@ -187,7 +189,7 @@ function TeamRollup({ people, me, reload }) {
               <li key={x.id} className="relative flex flex-col">
                 <span className="absolute -top-2 -left-2 z-10 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-800 px-1 text-[11px] font-semibold text-white">{i + 1}</span>
                 <div role="button" tabIndex={-1} className="cursor-pointer" onClick={() => { setTicketStep(undefined); setTicketId(x.id); }}>
-                  <TicketCard ticket={cardById.get(x.id)} onOpenStep={(t) => { setTicketStep(t.next_step?.id ?? null); setTicketId(t.id); }} />
+                  <TicketCard ticket={cardById.get(x.id)} onOpenStep={setQuick} />
                 </div>
                 <div className="mt-1.5 flex items-center gap-2 px-1 text-[11px] text-slate-500">
                   <Avatars list={x.people} max={5} />
@@ -207,6 +209,8 @@ function TeamRollup({ people, me, reload }) {
           people={{ list: merged.entries.map((x) => ({ userId: x.userId, label: `${fullName(x.member)}${x.userId === me ? ' (you)' : ''}` })), current: entry.userId, onPick: (userId) => setOpenAccount({ key: merged.key, userId }) }}
           onClose={() => setOpenAccount(null)} onOpenTicket={(id) => { setTicketStep(undefined); setTicketId(id); }} />
       )}
+      {quick && <NextStepQuick ticket={quick} onClose={() => setQuick(null)} onChanged={loadCards}
+        onOpenTicket={() => { setTicketStep(quick.next_step?.id ?? null); setTicketId(quick.id); setQuick(null); }} />}
       {ticketId && <TicketTimeline key={`${ticketId}-${ticketStep}`} ticketId={ticketId} activityId={ticketStep} onClose={() => { setTicketId(null); loadCards(); }} onChanged={loadCards} />}
     </section>
   );
