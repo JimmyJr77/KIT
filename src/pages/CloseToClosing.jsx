@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, ArrowUp, ArrowDown, Download, Loader2, ListPlus, Plus } from 'lucide-react';
+import { X, ArrowUp, ArrowDown, Download, Loader2, ListPlus, Plus, ChevronDown, ChevronRight } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, shortDate, stamp, todayIso } from '../lib/format.js';
@@ -113,6 +113,21 @@ export default function CloseToClosing() {
   }, [rows, q, tags, sort, quarter, scope, filter.value]); // eslint-disable-line react-hooks/exhaustive-deps
   const listed = useMemo(() => new Set((rows || []).map((r) => r.ticket_id)), [rows]);
   const open = sorted.filter((r) => !r.closed);
+  // The value on the table: open deals among the rows showing (a paid or closed deal is no longer possible value), by how
+  // they're expected to come out.
+  const metrics = useMemo(() => {
+    const of = (label, hint, pick) => { const xs = open.filter(pick); return { label, hint, n: xs.length, value: xs.reduce((s, r) => s + (Number(r.value) || 0), 0) }; };
+    return [
+      of('Total possible value', 'Every open deal showing', () => true),
+      of('On-Track & Win', 'Status On-Track and expected to win', (r) => r.status === 'on_track' && r.expectation === 'win'),
+      of('Win', 'Expected to win', (r) => r.expectation === 'win'),
+      of('Toss-up & Win', 'Expected to win, or a toss-up', (r) => r.expectation === 'win' || r.expectation === 'tossup'),
+      of('Toss-up', 'A toss-up', (r) => r.expectation === 'tossup'),
+    ];
+  }, [sorted]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The rollup can be tucked away; the choice is kept on this browser. On paper it always shows.
+  const [metricsOpen, setMetricsOpenState] = useState(() => { try { return localStorage.getItem('kit.c2c.metrics') !== 'hidden'; } catch { return true; } });
+  const setMetricsOpen = (v) => { setMetricsOpenState(v); try { localStorage.setItem('kit.c2c.metrics', v ? 'shown' : 'hidden'); } catch { /* not kept */ } };
   const openRow = openId && rows?.find((r) => r.ticket_id === openId);
 
   // Downloaded as a PDF, the list is in the order and with the filters the page has now, on landscape sheets.
@@ -126,6 +141,7 @@ export default function CloseToClosing() {
         fileName: `Close to closing ${todayIso()}.pdf`,
         date: new Date().toLocaleDateString('en-US', { dateStyle: 'long' }),
         summary: summaryLine, logo: nameOnLight,
+        metrics: metrics.map((m) => ({ label: m.label, value: money(m.value), count: `${m.n} ${m.n === 1 ? 'deal' : 'deals'}` })),
         rows: sorted.map((r) => {
           return {
             title: r.title, sub: [r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · '), tags: (r.labels || []).join(' · '),
@@ -186,6 +202,24 @@ export default function CloseToClosing() {
         </>} />
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6 print:overflow-visible print:bg-white print:p-0">
+        {rows && (
+          <button type="button" onClick={() => setMetricsOpen(!metricsOpen)} aria-expanded={metricsOpen}
+            className="mb-2 flex items-center gap-1 text-xs font-semibold tracking-wide text-slate-500 uppercase hover:text-slate-800 print:hidden">
+            {metricsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />} Value rollup
+            {!metricsOpen && <span className="ml-1 font-medium tracking-normal text-emerald-700 normal-case tabular-nums">{money(metrics[0].value)} possible</span>}
+          </button>
+        )}
+        {rows && (
+          <dl className={`mb-4 grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5 print:mb-2 print:grid print:grid-cols-5 print:gap-1.5 ${metricsOpen ? 'grid' : 'hidden'}`} aria-label="Value of the open deals showing">
+            {metrics.map((m) => (
+              <div key={m.label} title={`${m.hint}. Open deals among the rows showing now.`} className="rounded-xl border border-slate-200 bg-white px-4 py-3 print:rounded-md print:px-2 print:py-1">
+                <dt className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase print:text-[7px]">{m.label}</dt>
+                <dd className="mt-0.5 text-lg font-semibold text-emerald-700 tabular-nums print:text-[10px]">{money(m.value)}</dd>
+                <dd className="text-xs text-slate-500 print:text-[7px]">{m.n} {m.n === 1 ? 'deal' : 'deals'}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white print:overflow-visible print:rounded-none print:border-0">
           <table className="w-full min-w-[76rem] table-fixed text-left text-sm print:min-w-0 print:text-[10px]">
             <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold tracking-wide text-slate-500 uppercase print:border-slate-400 print:text-[8px]">

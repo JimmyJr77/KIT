@@ -16,9 +16,10 @@ const TONES = {
 /**
  * Build and download the PDF. `rows` are plain text, already ordered: { title, sub, tags, value, duration, category,
  * closeDate, status, expectation, notes: [{ body, by }] }. `summary` is the line under the title and `date` today's date, both as shown. `logo`
- * is the Knexus wordmark as a data URL (1848 × 260), set at the top as on the reports.
+ * is the Knexus wordmark as a data URL (1848 × 260), set at the top as on the reports. `metrics` is the value rollup, as on
+ * the page: [{ label, value, count }], all text, drawn as a row of boxes above the table.
  */
-export async function downloadC2cPdf({ rows, summary, date, fileName, logo }) {
+export async function downloadC2cPdf({ rows, summary, date, fileName, logo, metrics = [] }) {
   const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter', compress: true });
   const width = doc.internal.pageSize.getWidth();
@@ -32,11 +33,27 @@ export async function downloadC2cPdf({ rows, summary, date, fileName, logo }) {
   doc.setFont('helvetica', 'bold').setFontSize(15).setTextColor(...INK).text('Close to closing', margin, margin + 40);
   doc.setFont('helvetica', 'normal').setFontSize(8).setTextColor(...MUTED);
   doc.text(`Prepared ${plain(date)}`, width - margin, margin + 40, { align: 'right' });
-  doc.text(doc.splitTextToSize(plain(summary), width - margin * 2), margin, margin + 53);
+  const summaryLines = doc.splitTextToSize(plain(summary), width - margin * 2);
+  doc.text(summaryLines, margin, margin + 53);
+
+  // The value rollup: one box per metric across the sheet, between the summary and the table.
+  const rollupTop = margin + 64 + (summaryLines.length - 1) * 9.5; // under the summary, however many lines it runs to
+  const rollupHeight = metrics.length ? 36 : 0;
+  if (metrics.length) {
+    const gap = 6;
+    const boxWidth = (width - margin * 2 - gap * (metrics.length - 1)) / metrics.length;
+    metrics.forEach((m, i) => {
+      const x = margin + i * (boxWidth + gap);
+      doc.setDrawColor(203, 213, 225).setLineWidth(0.5).roundedRect(x, rollupTop, boxWidth, rollupHeight, 3, 3, 'S');
+      doc.setFont('helvetica', 'bold').setFontSize(6.5).setTextColor(...MUTED).text(plain(m.label).toUpperCase(), x + 6, rollupTop + 10);
+      doc.setFont('helvetica', 'bold').setFontSize(11).setTextColor(4, 120, 87).text(plain(m.value), x + 6, rollupTop + 23);
+      doc.setFont('helvetica', 'normal').setFontSize(6.5).setTextColor(...MUTED).text(plain(m.count), x + 6, rollupTop + 31);
+    });
+  }
 
   const byLines = new Set();
   autoTable(doc, {
-    startY: margin + 66,
+    startY: rollupTop + rollupHeight + (metrics.length ? 8 : 2),
     margin: { left: margin, right: margin, top: margin, bottom: margin + 8 },
     head: [['Opportunity', 'Value', 'Duration', 'Category', 'Est. Close Date', 'Status', 'Expectation', 'Status note']],
     body: rows.map((r) => {
