@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 
 /**
  * A ticket's next step, in a small popup opened from its circle on the pipeline board: the step with its subtasks and due
- * date, to edit, tick off or swap for another open task, and a line to add a new task. Nothing else of the ticket is here;
+ * date, to edit, tick off or swap for another open task, and a line each to add a subtask to it and a new task. Nothing else of the ticket is here;
  * "Open ticket" goes to the full Activity pane. `onChanged` runs after each save so the board's circle keeps up.
  */
 export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket }) {
@@ -13,6 +13,7 @@ export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket
   const [busy, setBusy] = useState(false);
   const [subject, setSubject] = useState('');
   const [added, setAdded] = useState({ subject: '', due_date: '' });
+  const [subtask, setSubtask] = useState('');
   const step = open?.[0] || null;
   // The next step's box grows with its text, so all of it shows however long it is.
   const box = useRef(null);
@@ -51,6 +52,11 @@ export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket
       await api.post('/activities', { subject: added.subject, due_date: added.due_date || null, ticket_id: ticket.id });
       setAdded({ subject: '', due_date: '' });
     });
+  };
+  const addSubtask = (e) => {
+    e.preventDefault();
+    if (!subtask.trim() || busy) return;
+    run(async () => { await api.post(`/activities/${step.id}/subtasks`, { text: subtask }); setSubtask(''); });
   };
   const makeNext = (a) => run(() => api.put('/activities/order', { ticket_id: ticket.id, ids: [a.id, ...open.filter((x) => x.id !== a.id).map((x) => x.id)] }));
 
@@ -93,6 +99,12 @@ export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket
                 ))}
               </ul>
             )}
+            <form onSubmit={addSubtask} className="mt-1.5 flex items-center gap-2 pl-6">
+              <input className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-0.5 text-xs focus:border-brand-500 focus:outline-none" placeholder="Add a subtask"
+                value={subtask} onChange={(e) => setSubtask(e.target.value)} aria-label="New subtask" />
+              <button type="submit" disabled={busy || !subtask.trim()} aria-label="Add the subtask" title="Add the subtask"
+                className="rounded-md p-1 text-brand-700 hover:bg-brand-50 disabled:opacity-40"><Plus size={13} /></button>
+            </form>
           </div>
         )}
 
