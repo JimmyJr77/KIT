@@ -20,6 +20,13 @@ const STATUSES = [
   { key: 'off_down', label: 'Off-Track Trending Down', tone: 'bg-red-50 text-red-700 ring-red-200' },
 ];
 const STATUS = Object.fromEntries(STATUSES.map((s) => [s.key, s]));
+// How the deal is expected to come out, set by hand while it's open. Once it closes, the row keeps what was expected.
+const EXPECTATIONS = [
+  { key: 'win', label: 'Win', tone: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
+  { key: 'tossup', label: 'Toss-up', tone: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  { key: 'loss', label: 'Loss', tone: 'bg-red-50 text-red-700 ring-red-200' },
+];
+const EXPECTATION = Object.fromEntries(EXPECTATIONS.map((s) => [s.key, s]));
 const CLOSED = { label: 'Closed', tone: 'bg-slate-200 text-slate-700 ring-slate-300' };
 // Where the deal has got to, shown as the category in place of the stage.
 const OUTCOMES = {
@@ -37,12 +44,14 @@ const closeDate = (iso) => (iso ? shortDate(iso, { month: 'short', day: 'numeric
 // Ways to order the table. `dir` is the direction each starts in; rows missing the value sorted on go to the bottom either
 // way, and ties go by name. Status runs On-Track down to Off-Track Trending Down, then not set, then Closed.
 const STATUS_RANK = { on_track: 0, off_up: 1, off_steady: 2, off_down: 3 };
+const EXPECTATION_RANK = { win: 0, tossup: 1, loss: 2 };
 const SORTS = {
   name: { label: 'Name', dir: 'asc', of: (r) => r.title.trim().toLowerCase() || null },
   added: { label: 'Date added', dir: 'desc', of: (r) => r.added_at || null },
   close: { label: 'Est. close date', dir: 'asc', of: (r) => r.close_date || null },
   value: { label: 'Value', dir: 'desc', of: (r) => (r.value == null ? null : Number(r.value)) },
   status: { label: 'Status', dir: 'asc', of: (r) => (r.closed ? 5 : STATUS_RANK[r.status] ?? 4) },
+  expectation: { label: 'Expectation', dir: 'asc', of: (r) => EXPECTATION_RANK[r.expectation] ?? 3 },
 };
 /** This calendar quarter and the three after it: ["2026 Q4", "2027 Q1", …]. */
 function comingQuarters(today = todayIso()) {
@@ -122,6 +131,7 @@ export default function CloseToClosing() {
             title: r.title, sub: [r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · '), tags: (r.labels || []).join(' · '),
             value: money(r.value), duration: duration(r), category: OUTCOMES[r.outcome]?.label || r.stage || '—', closeDate: closeDate(r.close_date),
             status: r.closed ? CLOSED.label : STATUS[r.status]?.label || 'Not set',
+            expectation: EXPECTATION[r.expectation]?.label || 'Not set',
             notes: shownNotes(r).map((n) => ({ body: n.body, by: noteBy(n) })),
           };
         }),
@@ -177,7 +187,7 @@ export default function CloseToClosing() {
 
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6 print:overflow-visible print:bg-white print:p-0">
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white print:overflow-visible print:rounded-none print:border-0">
-          <table className="w-full min-w-[68rem] table-fixed text-left text-sm print:min-w-0 print:text-[10px]">
+          <table className="w-full min-w-[76rem] table-fixed text-left text-sm print:min-w-0 print:text-[10px]">
             <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold tracking-wide text-slate-500 uppercase print:border-slate-400 print:text-[8px]">
               <tr>
                 <th className="w-[22%] px-4 py-2.5 print:w-[23%] print:px-1.5 print:py-1"><SortHead k="name" sort={sort} onSort={sortOn}>Opportunity</SortHead></th>
@@ -186,14 +196,15 @@ export default function CloseToClosing() {
                 <th className="w-36 px-3 py-2.5 print:w-[11%] print:px-1.5 print:py-1">Category</th>
                 <th className="w-36 px-3 py-2.5 whitespace-nowrap print:w-[10%] print:px-1.5 print:py-1"><SortHead k="close" sort={sort} onSort={sortOn}>Est. Close Date</SortHead></th>
                 <th className="w-52 px-3 py-2.5 print:w-[13%] print:px-1.5 print:py-1"><SortHead k="status" sort={sort} onSort={sortOn}>Status</SortHead></th>
+                <th className="w-32 px-3 py-2.5 print:w-[8%] print:px-1.5 print:py-1"><SortHead k="expectation" sort={sort} onSort={sortOn}>Expectation</SortHead></th>
                 <th className="px-3 py-2.5 print:px-1.5 print:py-1">Status note</th>
                 <th className="w-9 print:hidden" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 print:divide-slate-300">
-              {rows === null && <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
-              {rows?.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">Nothing is in Under Evaluation yet. Add a ticket with the search above.</td></tr>}
-              {rows?.length > 0 && !sorted.length && <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No tickets on the list match.</td></tr>}
+              {rows === null && <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
+              {rows?.length === 0 && <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">Nothing is in Under Evaluation yet. Add a ticket with the search above.</td></tr>}
+              {rows?.length > 0 && !sorted.length && <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No tickets on the list match.</td></tr>}
               {sorted.map((r) => (
                 <Row key={r.ticket_id} row={r} selected={openId === r.ticket_id} onOpen={() => setOpenId(r.ticket_id)} run={run} />
               ))}
@@ -331,6 +342,7 @@ function SortHead({ k, sort, onSort, children }) {
 function Row({ row: r, selected, onOpen, run }) {
   const status = r.closed ? CLOSED : STATUS[r.status];
   const outcome = OUTCOMES[r.outcome];
+  const expectation = EXPECTATION[r.expectation];
   const stop = (e) => e.stopPropagation();
   return (
     <tr onClick={onOpen} className={`cursor-pointer align-top transition ${selected ? 'bg-brand-50/60' : 'hover:bg-slate-50'}`}>
@@ -355,6 +367,19 @@ function Row({ row: r, selected, onOpen, run }) {
             className={`max-w-full cursor-pointer rounded-full border-0 py-1 pr-7 pl-2.5 text-xs font-semibold ring-1 print:hidden ${status?.tone || UNSET}`}>
             <option value="">Not set</option>
             {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        )}
+      </td>
+      <td className="px-3 py-3 print:px-1.5 print:py-1.5" onClick={stop}>
+        {/* As with the status: a plain pill on paper, on a closed deal, and for anyone who can't set it. */}
+        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 print:inline-block print:px-1.5 print:py-0.5 print:text-[8px] ${r.closed || !r.can_edit ? 'inline-block whitespace-nowrap' : 'hidden'} ${expectation?.tone || UNSET}`}
+          title={r.closed ? 'The deal is closed: this is what was expected' : 'Only the ticket’s owner or an admin sets the expectation'}>{expectation?.label || 'Not set'}</span>
+        {!r.closed && r.can_edit && (
+          <select aria-label={`Expectation for ${r.title}`} value={r.expectation || ''}
+            onChange={(e) => run(() => api.put(`/c2c/${r.ticket_id}`, { expectation: e.target.value || null }))}
+            className={`max-w-full cursor-pointer rounded-full border-0 py-1 pr-7 pl-2.5 text-xs font-semibold ring-1 print:hidden ${expectation?.tone || UNSET}`}>
+            <option value="">Not set</option>
+            {EXPECTATIONS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
           </select>
         )}
       </td>

@@ -17,6 +17,8 @@ const r = Router();
 
 /** The standings someone sets by hand, while the deal is open. */
 const SET_STATUSES = ['on_track', 'off_up', 'off_steady', 'off_down'];
+/** How someone expects the deal to come out, set by hand while it's open. */
+const EXPECTATIONS = ['win', 'tossup', 'loss'];
 const EVALUATION = 'Under Evaluation';
 /** The stages the import offers: a ticket in either can be brought onto the list, or left off it, from one screen. */
 const IMPORT_STAGES = ['Under Evaluation', 'Proposal'];
@@ -58,7 +60,7 @@ const pickedIds = (c) => { const ids = json.parse(c.note_ids, null); return Arra
 function list(user) {
   addEvaluating();
   const stage = reportStager();
-  const rows = db.prepare(`SELECT c.status AS c_status, c.note_id, c.note_ids, c.created_at AS added_at, t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name
+  const rows = db.prepare(`SELECT c.status AS c_status, c.expectation AS c_expectation, c.note_id, c.note_ids, c.created_at AS added_at, t.*, o.first_name AS owner_first_name, o.last_name AS owner_last_name
     FROM c2c_tickets c JOIN tickets t ON t.id = c.ticket_id LEFT JOIN users o ON o.id = t.created_by WHERE c.removed_at IS NULL AND ${LISTABLE}`).all();
   // "My tickets", as on the board: ones this person owns, directs, or has a priority card on.
   const carded = new Set(db.prepare(`SELECT DISTINCT c.ticket_id FROM priority_cards c JOIN card_assignees a ON a.card_id = c.id
@@ -85,6 +87,7 @@ function list(user) {
       term_months: term.months, term_text: term.text, labels: json.parse(t.labels, []), added_at: t.added_at,
       outcome, closed: outcome === 'paid' || outcome === 'closed',
       status: SET_STATUSES.includes(t.c_status) ? t.c_status : null,
+      expectation: EXPECTATIONS.includes(t.c_expectation) ? t.c_expectation : null,
       evaluating: t.deal_status === 'open' && stage.of(t.pipeline_id, t.pipeline_status) === EVALUATION,
       owner: t.owner_first_name ? { id: t.created_by, first_name: t.owner_first_name, last_name: t.owner_last_name } : null,
       can_edit: canEditTicket(user, t), territory_id: t.territory_id,
@@ -189,15 +192,15 @@ function setDuration(user, ticketId, text) {
 }
 
 /**
- * Body: any of status (one of the standings, or null to clear it), duration (the ticket's contract term, as text) and
- * note_ids (the notes the row shows, none for the latest). Status and duration are the ticket owner's or an admin's to set;
- * anyone picks the note.
+ * Body: any of status (one of the standings, or null to clear it), expectation (win, tossup or loss, or null to clear
+ * it), duration (the ticket's contract term, as text) and note_ids (the notes the row shows, none for the latest). Status,
+ * expectation and duration are the ticket owner's or an admin's to set; anyone picks the note.
  */
 r.put('/:ticketId', (req, res) => {
   const c = entry(req.params.ticketId);
   if (!c) return res.status(404).json({ error: 'That ticket isn’t on the list' });
   const b = req.body || {};
-  if ('status' in b || 'duration' in b) {
+  if ('status' in b || 'expectation' in b || 'duration' in b) {
     const denied = ticketEditDenied(req.user, { id: c.ticket_id, created_by: c.created_by, ticket_type: c.ticket_type });
     if (denied) return res.status(403).json({ error: denied });
   }
@@ -206,6 +209,11 @@ r.put('/:ticketId', (req, res) => {
     if (b.status != null && !SET_STATUSES.includes(b.status)) return res.status(400).json({ error: 'Unknown status' });
     if (['won', 'lost'].includes(db.prepare('SELECT deal_status FROM tickets WHERE id = ?').get(c.ticket_id)?.deal_status)) return res.status(400).json({ error: 'This deal is closed' });
     db.prepare('UPDATE c2c_tickets SET status = ? WHERE ticket_id = ?').run(b.status ?? null, c.ticket_id);
+  }
+  if ('expectation' in b) {
+    if (b.expectation != null && !EXPECTATIONS.includes(b.expectation)) return res.status(400).json({ error: 'Unknown expectation' });
+    if (['won', 'lost'].includes(db.prepare('SELECT deal_status FROM tickets WHERE id = ?').get(c.ticket_id)?.deal_status)) return res.status(400).json({ error: 'This deal is closed' });
+    db.prepare('UPDATE c2c_tickets SET expectation = ? WHERE ticket_id = ?').run(b.expectation ?? null, c.ticket_id);
   }
   if ('note_ids' in b) {
     const ok = db.prepare("SELECT id FROM ticket_comments WHERE id = ? AND ticket_id = ? AND parent_id IS NULL AND kind IN ('comment', 'note')");

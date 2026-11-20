@@ -10,12 +10,12 @@ const BRAND = [37, 59, 156];
 // Status and category colors, as on the page.
 const TONES = {
   'On-Track': [4, 120, 87], 'Off-Track Trending Up': [77, 124, 15], 'Off-Track Steady': [180, 83, 9], 'Off-Track Trending Down': [185, 28, 28],
-  Closed: [71, 85, 105], Awarded: [7, 89, 133], 'Paid (Won)': [4, 120, 87], 'Closed - Not awarded': [71, 85, 105],
+  Closed: [71, 85, 105], Win: [4, 120, 87], 'Toss-up': [180, 83, 9], Loss: [185, 28, 28], Awarded: [7, 89, 133], 'Paid (Won)': [4, 120, 87], 'Closed - Not awarded': [71, 85, 105],
 };
 
 /**
  * Build and download the PDF. `rows` are plain text, already ordered: { title, sub, tags, value, duration, category,
- * closeDate, status, notes: [{ body, by }] }. `summary` is the line under the title and `date` today's date, both as shown. `logo`
+ * closeDate, status, expectation, notes: [{ body, by }] }. `summary` is the line under the title and `date` today's date, both as shown. `logo`
  * is the Knexus wordmark as a data URL (1848 × 260), set at the top as on the reports.
  */
 export async function downloadC2cPdf({ rows, summary, date, fileName, logo }) {
@@ -38,7 +38,7 @@ export async function downloadC2cPdf({ rows, summary, date, fileName, logo }) {
   autoTable(doc, {
     startY: margin + 66,
     margin: { left: margin, right: margin, top: margin, bottom: margin + 8 },
-    head: [['Opportunity', 'Value', 'Duration', 'Category', 'Est. Close Date', 'Status', 'Status note']],
+    head: [['Opportunity', 'Value', 'Duration', 'Category', 'Est. Close Date', 'Status', 'Expectation', 'Status note']],
     body: rows.map((r) => {
       // Each status note, then who wrote it and when on a line of its own (drawn lighter).
       const notes = (r.notes || []).map((n) => {
@@ -49,7 +49,7 @@ export async function downloadC2cPdf({ rows, summary, date, fileName, logo }) {
       }).filter(Boolean);
       return [
         [plain(r.title), plain(r.sub), plain(r.tags)].filter(Boolean).join('\n'),
-        plain(r.value), plain(r.duration), plain(r.category), plain(r.closeDate), plain(r.status),
+        plain(r.value), plain(r.duration), plain(r.category), plain(r.closeDate), plain(r.status), plain(r.expectation),
         notes.length ? notes.join('\n\n') : '—',
       ];
     }),
@@ -64,18 +64,19 @@ export async function downloadC2cPdf({ rows, summary, date, fileName, logo }) {
       3: { cellWidth: 78 },
       4: { cellWidth: 66 },
       5: { cellWidth: 86, fontStyle: 'bold' },
-      6: { cellWidth: 'auto' },
+      6: { cellWidth: 58, fontStyle: 'bold' },
+      7: { cellWidth: 'auto' },
     },
     didParseCell: ({ section, column, cell }) => {
       if (section === 'head' && column.index === 1) cell.styles.halign = 'right';
       if (section !== 'body') return;
-      const tone = (column.index === 5 || column.index === 3) && TONES[cell.raw];
+      const tone = (column.index === 5 || column.index === 6 || column.index === 3) && TONES[cell.raw];
       if (tone) cell.styles.textColor = tone;
       if (column.index === 3 && tone) cell.styles.fontStyle = 'bold';
     },
     // The opportunity cell: only its first line (the name) is bold; the organization, owner and tags under it are lighter.
     willDrawCell: ({ section, column, cell, doc: d }) => {
-      if (section !== 'body' || (column.index !== 0 && column.index !== 6)) return;
+      if (section !== 'body' || (column.index !== 0 && column.index !== 7)) return;
       cell.c2cLines = cell.text;
       cell.text = [];
       d.setFontSize(8);

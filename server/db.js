@@ -1896,6 +1896,8 @@ addColumn('c2c_tickets', 'note_ids', 'TEXT');
 // belongs on the list other than by still sitting in that one, or when someone adds it again.
 addColumn('c2c_tickets', 'removed_at', 'TEXT');
 addColumn('c2c_tickets', 'removed_stage', 'TEXT');
+// How the deal is expected to come out, set by hand: win, tossup or loss (null: not set).
+addColumn('c2c_tickets', 'expectation', 'TEXT');
 addColumn('meetings', 'objectives', 'TEXT'); // what we want out of the meeting
 // ---- Staffing events (ticket_process_steps, once called milestones) and the SAC list (Solution Architect Coordination).
 // step_date is the event's due date. criticality: critical | moderate | queued | available. fields: JSON of the event's blocks
