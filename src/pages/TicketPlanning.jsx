@@ -12,6 +12,7 @@ import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, CRITICALITY, DEFAULT_CRITICALIT
 import { SaChecks, SaFiles, SaAttach, SaApprovedNote, NEEDS_ARCHITECT } from '../components/SaResponse.jsx';
 import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { MarketingDrawer } from './TicketMarketing.jsx';
+import { kitFieldLabel } from '../lib/dealFields.js';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
 
 /**
@@ -1267,7 +1268,7 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
 
   const fieldBlock = (fields) => fields.map((f) => (
     <label key={f.key} className={f.field_type === 'text' || f.field_type === 'set' ? 'sm:col-span-2' : ''}>
-      <span className="label">{f.name}</span>
+      <span className="label">{kitFieldLabel(f.name)}</span>
       <FieldInput field={f} value={pdValue(f)} onChange={(v) => setPd(f, v)} />
     </label>
   ));

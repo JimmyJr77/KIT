@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft, Megaphone, UserPlus, Flag } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft, Megaphone, UserPlus, Flag, ChevronDown } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -12,7 +12,7 @@ import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx'
 import { ReplyBox } from './CommentPanel.jsx';
 import { PlanRail, PlanDrawer, TicketAccess, ViewOnlyNote } from './TicketPlanning.jsx';
 import { canEditTicket } from '../lib/ticketAccess.js';
-import { AssignmentBar } from './TicketAssignment.jsx';
+import TicketDetailsBox from './TicketDetailsBox.jsx';
 import ProcessTimeline from '../components/ProcessTimeline.jsx';
 import { nextGate } from '../lib/process.js';
 
@@ -46,6 +46,9 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   const [mainHidden, setMainHidden] = useState(drawerOnly && !!(stepId || startStaffing)); // only the tool's pane is showing
   const [processOpen, setProcessOpen] = useState(false);
   const [processKey, setProcessKey] = useState(0);
+  const [detailsOpen, setDetailsOpen] = useState(false); // the Details box in a pipeline ticket's header
+  const [detailsEditing, setDetailsEditing] = useState(false);
+  const editDetails = () => { setDetailsOpen(true); setDetailsEditing(true); };
   const toolDirty = useRef(false);
   const setToolDirty = (v) => { toolDirty.current = v; };
   const leaveTool = () => !toolDirty.current || confirm('You have unsaved changes. Discard them?');
@@ -100,12 +103,25 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   const { user } = useAuth();
   const canEdit = canEditTicket(user, t);
   const access = { readOnly: !!t && !canEdit, ownerName: t?.owner_name ?? null };
+  const isBid = t?.ticket_type === 'bid';
   const gate = t?.ticket_type === 'bid' && t.deal_status === 'open' ? nextGate(t.report_stage || t.pipeline_status) : null;
 
   return (
     <TicketAccess.Provider value={access}>
-    <SidePanel wide onClose={close} title={t ? <TicketName ticket={t} canEdit={canEdit && t.ticket_type !== 'account'} onChanged={refresh} /> : 'Loading…'}
-      onEscape={processOpen ? () => setProcessOpen(false) : tool ? closeTool : close}
+    <SidePanel wide onClose={close} title={t ? <TicketName ticket={t} canEdit={canEdit && t.ticket_type !== 'account' && !detailsEditing} onChanged={refresh} onEdit={isBid ? editDetails : null} /> : 'Loading…'}
+      onEscape={processOpen ? () => setProcessOpen(false) : tool ? closeTool : detailsEditing ? () => setDetailsEditing(false) : close}
+      headerActions={isBid && (
+        <button type="button" className="btn-ghost p-1.5" aria-expanded={detailsOpen} title={detailsOpen ? 'Hide details' : 'Show details'} aria-label={detailsOpen ? 'Hide details' : 'Show details'}
+          onClick={() => { if (detailsOpen && detailsEditing && !confirm('Close Details without saving your changes?')) return; setDetailsEditing(false); setDetailsOpen(!detailsOpen); }}>
+          <ChevronDown size={18} className={`transition-transform ${detailsOpen ? 'rotate-180' : ''}`} />
+        </button>
+      )}
+      headerBox={isBid && detailsOpen && (
+        <>
+          <h3 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Details</h3>
+          <TicketDetailsBox ticket={t} editing={detailsEditing} canEdit={canEdit} reloadKey={data} onEdit={editDetails} onDone={() => setDetailsEditing(false)} onChanged={refresh} />
+        </>
+      )}
       mainHidden={mainHidden && !!tool} onMainHidden={setMainHidden}
       rail={t && <PlanRail ticket={t} active={tool} onSelect={pickTool} skip={t.ticket_type === 'account' ? ['strategy', 'tickets'] : []} />}
       drawerWide={tool === 'process'}
@@ -120,6 +136,10 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
           {t.deal_status === 'won' && <span className="flex items-center gap-1 rounded bg-emerald-100 px-1.5 font-semibold text-emerald-800" title={t.won_at ? `Won ${stamp(t.won_at)}` : 'Won'}><Trophy size={11} /> Won</span>}
           {t.deal_status === 'lost' && <span className="flex items-center gap-1 rounded bg-red-100 px-1.5 font-semibold text-red-800" title={t.lost_at ? `Lost ${stamp(t.lost_at)}` : 'Lost'}><XCircle size={11} /> Lost</span>}
           {t.value != null && <span className="rounded bg-emerald-50 px-1.5 text-emerald-700">{usd(t.value).replace('.00', '')}</span>}
+          {isBid && t.deal_status === 'open' && !t.projected_win_date && !t.win_date_undetermined && (
+            canEdit ? <button type="button" onClick={editDetails} className="rounded bg-amber-50 px-1.5 text-amber-800 ring-1 ring-amber-200 hover:bg-amber-100" title="Set the projected win date in Details">No win date</button>
+              : <span className="rounded bg-amber-50 px-1.5 text-amber-800 ring-1 ring-amber-200">No win date</span>
+          )}
           {t.event_id && (
             <Link to={`/events?open=${t.event_id}`} className="flex items-center gap-1 rounded bg-sky-50 px-1.5 text-sky-800 hover:underline" title="The event this ticket supports">
               <CalendarDays size={11} /> {t.event_name}
@@ -167,10 +187,9 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
             </div>
           )}
           <ViewOnlyNote />
-          {/* Archiving, the BD director and territory, and won or lost are the owner's; others see them, disabled. */}
+          {/* Archiving and won or lost are the owner's; others see them, disabled. The BD director, territory and win date are in the header's Details box. */}
           <fieldset disabled={!canEdit} className="min-w-0 space-y-5">
             {t.ticket_type !== 'account' && <ArchiveBar ticket={t} onChanged={refresh} />}
-            {t.ticket_type === 'bid' && <AssignmentBar ticket={t} onChanged={refresh} />}
             {t.ticket_type === 'bid' && (canEdit || t.deal_status !== 'open') && <OutcomeBar ticket={t} onChanged={refresh} />}
           </fieldset>
           <Composer ticketId={t.id} onPosted={refresh} canUpload={canEdit} />
@@ -650,8 +669,11 @@ function OutcomeBar({ ticket: t, onChanged }) {
   );
 }
 
-/** The ticket's name at the top of its pane. Its owner or an admin renames it in place: Enter saves, Escape leaves it. */
-function TicketName({ ticket, canEdit, onChanged }) {
+/**
+ * The ticket's name at the top of its pane. Its owner or an admin renames it in place: Enter saves, Escape leaves it. On a
+ * pipeline ticket the pencil is `onEdit` instead: it opens the Details box with every field, the name among them, editable.
+ */
+function TicketName({ ticket, canEdit, onChanged, onEdit = null }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(ticket.opportunity_title);
   const [busy, setBusy] = useState(false);
@@ -669,7 +691,7 @@ function TicketName({ ticket, canEdit, onChanged }) {
       <span className="group inline-flex max-w-full items-start gap-1.5">
         <span className="min-w-0 break-words">{ticket.opportunity_title}</span>
         {canEdit && (
-          <button type="button" onClick={start} title="Rename this ticket" aria-label="Rename this ticket"
+          <button type="button" onClick={onEdit || start} title={onEdit ? 'Edit this ticket’s details' : 'Rename this ticket'} aria-label={onEdit ? 'Edit this ticket’s details' : 'Rename this ticket'}
             className="mt-0.5 shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-brand-700"><Pencil size={13} /></button>
         )}
       </span>

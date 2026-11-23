@@ -98,9 +98,10 @@ export function usePanelResize() {
  * pane) or the main one. A tucked pane keeps what's typed in it, and one of the two always shows. Picking something in the
  * menu bar brings the drawer back. `mainHidden` with `onMainHidden` lets the caller hold the main pane's state (a pane
  * that opens with only its drawer showing); otherwise the panel keeps it.
- * Escape calls `onEscape` (default: onClose).
+ * Escape calls `onEscape` (default: onClose). `headerActions` are buttons to the left of the close button; `headerBox` is
+ * more of the header, opened under the title (it scrolls on its own when it's taller than the screen allows).
  */
-export default function SidePanel({ title, subtitle, onClose, onEscape, children, footer, wide, rail, drawer, drawerWide = false, mainHidden: mainHiddenProp, onMainHidden }) {
+export default function SidePanel({ title, subtitle, onClose, onEscape, children, footer, wide, rail, drawer, drawerWide = false, mainHidden: mainHiddenProp, onMainHidden, headerActions, headerBox }) {
   const escape = onEscape || onClose;
   const [mainHiddenOwn, setMainHiddenOwn] = useState(false);
   const controlled = !!onMainHidden;
@@ -157,12 +158,18 @@ export default function SidePanel({ title, subtitle, onClose, onEscape, children
         )}
         <div ref={resize.ref} style={resize.style} className={`relative h-full ${wide ? PANEL_WIDTH_WIDE : PANEL_WIDTH} min-w-0 flex-col ${mainHidden ? 'hidden' : 'flex'}`}>
           {resize.handle}
-          <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
-            <div className="min-w-0">
-              <h2 className="font-semibold">{title}</h2>
-              {subtitle && <div className="text-xs text-slate-500">{subtitle}</div>}
+          <header className="border-b border-slate-200 px-5 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="font-semibold">{title}</h2>
+                {subtitle && <div className="text-xs text-slate-500">{subtitle}</div>}
+              </div>
+              <div className="flex shrink-0 items-center gap-0.5">
+                {headerActions}
+                <button className="btn-ghost p-1.5" onClick={onClose} aria-label="Close"><X size={18} /></button>
+              </div>
             </div>
-            <button className="btn-ghost p-1.5" onClick={onClose}><X size={18} /></button>
+            {headerBox && <div className="mt-3 max-h-[60vh] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">{headerBox}</div>}
           </header>
           <div className="flex-1 overflow-y-auto px-5 py-5">{children}</div>
           {footer && <footer className="border-t border-slate-200 px-5 py-4">{footer}</footer>}

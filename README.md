@@ -52,6 +52,9 @@ Integration secrets (`GEMINI_API_KEY`, `GSA_API_KEY`, and any MCP authentication
 | Title, value, stage, owner, expected close date, probability, lost reason | The ticket (top of the ticket, and Deal details) |
 | Won / lost | The ticket's Won and Lost buttons. Only a **won** deal is a contract in Delivery; a deal sitting in an "Awarded" stage is still open until it's won. |
 | Account | Territory |
+| Capability Area, Opportunity Type, Google Deal?, Google FSR, Knexus IP Utilization? | Asked for on a new pipeline ticket, and in the **Details** box at the top of the ticket (the arrow beside the close button; the pencil makes it editable). KIT calls Google Deal? **Google Solution**. |
+| Contact person | **Gov/Client Lead**, in the Details box and on a new pipeline ticket. A new name is added to the CRM. |
+| Linked project | **Linked Delivery** in the Details box: the won contract in Delivery |
 | Every custom deal field (Capability Area, Opportunity Type, Google Deal, Google FSR, Knexus IP Utilization, RFP release date, Proposal Due Date, Prime or Sub, Prime Contractor, Expected Contract Term, NAICS, GovWin Link, …) | Deal details › Summary and Details, laid out as in Pipedrive, with Pipedrive's options. A field or option added in Pipedrive shows up in KIT on its own. |
 | Source origin, channel, channel ID | Deal details › Source |
 | Contact person and participants (first name, last name, title, labels, work phone and email) | People, and Deal details › Person |

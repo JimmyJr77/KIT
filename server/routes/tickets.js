@@ -16,7 +16,7 @@ import { ticketFields } from './priorities.js';
 import { statusesFor, listPipelines, defaultPipeline, pipelineForNew, kitPipelineAllowed, KIT_PIPELINE_CLOSED, reportStager } from '../pipelines.js';
 import '../sample/registry.js'; // sample_rows, so sample tickets aren't moved off KIT's own pipeline
 import { queueDelete } from '../services/pipedrive.js';
-import { fieldsOf, customDealFields } from '../services/pipedriveFields.js';
+import { fieldsOf, customDealFields, fieldValue } from '../services/pipedriveFields.js';
 import { PROCESS_TYPES, DECISIONS, SA_RESPONSES, SHARED_FIELDS, cleanReviews, cleanFields, cleanQualification, GATE_OVERRIDES, gateDecision, gateRuleText, QUALIFICATION, milestoneOf } from '../../src/lib/process.js';
 import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTags, gateFlagger, gateOut, mayOverrideGate, ensureGateDraft, gateRule, saveGateRule, mayEditGateRule } from '../staffing.js';
 import { NEXT_STEP_SQL } from '../activities.js';
@@ -274,17 +274,72 @@ r.post('/', (req, res) => {
   const assign = type === 'bid' ? bidAssignment(req.body, req.user.id, fields.account_type) : NO_ASSIGNMENT;
   // A pipeline ticket can start on any pipeline that takes tickets (the default when none is chosen), in one of its stages.
   const pipeline = type === 'bid' ? pipelineForNew(req.body?.pipeline_id) : null;
+  // Pipedrive's deal fields filled in on the form ({ fields: { <field key>: text } }), kept as the deal's custom fields.
+  const dealFields = type === 'bid' ? mergeDealFields([], req.body?.fields) : { list: [] };
+  if (dealFields.error) return res.status(400).json({ error: dealFields.error });
   if (pipeline && fields.pipeline_status && !pipeline.statuses.includes(fields.pipeline_status)) fields.pipeline_status = null;
   const id = db.prepare(`INSERT INTO tickets (opportunity_title, organization, pipeline_status, account_type, work_team_id, value, ticket_type, created_by,
       bd_director_id, territory_id, projected_win_date, win_date_undetermined, pipeline_id)
     VALUES (@opportunity_title, @organization, @pipeline_status, @account_type, @work_team_id, @value, @ticket_type, @created_by,
       @bd_director_id, @territory_id, @projected_win_date, @win_date_undetermined, @pipeline_id)`)
     .run({ ...fields, ...assign, ticket_type: type, created_by: req.user.id, pipeline_id: pipeline?.id ?? null }).lastInsertRowid;
+  if (type === 'bid') {
+    if (dealFields.list.length) db.prepare('UPDATE tickets SET custom_fields = ? WHERE id = ?').run(json.str(dealFields.list), id);
+    if (String(req.body?.gov_lead ?? '').trim()) setGovLead(ticketRow(id), req.body.gov_lead, req.user.id);
+  }
   recordWork(req.user, { kind: 'ticket', ticket_id: id, summary: fields.opportunity_title });
   const eventId = type === 'bid' && Number(req.body?.source_event_id);
   if (eventId && db.prepare('SELECT 1 FROM events WHERE id = ?').get(eventId)) sourceFromEvent(id, eventId, req.user.id);
   res.json({ ticket: ticketRow(id) });
 });
+
+/**
+ * A ticket's custom_fields list with Pipedrive deal fields set from a { <field key>: text } map: a blank value takes the
+ * field off, keys Pipedrive doesn't have are ignored, and a choice Pipedrive doesn't offer gives { error }.
+ */
+function mergeDealFields(existing, values) {
+  const list = Array.isArray(existing) ? [...existing] : [];
+  if (!values || typeof values !== 'object') return { list };
+  const defs = new Map(customDealFields().map((f) => [f.key, f]));
+  for (const [key, raw] of Object.entries(values)) {
+    const field = defs.get(key);
+    if (!field) continue;
+    const value = String(raw ?? '').trim();
+    const checked = value ? fieldValue(field, value) : null;
+    if (checked?.error) return { error: checked.error };
+    const at = list.findIndex((f) => f.key === key);
+    if (!value) { if (at >= 0) list.splice(at, 1); } else if (at >= 0) list[at] = { key, name: field.name, value };
+    else list.push({ key, name: field.name, value });
+  }
+  return { list };
+}
+
+/**
+ * The Gov/Client Lead: the ticket's primary contact (Pipedrive's contact person on the deal), by name. Someone already in
+ * the CRM under that name is used (on this ticket first, then at its organization); anyone else is added to the CRM at
+ * the ticket's organization. A blank name leaves the ticket without a lead; the person stays on it and in the CRM.
+ */
+function setGovLead(t, name, userId) {
+  const n = String(name ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+  const FULL = "lower(trim(c.first_name || ' ' || COALESCE(c.last_name, '')))";
+  const current = db.prepare(`SELECT ${FULL} AS name FROM ticket_contacts tc JOIN contacts c ON c.id = tc.contact_id WHERE tc.ticket_id = ? AND tc.is_primary = 1`).get(t.id);
+  if ((current?.name || '') === n.toLowerCase()) return;
+  db.prepare('UPDATE ticket_contacts SET is_primary = 0 WHERE ticket_id = ?').run(t.id);
+  if (!n) return;
+  const named = db.prepare(`SELECT c.id, c.organization, (SELECT 1 FROM ticket_contacts x WHERE x.ticket_id = @t AND x.contact_id = c.id) AS linked
+    FROM contacts c WHERE ${FULL} = lower(@n) ORDER BY c.id`).all({ t: t.id, n });
+  const org = String(t.organization || '').toLowerCase();
+  let id = (named.find((c) => c.linked) || named.find((c) => org && String(c.organization || '').toLowerCase() === org) || named[0])?.id;
+  if (!id) {
+    const [first, ...rest] = n.split(' ');
+    const orgId = t.organization_id ?? (t.organization ? db.prepare('SELECT id FROM organizations WHERE name = ? COLLATE NOCASE LIMIT 1').get(t.organization)?.id
+      ?? db.prepare('INSERT INTO organizations (name) VALUES (?)').run(t.organization).lastInsertRowid : null);
+    id = db.prepare(`INSERT INTO contacts (first_name, last_name, organization, organization_id, labels, created_by) VALUES (?, ?, ?, ?, '[]', ?)`)
+      .run(first, rest.join(' ') || null, t.organization || null, orgId, userId).lastInsertRowid;
+  }
+  db.prepare('INSERT OR IGNORE INTO ticket_contacts (ticket_id, contact_id, added_by) VALUES (?, ?, ?)').run(t.id, id, userId);
+  db.prepare('UPDATE ticket_contacts SET is_primary = 1 WHERE ticket_id = ? AND contact_id = ?').run(t.id, id);
+}
 
 /** What a work ticket (which has no director, territory or win date) is created with. */
 export const NO_ASSIGNMENT = { bd_director_id: null, territory_id: null, projected_win_date: null, win_date_undetermined: 0 };
@@ -1040,6 +1095,16 @@ const detailsOf = (t) => ({
   source_origin: t.source_origin ?? null, source_origin_id: t.source_origin_id ?? null, source_channel_id: t.source_channel_id ?? null,
   deal_status: t.deal_status || 'open', won_at: t.won_at ?? null, lost_at: t.lost_at ?? null, value: t.value ?? null, projected_win_date: t.projected_win_date ?? null,
   labels: json.parse(t.labels, []), custom_fields: json.parse(t.custom_fields, []), pipedrive_id: t.pipedrive_id ?? null,
+  // For the Details box at the top of the ticket: the deal at a glance, its dates, and the contract it became.
+  opportunity_title: t.opportunity_title, organization_name: t.organization ?? null, pipeline_status: t.pipeline_status ?? null,
+  statuses: t.ticket_type === 'bid' ? statusesFor(t.pipeline_id) : [],
+  bd_director_id: t.bd_director_id ?? null, bd_director_name: nameOf(t.bd_director_id), territory_id: t.territory_id ?? null,
+  territory_name: t.territory_id ? db.prepare('SELECT name FROM territories WHERE id = ?').get(t.territory_id)?.name ?? null : null,
+  win_date_undetermined: !!t.win_date_undetermined, created_at: t.created_at,
+  last_activity_at: db.prepare(`SELECT MAX(COALESCE(t.updated_at, t.created_at), t.created_at,
+      COALESCE((SELECT MAX(MAX(m.created_at, COALESCE(m.updated_at, ''))) FROM ticket_comments m WHERE m.ticket_id = t.id), ''),
+      COALESCE((SELECT MAX(f.created_at) FROM ticket_files f WHERE f.ticket_id = t.id), '')) AS at FROM tickets t WHERE t.id = ?`).get(t.id)?.at ?? t.created_at,
+  delivery: db.prepare('SELECT id, name FROM delivery_programs WHERE ticket_id = ?').get(t.id) || null,
   pipeline_id: t.pipeline_id ?? null, pipelines: listPipelines().filter((p) => !p.closed || p.id === (t.pipeline_id ?? null)).map(({ id, name }) => ({ id, name })),
   // Pipedrive's field definitions, so the form shows every custom deal field with its options, and people's and organizations' labels.
   fields: { deal: customDealFields(), person: fieldsOf('person'), organization: fieldsOf('organization') },
@@ -1099,6 +1164,41 @@ r.put('/:id/details', ownerOnly(), (req, res) => {
       const add = db.prepare('INSERT OR IGNORE INTO ticket_followers (ticket_id, user_id) SELECT ?, id FROM users WHERE id = ?');
       b.followers.forEach((u) => add.run(t.id, Number(u)));
     }
+  })();
+  touch(t.id);
+  recordTicketUpdate(req.user, t, 'Details');
+  res.json(detailsOf(ticketRow(t.id)));
+});
+
+/**
+ * The Details box at the top of a pipeline ticket. Body: any of organization (a name), value, gov_lead (a name; blank for
+ * none) and fields ({ <Pipedrive field key>: text }; blank clears). These are the deal's own fields, so on a Pipedrive
+ * deal each change goes with the next send; the lead is the deal's contact person, and joins the CRM.
+ */
+r.put('/:id/summary', ownerOnly(), (req, res) => {
+  const t = ticketRow(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket not found' });
+  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets have deal details' });
+  const b = req.body || {};
+  const set = {};
+  if ('organization' in b) {
+    set.organization = String(b.organization ?? '').trim() || null;
+    set.organization_id = set.organization ? db.prepare('SELECT id FROM organizations WHERE name = ? COLLATE NOCASE LIMIT 1').get(set.organization)?.id ?? null : null;
+  }
+  if ('value' in b) {
+    const v = b.value === '' || b.value == null ? null : Number(String(b.value).replace(/[$,\s]/g, ''));
+    if (v != null && !(Number.isFinite(v) && v >= 0)) return res.status(400).json({ error: 'Value is a dollar amount, 0 or more' });
+    set.value = v;
+  }
+  if (b.fields) {
+    const merged = mergeDealFields(json.parse(t.custom_fields, []), b.fields);
+    if (merged.error) return res.status(400).json({ error: merged.error });
+    set.custom_fields = json.str(merged.list);
+  }
+  db.transaction(() => {
+    if (set.organization && !set.organization_id) set.organization_id = db.prepare('INSERT INTO organizations (name) VALUES (?)').run(set.organization).lastInsertRowid;
+    Object.entries(set).forEach(([k, v]) => db.prepare(`UPDATE tickets SET ${k} = ? WHERE id = ?`).run(v, t.id));
+    if ('gov_lead' in b) setGovLead(ticketRow(t.id), b.gov_lead, req.user.id);
   })();
   touch(t.id);
   recordTicketUpdate(req.user, t, 'Details');

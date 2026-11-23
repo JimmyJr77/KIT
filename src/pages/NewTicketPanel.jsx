@@ -4,6 +4,8 @@ import { useApi } from '../lib/data.js';
 import SidePanel from '../components/SidePanel.jsx';
 import { useAuth } from '../lib/auth.jsx';
 import { AssignmentFields } from './TicketAssignment.jsx';
+import { DealFieldInput, GovLeadInput } from './TicketDetailsBox.jsx';
+import { boxFields, kitFieldLabel } from '../lib/dealFields.js';
 
 const TYPES = [
   ['bid', 'Pipeline Ticket', 'To win a contract. Has a value and pipeline status.'],
@@ -63,6 +65,10 @@ export default function NewTicketPanel({ bidOnly, stage = '', pipeline: asked = 
     bd_director_id: user.teams?.some((t) => t.name === 'BD') ? user.id : '',
     territory_id: user.territories?.length === 1 ? user.territories[0].id : '',
   });
+  // Pipedrive's deal fields asked for up front (Capability Area, Opportunity Type, Google Solution, Google FSR, Knexus IP Utilization), by field key.
+  const dealFields = boxFields(useApi('/pipedrive/fields/deal').data?.fields);
+  const [fields, setFields] = useState({});
+  const [govLead, setGovLead] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -79,7 +85,7 @@ export default function NewTicketPanel({ bidOnly, stage = '', pipeline: asked = 
     setError('');
     try {
       const { ticket } = await api.post('/tickets', isWork ? form
-        : { ...form, ...assign, bd_director_id: assign.bd_director_id || null, territory_id: assign.territory_id || null, ...(pipeline ? { pipeline_id: pipeline.id } : {}) });
+        : { ...form, ...assign, bd_director_id: assign.bd_director_id || null, territory_id: assign.territory_id || null, ...(pipeline ? { pipeline_id: pipeline.id } : {}), fields, gov_lead: govLead });
       onCreated(ticket);
     } catch (e) {
       setError(e.message);
@@ -124,7 +130,26 @@ export default function NewTicketPanel({ bidOnly, stage = '', pipeline: asked = 
             </div>
           </div>
         )}
+        {!isWork && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Gov/Client Lead</label>
+              <GovLeadInput value={govLead} onChange={setGovLead} />
+            </div>
+            <p className="self-end pb-2 text-[11px] leading-snug text-slate-500">The deal’s contact person. Someone new is added to the CRM.</p>
+          </div>
+        )}
         {!isWork && <div className="grid grid-cols-2 gap-3"><AssignmentFields value={assign} onChange={setAssign} /></div>}
+        {!isWork && dealFields.length > 0 && (
+          <div className="grid grid-cols-2 gap-3">
+            {dealFields.map((f) => (
+              <div key={f.key}>
+                <label className="label" htmlFor={`new-${f.key}`}>{kitFieldLabel(f.name)}</label>
+                <DealFieldInput id={`new-${f.key}`} field={f} value={fields[f.key]} onChange={(v) => setFields((x) => ({ ...x, [f.key]: v }))} />
+              </div>
+            ))}
+          </div>
+        )}
         <button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />
       </form>
     </SidePanel>
