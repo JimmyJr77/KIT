@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { X, ChevronsLeft, ChevronsRight, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 /**
  * Panel widths grow with the screen instead of stopping at a fixed size, so the editor is
@@ -81,6 +81,8 @@ export function usePanelResize() {
       className="group absolute inset-y-0 -left-1.5 z-10 hidden w-3 cursor-col-resize touch-none outline-none sm:block"
     >
       <div className="mx-auto h-full w-0.5 bg-transparent transition-colors group-hover:bg-brand-500/60 group-focus-visible:bg-brand-500 group-active:bg-brand-500" />
+      {/* A grip that always shows, so it's plain the edge can be dragged. */}
+      <div className="pointer-events-none absolute top-1/2 left-1/2 h-10 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-300 transition-colors group-hover:bg-brand-500 group-active:bg-brand-500" />
     </div>
   );
 
@@ -91,12 +93,27 @@ export function usePanelResize() {
  * Right-hand slide-out pane, matching the priority editor.
  * `rail` adds a thin menu bar along its left edge, and `drawer` opens an extra pane to the left of that;
  * both add to the width rather than taking from the main pane; `drawerWide` gives the drawer room for long writing.
- * `mainHidden` tucks the main pane away (it keeps what's typed in it), leaving the drawer and rail.
+ * Each pane is made wider or narrower by dragging its own left edge (the grip halfway down it).
+ * While a drawer is open, two buttons under the menu bar tuck either pane away and bring it back: the drawer (the second
+ * pane) or the main one. A tucked pane keeps what's typed in it, and one of the two always shows. Picking something in the
+ * menu bar brings the drawer back. `mainHidden` with `onMainHidden` lets the caller hold the main pane's state (a pane
+ * that opens with only its drawer showing); otherwise the panel keeps it.
  * Escape calls `onEscape` (default: onClose).
  */
-export default function SidePanel({ title, subtitle, onClose, onEscape, children, footer, wide, rail, drawer, drawerWide = false, mainHidden = false }) {
+export default function SidePanel({ title, subtitle, onClose, onEscape, children, footer, wide, rail, drawer, drawerWide = false, mainHidden: mainHiddenProp, onMainHidden }) {
   const escape = onEscape || onClose;
+  const [mainHiddenOwn, setMainHiddenOwn] = useState(false);
+  const controlled = !!onMainHidden;
+  const setMainHidden = controlled ? onMainHidden : setMainHiddenOwn;
+  const [drawerHiddenOwn, setDrawerHidden] = useState(false);
+  // With no drawer there's nothing to tuck the main pane behind, and nothing to hide.
+  const mainHidden = !!drawer && !!(controlled ? mainHiddenProp : mainHiddenOwn);
+  const drawerHidden = !!drawer && drawerHiddenOwn && !mainHidden;
+  const toggleMain = () => { if (!mainHidden) setDrawerHidden(false); setMainHidden(!mainHidden); };
+  const toggleDrawer = () => { if (!drawerHidden) setMainHidden(false); setDrawerHidden(!drawerHidden); };
+  const toggle = 'grid h-9 w-9 place-items-center rounded-md text-slate-500 transition hover:bg-white hover:text-brand-700 hover:shadow-sm';
   const resize = usePanelResize();
+  const drawerResize = usePanelResize(); // the drawer is widened and narrowed the same way, by its own left edge
   // Panels can open over one another (a form from a ticket, a scheduler from that form): Escape closes only the top one.
   const token = useRef(null);
   useEffect(() => {
@@ -114,8 +131,30 @@ export default function SidePanel({ title, subtitle, onClose, onEscape, children
       <div className="fixed inset-0 z-40 bg-slate-900/20" onClick={onClose} />
       <aside className="fixed top-0 right-0 z-50 flex h-full max-w-full bg-white shadow-2xl animate-[slidein_.2s_ease-out]">
         <style>{'@keyframes slidein{from{transform:translateX(100%)}to{transform:none}}'}</style>
-        {drawer && <section className={`flex h-full ${drawerWide ? 'w-[40rem]' : 'w-[28rem]'} max-w-[90vw] shrink-0 flex-col border-r border-slate-200 bg-slate-50`}>{drawer}</section>}
-        {rail && <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-slate-200 bg-slate-50 py-3">{rail}</nav>}
+        {drawer && (
+          <section ref={drawerResize.ref} style={drawerResize.style}
+            className={`relative h-full ${drawerWide ? 'w-[40rem]' : 'w-[28rem]'} max-w-[90vw] shrink-0 flex-col border-r border-slate-200 bg-slate-50 ${drawerHidden ? 'hidden' : 'flex'}`}>
+            {drawerResize.handle}
+            {drawer}
+          </section>
+        )}
+        {(rail || drawer) && (
+          <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-slate-200 bg-slate-50 py-3" onClick={() => setDrawerHidden(false)}>
+            {rail}
+            {drawer && (
+              <div className={`flex flex-col items-center gap-1 ${rail ? 'mt-1 border-t border-slate-200 pt-1' : ''}`} onClick={(e) => e.stopPropagation()}>
+                <button type="button" onClick={toggleDrawer} aria-pressed={!drawerHidden} className={toggle}
+                  title={drawerHidden ? 'Show the second pane' : 'Hide the second pane'} aria-label={drawerHidden ? 'Show the second pane' : 'Hide the second pane'}>
+                  {drawerHidden ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+                </button>
+                <button type="button" onClick={toggleMain} aria-pressed={!mainHidden} className={toggle}
+                  title={mainHidden ? 'Show the main pane' : 'Hide the main pane'} aria-label={mainHidden ? 'Show the main pane' : 'Hide the main pane'}>
+                  {mainHidden ? <ChevronsLeft size={18} /> : <ChevronsRight size={18} />}
+                </button>
+              </div>
+            )}
+          </nav>
+        )}
         <div ref={resize.ref} style={resize.style} className={`relative h-full ${wide ? PANEL_WIDTH_WIDE : PANEL_WIDTH} min-w-0 flex-col ${mainHidden ? 'hidden' : 'flex'}`}>
           {resize.handle}
           <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">

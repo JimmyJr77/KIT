@@ -413,11 +413,16 @@ export function SubtaskList({ activity, ticketId, onChanged, compact }) {
               <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600" checked={s.done} disabled={busy}
                 onChange={() => run(api.put(`/activities/subtasks/${s.id}`, { done: !s.done }))} aria-label={`Mark “${s.text}” ${s.done ? 'not done' : 'done'}`} />
               <span className={`min-w-0 flex-1 text-sm ${s.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{s.text}</span>
+              {s.cards?.length > 0 && (
+                <span className="mt-0.5 flex shrink-0 items-center gap-0.5 text-[11px] text-slate-400" title={`A weekly priority on its own: ${s.cards.map((c) => `${c.team_name}, week of ${shortDate(c.week_start)}`).join('; ')}`}>
+                  <CalendarRange size={11} /> Priority
+                </span>
+              )}
               <button type="button" onClick={() => setCommenting(commenting === s.id ? null : s.id)} title="Comment on this subtask" aria-label={`Comment on “${s.text}”`}
                 className={`flex items-center gap-0.5 text-[11px] ${s.comment_count ? 'text-violet-600' : 'text-slate-300 opacity-0 group-hover:opacity-100'} hover:text-violet-700`}>
                 <MessageSquare size={13} />{s.comment_count > 0 && s.comment_count}
               </button>
-              <button type="button" onClick={() => confirm(`Delete the subtask “${s.text}”?`) && run(api.del(`/activities/subtasks/${s.id}`))} aria-label={`Delete “${s.text}”`}
+              <button type="button" onClick={() => confirm(`Delete the subtask “${s.text}”?${s.cards?.length ? ' It comes off the weekly priorities too.' : ''}`) && run(api.del(`/activities/subtasks/${s.id}`))} aria-label={`Delete “${s.text}”`}
                 className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600"><Trash2 size={13} /></button>
             </div>
             {commenting === s.id && (

@@ -1,4 +1,4 @@
-import { CheckSquare, ArrowUp, ArrowDown, Hourglass, Redo2, Handshake } from 'lucide-react';
+import { CheckSquare, ArrowUp, ArrowDown, Hourglass, Redo2, Handshake, ListTree } from 'lucide-react';
 import { fullName, initials, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 
@@ -51,6 +51,11 @@ export default function PriorityCard({ card, rank, usersById, overlay }) {
         {!!card.waiting_client && !card.completed && (
           <span className={`${chip} flex items-center gap-1 bg-sky-100 font-medium text-sky-800`} title="Waiting on client: not counted against completion">
             <Hourglass size={11} strokeWidth={2.5} /> Waiting on client
+          </span>
+        )}
+        {card.subtask_id && (
+          <span className={`${chip} flex items-center gap-1 bg-brand-50 font-medium text-brand-700`} title={card.step_title ? `A subtask of “${card.step_title}”` : 'A subtask of a next step'}>
+            <ListTree size={11} strokeWidth={2.5} /> Subtask
           </span>
         )}
         {card.pipeline_status && <span className={`${chip} bg-slate-100 text-slate-600`}>{card.pipeline_status}</span>}

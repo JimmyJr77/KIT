@@ -38,16 +38,18 @@ function withDetails(rows) {
       OR (target_type = 'subtask' AND target_id IN (SELECT id FROM activity_subtasks WHERE task_id IN (SELECT value FROM json_each(@ids)))))
     GROUP BY target_type, target_id`).all({ ids });
   const count = (type, id) => comments.find((c) => c.target_type === type && c.target_id === id)?.n || 0;
-  const cards = db.prepare(`SELECT c.id, c.activity_id, c.week_start, c.team_id, tm.name AS team_name FROM priority_cards c
+  const cards = db.prepare(`SELECT c.id, c.activity_id, c.subtask_id, c.week_start, c.team_id, tm.name AS team_name FROM priority_cards c
     JOIN teams tm ON tm.id = c.team_id WHERE c.archived_at IS NULL AND c.activity_id IN (SELECT value FROM json_each(?)) ORDER BY c.week_start DESC`).all(ids);
   const ranks = new Map();
   [...new Set(rows.map((a) => a.ticket_id))].forEach((t) => openOrder(t).forEach((id, i) => ranks.set(id, i + 1)));
   return rows.map(({ text, ...a }) => ({
     ...a, subject: text, activity_type: a.activity_type || 'Task', done: !!a.done, flagged: !!a.flagged, waiting_client: !!a.waiting_client, rank: ranks.get(a.id) ?? null,
     participants: people.filter((p) => p.task_id === a.id).map(({ task_id, ...c }) => c),
-    subtasks: subs.filter((s) => s.task_id === a.id).map((s) => ({ ...s, comment_count: count('subtask', s.id) })),
+    // A weekly priority is the whole activity, or one of its subtasks: each lists its own cards.
+    subtasks: subs.filter((s) => s.task_id === a.id).map((s) => ({ ...s, comment_count: count('subtask', s.id),
+      cards: cards.filter((c) => c.subtask_id === s.id).map(({ activity_id, subtask_id, ...c }) => c) })),
     comment_count: count('activity', a.id),
-    cards: cards.filter((c) => c.activity_id === a.id).map(({ activity_id, ...c }) => c),
+    cards: cards.filter((c) => c.activity_id === a.id && !c.subtask_id).map(({ activity_id, subtask_id, ...c }) => c),
   }));
 }
 const one = (id) => withDetails(db.prepare(`${SELECT} WHERE k.id = ?`).all(id))[0];

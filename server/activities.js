@@ -58,19 +58,31 @@ export const subtasksOf = (activityIds) => (activityIds.length
 export function mirrorCards(activityId) {
   const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(activityId);
   if (!k) return;
-  const checklist = subtasksOf([k.id]).map((s) => ({ text: s.text, done: s.done }));
-  db.prepare("UPDATE priority_cards SET title = ?, due_date = ?, completed = ?, checklist = ?, updated_at = datetime('now') WHERE activity_id = ? AND rolled_at IS NULL")
+  const subs = subtasksOf([k.id]);
+  const checklist = subs.map((s) => ({ text: s.text, done: s.done }));
+  db.prepare("UPDATE priority_cards SET title = ?, due_date = ?, completed = ?, checklist = ?, updated_at = datetime('now') WHERE activity_id = ? AND subtask_id IS NULL AND rolled_at IS NULL")
     .run(k.text, k.due_date, k.done ? 1 : 0, json.str(checklist), k.id);
+  // A card for one subtask takes that subtask's text and done state (done too once the whole step is); the due date is the step's.
+  const one = db.prepare("UPDATE priority_cards SET title = ?, due_date = ?, completed = ?, checklist = '[]', updated_at = datetime('now') WHERE subtask_id = ? AND rolled_at IS NULL");
+  subs.forEach((s) => one.run(s.text, k.due_date, s.done || k.done ? 1 : 0, s.id));
 }
 
-/** Replace an activity's subtasks with a card checklist, matching items by position so their comments stay put. */
+/**
+ * Replace an activity's subtasks with a card checklist. An item keeps the subtask with the same text, so its comments and
+ * any priority card made for it stay with it; the rest pair up in order. Subtasks left over are deleted.
+ */
 export function setSubtasksFromChecklist(activityId, list, userId) {
-  const subs = subtasksOf([activityId]);
+  const left = subtasksOf([activityId]);
   const items = (Array.isArray(list) ? list : []).map((i) => ({ text: String(i.text || '').trim(), done: !!i.done })).filter((i) => i.text);
+  const kept = items.map((i) => { const n = left.findIndex((s) => s.text === i.text); return n < 0 ? null : left.splice(n, 1)[0]; });
   const update = db.prepare("UPDATE activity_subtasks SET text = ?, done = ?, done_at = CASE WHEN ? THEN COALESCE(done_at, datetime('now')) END, position = ? WHERE id = ?");
   const add = db.prepare('INSERT INTO activity_subtasks (task_id, text, done, done_at, position, created_by) VALUES (?, ?, ?, CASE WHEN ? THEN datetime(\'now\') END, ?, ?)');
-  items.forEach((i, n) => (subs[n] ? update.run(i.text, i.done ? 1 : 0, i.done ? 1 : 0, n, subs[n].id) : add.run(activityId, i.text, i.done ? 1 : 0, i.done ? 1 : 0, n, userId)));
-  subs.slice(items.length).forEach((s) => db.prepare('DELETE FROM activity_subtasks WHERE id = ?').run(s.id));
+  items.forEach((i, n) => {
+    const sub = kept[n] || left.shift();
+    if (sub) update.run(i.text, i.done ? 1 : 0, i.done ? 1 : 0, n, sub.id);
+    else add.run(activityId, i.text, i.done ? 1 : 0, i.done ? 1 : 0, n, userId);
+  });
+  left.forEach((s) => db.prepare('DELETE FROM activity_subtasks WHERE id = ?').run(s.id));
 }
 
 /** The win assessment's "Next milestone" follows the ticket's next step. */

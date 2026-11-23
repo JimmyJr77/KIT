@@ -32,6 +32,8 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   // On an existing ticket, the priority can be one of its open next steps (activities) instead of a new one.
   const [openSteps, setOpenSteps] = useState([]);
   const [activityId, setActivityId] = useState(null);
+  // …and, where that step has subtasks, one of those rather than the whole step.
+  const [subtaskId, setSubtaskId] = useState(card?.subtask_id ?? null);
   const [ticket, setTicket] = useState(card ? {
     ticket_type: card.ticket_type || 'bid', opportunity_title: card.opportunity_title, organization: card.organization || '', account_type: card.account_type || '', work_team_id: card.work_team_id ?? '', pipeline_status: card.pipeline_status || '', value: card.value ?? '',
   } : EMPTY_TICKET);
@@ -79,6 +81,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   useEffect(() => {
     setOpenSteps([]);
     setActivityId(null);
+    if (isNew) setSubtaskId(null);
     if (!isNew || !ticketId) return;
     let live = true;
     api.get(`/activities?ticket=${ticketId}`).then((d) => live && setOpenSteps(d.activities.filter((a) => !a.done))).catch(() => {});
@@ -86,13 +89,15 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   }, [isNew, ticketId]);
 
   // Picking a next step fills the priority from it, to change as needed; going back to a new one clears it.
-  const pickStep = (a) => {
+  // With a subtask `s` of that step, the priority is that subtask alone.
+  const pickStep = (a, s = null) => {
     setActivityId(a?.id ?? null);
+    setSubtaskId(s?.id ?? null);
     setForm((f) => ({
       ...f,
-      title: a?.subject || '',
+      title: s?.text || a?.subject || '',
       due_date: a?.due_date || '',
-      checklist: a ? a.subtasks.map((s) => ({ text: s.text, done: s.done })) : [],
+      checklist: a && !s ? a.subtasks.map((x) => ({ text: x.text, done: x.done })) : [],
       waiting_client: !!a?.waiting_client,
     }));
   };
@@ -130,6 +135,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
           ...form, team_id: picked ? picked.id : teamId, week_start: picked ? picked.week : weekStart, ticket, new_notes: pendingNotes,
           ticket_id: ticketMode === 'existing' ? ticketId : null,
           activity_id: ticketMode === 'existing' && ticketId ? activityId : null,
+          subtask_id: ticketMode === 'existing' && ticketId && activityId ? subtaskId : null,
         });
       } else {
         await api.put(`/priorities/cards/${card.id}`, { ...form, ticket });
@@ -290,17 +296,45 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
                           </span>
                         ) : <span className="text-slate-600">A new next step</span>}
                       </button>
+                      {/* The picked step's open subtasks: the priority can be one of them instead of the whole step. */}
+                      {a && on && a.subtasks.some((s) => !s.done) && (
+                        <ul className="space-y-0.5 bg-brand-50 pr-3 pb-2 pl-8" role="radiogroup" aria-label={`Which part of “${a.subject}”`}>
+                          {[null, ...a.subtasks.filter((s) => !s.done)].map((s) => {
+                            const sel = (s?.id ?? null) === subtaskId;
+                            return (
+                              <li key={s?.id ?? 'all'}>
+                                <button type="button" role="radio" aria-checked={sel} onClick={() => pickStep(a, s)}
+                                  className={`flex w-full items-start gap-2 rounded px-2 py-1 text-left text-xs ${sel ? 'bg-white font-medium text-slate-900 ring-1 ring-brand-200' : 'text-slate-600 hover:bg-white/60'}`}>
+                                  <span className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ring-1 ${sel ? 'bg-brand-600 ring-brand-600' : 'bg-white ring-slate-300'}`} />
+                                  <span className="min-w-0 break-words">
+                                    {s ? s.text : 'The whole step'}
+                                    {s?.cards?.length > 0 && <span className="ml-1 font-normal text-slate-400">· On {s.cards.length} board{s.cards.length === 1 ? '' : 's'}</span>}
+                                  </span>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
                     </li>
                   );
                 })}
               </ul>
-              {activityId && <p className="mt-1 text-xs text-slate-500">Changes below are saved to this next step on the ticket.</p>}
+              {activityId && (
+                <p className="mt-1 text-xs text-slate-500">
+                  {subtaskId ? 'Your priority is this subtask alone: completing it ticks it off under its step, which stays open. The due date is the step’s.'
+                    : 'Changes below are saved to this next step on the ticket.'}
+                </p>
+              )}
             </Field>
           )}
 
           {/* Card */}
-          <Field label="Priority / next step">
+          <Field label={subtaskId ? 'Priority / subtask' : 'Priority / next step'}>
             <input className="input" placeholder="e.g. Schedule meeting with contracting officer" value={form.title} onChange={(e) => set('title', e.target.value)} disabled={ro} />
+            {subtaskId && (card?.step_title || openSteps.find((a) => a.id === activityId)) && (
+              <p className="mt-1 text-xs text-slate-500">A subtask of “{card?.step_title || openSteps.find((a) => a.id === activityId).subject}”.</p>
+            )}
           </Field>
           <Field label="Assigned">
             {ro ? (
@@ -310,7 +344,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
             )}
           </Field>
           <div className="grid grid-cols-2 items-end gap-3">
-            <Field label="Due date">
+            <Field label={subtaskId ? 'Due date (the step’s)' : 'Due date'}>
               <input type="date" className="input" value={form.due_date} onChange={(e) => set('due_date', e.target.value)} disabled={ro} />
             </Field>
             <button type="button" aria-pressed={form.waiting_client} disabled={ro} onClick={() => set('waiting_client', !form.waiting_client)}
@@ -319,7 +353,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
               <Hourglass size={14} className={form.waiting_client ? 'text-sky-600' : ''} /> Waiting on client
             </button>
           </div>
-          <Field label={`Subtasks${form.checklist.length ? ` (${form.checklist.filter((c) => c.done).length}/${form.checklist.length})` : ''}`}>
+          {!subtaskId && <Field label={`Subtasks${form.checklist.length ? ` (${form.checklist.filter((c) => c.done).length}/${form.checklist.length})` : ''}`}>
             <ul className="space-y-1.5">
               {form.checklist.map((item, i) => (
                 <li key={i} className="group flex items-center gap-2">
@@ -338,7 +372,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
                 <button type="button" className="btn" onClick={addItem}><Plus size={15} /></button>
               </div>
             )}
-          </Field>
+          </Field>}
           {!isNew && (
             <Field label="Support">
               {support.length > 0 && (

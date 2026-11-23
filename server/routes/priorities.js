@@ -33,7 +33,8 @@ const team = (id) => db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
 // ticket brings it back.
 function loadCards(teamId, weekStart) {
   const cards = db.prepare(`SELECT c.*, t.opportunity_title, t.organization, t.pipeline_status, t.account_type, t.work_team_id, t.value, t.ticket_type, t.created_by AS ticket_created_by,
-      COALESCE((SELECT k.waiting_client FROM ticket_tasks k WHERE k.id = c.activity_id), 0) AS waiting_client
+      COALESCE((SELECT k.waiting_client FROM ticket_tasks k WHERE k.id = c.activity_id), 0) AS waiting_client,
+      CASE WHEN c.subtask_id IS NOT NULL THEN (SELECT k.text FROM ticket_tasks k WHERE k.id = c.activity_id) END AS step_title
     FROM priority_cards c JOIN tickets t ON t.id = c.ticket_id
     WHERE c.team_id = ? AND c.week_start = ? AND c.archived_at IS NULL AND t.archived_at IS NULL ORDER BY c.id`).all(teamId, weekStart);
   const assignees = db.prepare(`SELECT a.* FROM card_assignees a JOIN priority_cards c ON c.id = a.card_id
@@ -191,10 +192,10 @@ export function rollUnfinished(today = localToday()) {
     WHERE c.team_id = ? AND c.week_start >= ? AND c.week_start < ? AND c.rolled_at IS NULL AND c.completed = 0 AND COALESCE(k.done, 0) = 0
       AND c.archived_at IS NULL AND t.archived_at IS NULL ORDER BY c.week_start, c.id`);
   const assigneesOf = db.prepare('SELECT user_id, position FROM card_assignees WHERE card_id = ?');
-  const placed = db.prepare('SELECT 1 FROM priority_cards WHERE team_id = ? AND week_start = ? AND activity_id = ?');
+  const placed = db.prepare('SELECT 1 FROM priority_cards WHERE team_id = ? AND week_start = ? AND activity_id = ? AND subtask_id IS ?');
   const mark = db.prepare("UPDATE priority_cards SET rolled_at = datetime('now') WHERE id = ?");
-  const add = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, is_planned, locked_rank, rolled_since, created_by)
-    VALUES (?, ?, ?, ?, 1, ?, ?, ?)`);
+  const add = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, subtask_id, is_planned, locked_rank, rolled_since, created_by)
+    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`);
   const nextPos = db.prepare(`SELECT COALESCE(MAX(a.position) + 1, 0) AS p FROM card_assignees a
     JOIN priority_cards c ON c.id = a.card_id WHERE a.user_id = ? AND c.team_id = ? AND c.week_start = ?`);
   const assign = db.prepare('INSERT INTO card_assignees (card_id, user_id, position) VALUES (?, ?, ?)');
@@ -204,18 +205,19 @@ export function rollUnfinished(today = localToday()) {
       const week = weekStartFor(today, t.checkin_dow);
       const closed = planningClosed(t.id, week);
       const lanes = new Map(); // user id → the cards rolling into their lane
-      const made = new Map(); // activity id → the card made for it in the new week
+      const made = new Map(); // activity (or one subtask of it) → the card made for it in the new week
       for (const c of unfinished.all(t.id, from, week)) {
         const assignees = assigneesOf.all(c.id);
         if (!assignees.length) continue; // not on anyone's board
         const activityId = activityFor(c, { id: c.created_by });
         mark.run(c.id);
-        // An activity is on the new week once: cards for it that roll together share one, with everyone from each.
-        let id = made.get(activityId);
+        // An activity (or one subtask of it) is on the new week once: cards for it that roll together share one, with everyone from each.
+        const key = `${activityId}:${c.subtask_id ?? ''}`;
+        let id = made.get(key);
         if (!id) {
-          if (placed.get(t.id, week, activityId)) continue; // already planned for the new week
-          id = add.run(c.ticket_id, t.id, week, activityId, closed ? rankOf(activityId) : null, c.rolled_since || c.week_start, c.created_by).lastInsertRowid;
-          made.set(activityId, id);
+          if (placed.get(t.id, week, activityId, c.subtask_id)) continue; // already planned for the new week
+          id = add.run(c.ticket_id, t.id, week, activityId, c.subtask_id, closed ? rankOf(activityId) : null, c.rolled_since || c.week_start, c.created_by).lastInsertRowid;
+          made.set(key, id);
           mirrorCards(activityId);
           rolled += 1;
         }
@@ -311,9 +313,21 @@ export function ticketFields(t = {}) {
 
 const setWaiting = (activityId, on) => db.prepare('UPDATE ticket_tasks SET waiting_client = ? WHERE id = ?').run(on ? 1 : 0, activityId);
 
-/** A card's own fields go to its activity: title → subject, due date, completed → done, checklist → subtasks, waiting on client. */
-function saveToActivity(activityId, b, user) {
+/**
+ * A card's own fields go to its activity: title → subject, due date, completed → done, checklist → subtasks, waiting on client.
+ * A card for one subtask names and completes that subtask instead; its due date and waiting on client are still the step's.
+ */
+function saveToActivity(activityId, b, user, subtaskId = null) {
   const k = db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(activityId);
+  if (subtaskId) {
+    const done = !!b.completed;
+    db.prepare("UPDATE activity_subtasks SET text = COALESCE(?, text), done = ?, done_at = CASE WHEN ? THEN COALESCE(done_at, datetime('now')) END WHERE id = ?")
+      .run(b.title?.trim() || null, done ? 1 : 0, done ? 1 : 0, subtaskId);
+    if ('due_date' in b) db.prepare('UPDATE ticket_tasks SET due_date = ? WHERE id = ?').run(/^\d{4}-\d{2}-\d{2}$/.test(b.due_date || '') ? b.due_date : null, k.id);
+    if ('waiting_client' in b) setWaiting(k.id, b.waiting_client);
+    mirrorCards(k.id);
+    return;
+  }
   const title = b.title?.trim() || k.text;
   const done = !!b.completed;
   db.prepare(`UPDATE ticket_tasks SET text = ?, due_date = ?, done = ?, done_at = CASE WHEN ? THEN COALESCE(done_at, datetime('now')) END,
@@ -375,6 +389,9 @@ r.post('/cards', (req, res) => {
     // A priority is an activity on the ticket: an existing one placed in this week, or a new one at the bottom of its list.
     let activityId = Number(b.activity_id) || null;
     if (activityId && !db.prepare('SELECT 1 FROM ticket_tasks WHERE id = ? AND ticket_id = ?').get(activityId, ticketId)) throw new Error('That activity isn’t on this ticket');
+    // It can be one open subtask of that activity rather than the whole of it.
+    const subtaskId = activityId ? Number(b.subtask_id) || null : null;
+    if (subtaskId && !db.prepare('SELECT 1 FROM activity_subtasks WHERE id = ? AND task_id = ?').get(subtaskId, activityId)) throw new Error('That subtask isn’t on this next step');
     const isNew = !activityId;
     if (isNew) {
       const title = b.title?.trim() || db.prepare('SELECT opportunity_title FROM tickets WHERE id = ?').get(ticketId).opportunity_title;
@@ -384,10 +401,10 @@ r.post('/cards', (req, res) => {
     // Cards added while the week's planning is open are planned priorities; once planning
     // is closed, new cards are mid-sprint adds (shown in red).
     const isPlanned = planningClosed(t.id, weekStart) ? 0 : 1;
-    const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, is_planned, created_by)
-      VALUES (?, ?, ?, ?, ?, ?)`).run(ticketId, t.id, weekStart, activityId, isPlanned, req.user.id).lastInsertRowid;
+    const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, subtask_id, is_planned, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(ticketId, t.id, weekStart, activityId, subtaskId, isPlanned, req.user.id).lastInsertRowid;
     // An existing next step picked in the priority panel comes with its edits (title and all); placed from the ticket, as is.
-    if (isNew || 'title' in b) saveToActivity(activityId, b, req.user);
+    if (isNew || 'title' in b) saveToActivity(activityId, b, req.user, subtaskId);
     else {
       if ('waiting_client' in b) setWaiting(activityId, b.waiting_client);
       mirrorCards(activityId);
@@ -425,7 +442,7 @@ r.put('/cards/:id', (req, res) => {
   const tf = ticketFields(b.ticket);
   if (b.ticket && !tf.opportunity_title) return res.status(400).json({ error: 'Opportunity Title is required' });
   db.transaction(() => {
-    saveToActivity(activityFor(card, req.user), b, req.user);
+    saveToActivity(activityFor(card, req.user), b, req.user, card.subtask_id);
     // The card is yours to change; the ticket's own fields only change for its owner (or an admin).
     if (b.ticket && canEditTicket(req.user, db.prepare('SELECT * FROM tickets WHERE id = ?').get(card.ticket_id))) {
       db.prepare(`UPDATE tickets SET opportunity_title=@opportunity_title, organization=@organization,
@@ -492,7 +509,8 @@ r.delete('/cards/:id', (req, res) => {
   const keep = req.query.keep_activity === '1';
   db.transaction(() => {
     db.prepare('DELETE FROM priority_cards WHERE id = ?').run(card.id);
-    const k = !keep && card.activity_id && db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(card.activity_id);
+    // A card for one subtask leaves the step and the subtask on the ticket.
+    const k = !keep && !card.subtask_id && card.activity_id && db.prepare('SELECT * FROM ticket_tasks WHERE id = ?').get(card.activity_id);
     if (k && !k.pipedrive_id && !db.prepare('SELECT 1 FROM priority_cards WHERE activity_id = ?').get(k.id)) {
       db.prepare("UPDATE ticket_comments SET target_type = NULL, target_id = NULL WHERE (target_type = 'activity' AND target_id = ?) OR (target_type = 'subtask' AND target_id IN (SELECT id FROM activity_subtasks WHERE task_id = ?))").run(k.id, k.id);
       db.prepare('DELETE FROM ticket_tasks WHERE id = ?').run(k.id);
