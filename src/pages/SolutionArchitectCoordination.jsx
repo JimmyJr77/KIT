@@ -3,16 +3,16 @@ import { createPortal } from 'react-dom';
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Check, FileText, PenLine, Circle, RotateCcw, Trash2, Plus } from 'lucide-react';
+import { GripVertical, Check, RotateCcw, Trash2, Plus } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { fullName, stamp } from '../lib/format.js';
 import { LabelList, byTags } from '../components/Labels.jsx';
-import { PROCESS_TYPES, CRITICALITY, SA_FIELD, milestoneOf } from '../lib/process.js';
-import { DueDate, CriticalityPill } from './TicketPlanning.jsx';
+import { PROCESS_TYPES, CRITICALITY, SA_FIELD, REQUEST_FIELD, milestoneOf } from '../lib/process.js';
+import { DueDate, CriticalityPill, GateTag } from './TicketPlanning.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
-import { SaChecks, SaFiles, SaAttach } from '../components/SaResponse.jsx';
+import { SaChecks, SaFiles, SaAttach, SaApprovedNote, NEEDS_ARCHITECT } from '../components/SaResponse.jsx';
 import PipelineHeader, { AddExistingButton, useOwnerTerritoryFilter } from '../components/PipelineHeader.jsx';
 
 const CRIT_RANK = Object.fromEntries(CRITICALITY.map((c, i) => [c.key, i]));
@@ -133,7 +133,7 @@ export default function SolutionArchitectCoordination() {
       <div className="min-h-0 flex-1 overflow-auto bg-slate-50 p-6">
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <table className="w-full min-w-[128rem] table-fixed text-left text-sm">
+            <table className="w-full min-w-[114rem] table-fixed text-left text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold tracking-wide text-slate-500 uppercase">
                 <tr>
                   <th className="w-12 py-2.5 pl-3">#</th>
@@ -146,19 +146,18 @@ export default function SolutionArchitectCoordination() {
                   <th className="px-3 py-2.5">Request</th>
                   <th className="w-72 px-3 py-2.5">SA Notes</th>
                   <th className="w-40 px-3 py-2.5">SA Response</th>
-                  <th className="w-56 px-3 py-2.5">Work</th>
                   <th className="w-24 px-3 py-2.5" />
                 </tr>
               </thead>
               <SortableContext items={shown.map((r) => r.id)} strategy={verticalListSortingStrategy}>
                 <tbody className="divide-y divide-slate-100">
-                  {rows === null && <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
+                  {rows === null && <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
                   {rows?.length === 0 && (
-                    <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">
+                    <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">
                       {showDone ? 'Nothing is done yet.' : 'Nothing is staffed yet. Use Staff Ticket in a pipeline ticket, drag a ticket onto a bucket on the board, or give it a process tag.'}
                     </td></tr>
                   )}
-                  {rows?.length > 0 && !shown.length && <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">No staffing events match.</td></tr>}
+                  {rows?.length > 0 && !shown.length && <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">No staffing events match.</td></tr>}
                   {shown.map((r, i) => (
                     <Row key={r.id} row={r} n={i + 1} draggable={canDrag && (scope === 'all' || r.mine)} selected={open?.id === r.id} user={user} architects={architects}
                       onOpen={() => setOpen({ ticket_id: r.ticket_id, id: r.id })} run={run} onRequestSaved={requestSaved} />
@@ -183,6 +182,13 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
   // Written in the row: the list reloads, and so does the event's form if it's open.
   const saved = (call) => call.then(() => onRequestSaved(r.id));
   const saFiles = r.files.filter((f) => f.field === SA_FIELD);
+  const requestFiles = r.files.filter((f) => f.field === REQUEST_FIELD);
+  // Links and documents save straight away, on the Request (BD Notes) as on the SA response.
+  const attach = (field) => ({
+    onLink: (url, name) => saved(api.post(`/tickets/process/${r.id}/links`, { url, name, field })),
+    onUpload: (file) => { const fd = new FormData(); fd.append('file', file); return saved(api.post(`/tickets/process/${r.id}/files?field=${field}`, fd)); },
+  });
+  const removable = { canRemove: (f) => !r.completed_at && (f.mine || r.can_edit), onRemove: (f) => saved(api.del(`/tickets/process/files/${f.id}`)).catch((e) => alert(e.message)) };
   return (
     <tr ref={setNodeRef} onClick={onOpen} style={{ transform: CSS.Translate.toString(transform), transition }}
       className={`cursor-pointer align-top transition ${isDragging ? 'relative z-10 bg-white shadow-lg' : selected ? 'bg-brand-50/60' : 'hover:bg-slate-50'}`}>
@@ -197,12 +203,13 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
       <td className="px-3 py-3">
         <div className="font-semibold text-slate-900">{r.title}</div>
         <div className="mt-0.5 text-xs text-slate-500">{[r.organization, r.owner && fullName(r.owner), r.territory?.name].filter(Boolean).join(' · ')}</div>
-        <LabelList labels={r.labels} className="mt-1.5" />
+        <LabelList labels={r.labels} unq={r.unq} qualified={r.qualified} className="mt-1.5" />
       </td>
       <td className="px-3 py-3">
         <div className="font-medium text-slate-800">{r.step_type}</div>
         <div className="mt-0.5 text-[11px] text-slate-400">{def.phase}{def.tag ? ` · ${def.tag}` : ''}</div>
-        {r.decision && <div className="mt-1 text-[11px] font-semibold text-slate-600">{r.decision}</div>}
+        {r.decision && !def.qualifies && <div className="mt-1 text-[11px] font-semibold text-slate-600">{r.decision}</div>}
+        <GateTag gate={r.gate} className="mt-1" />
       </td>
       <td className="px-3 py-3 whitespace-nowrap" onClick={r.can_edit && !r.completed_at ? stop : undefined}>
         {r.completed_at ? <span className="text-xs text-emerald-700">Done {stamp(r.completed_at)}</span> : <DueCell row={r} onSave={(v) => put({ step_date: v || null })} />}
@@ -220,10 +227,14 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
         {r.completed_at ? <ArchitectList people={r.architects} /> : <ArchitectCell row={r} options={architects} onSave={(ids) => put({ architects: ids })} />}
       </td>
       <td className="px-3 py-3" onClick={r.completed_at ? undefined : stop}>
-        {r.completed_at
-          ? (r.request ? <p className="line-clamp-3 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.request}>{r.request}</p> : <span className="text-xs text-slate-400">No request written</span>)
-          : <TextCell value={r.request} what="request" label={`Request for ${r.step_type} on ${r.title}`}
-              placeholder="What's needed from the solution architect: the ask, the customer's deadline, open questions…" onSave={(text) => saved(api.put(`/tickets/process/${r.id}`, { notes: text }))} />}
+        <div className="space-y-1.5">
+          {r.completed_at
+            ? (r.request ? <p className="line-clamp-3 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.request}>{r.request}</p> : !requestFiles.length && <span className="text-xs text-slate-400">No request written</span>)
+            : <TextCell value={r.request} what="request" label={`${def.requestLabel || 'Request'} for ${r.step_type} on ${r.title}`}
+                placeholder="What's needed from the solution architect: the ask, the customer's deadline, open questions…" onSave={(text) => saved(api.put(`/tickets/process/${r.id}`, { notes: text }))} />}
+          <SaFiles files={requestFiles} {...removable} />
+          {!r.completed_at && <SaAttach {...attach(REQUEST_FIELD)} />}
+        </div>
       </td>
       {/* The Solution Architect Response, as in the event's form: notes, links and documents, then approve / deny / need more info. */}
       <td className="px-3 py-3" onClick={stop}>
@@ -232,32 +243,15 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
             ? (r.sa_notes ? <p className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.sa_notes}>{r.sa_notes}</p> : !saFiles.length && <span className="text-xs text-slate-400">No SA notes</span>)
             : <TextCell value={r.sa_notes} what="SA note" addLabel="Add SA notes" label={`SA notes on ${r.step_type} for ${r.title}`} lines={4}
                 placeholder="The solution architect's thoughts on the request…" onSave={(text) => saved(api.put(`/tickets/process/${r.id}`, { sa_notes: text }))} />}
-          <SaFiles files={saFiles} canRemove={(f) => !r.completed_at && (f.mine || r.can_edit)} onRemove={(f) => saved(api.del(`/tickets/process/files/${f.id}`)).catch((e) => alert(e.message))} />
-          {!r.completed_at && (
-            <SaAttach onLink={(url, name) => saved(api.post(`/tickets/process/${r.id}/links`, { url, name, field: SA_FIELD }))}
-              onUpload={(file) => { const fd = new FormData(); fd.append('file', file); return saved(api.post(`/tickets/process/${r.id}/files?field=${SA_FIELD}`, fd)); }} />
-          )}
+          <SaFiles files={saFiles} {...removable} />
+          {!r.completed_at && <SaAttach {...attach(SA_FIELD)} />}
         </div>
       </td>
       <td className="px-3 py-3" onClick={stop}>
         <SaChecks className="space-y-1" value={r.sa_response} disabled={!!r.completed_at} about={`${r.step_type} for ${r.title}`}
+          blocked={def.qualifies && !r.architects.length ? { approve: NEEDS_ARCHITECT } : {}}
           onChange={(v) => saved(api.put(`/tickets/process/${r.id}`, { sa_response: v })).catch((e) => alert(e.message))} />
-      </td>
-      <td className="px-3 py-3">
-        <ul className="space-y-0.5">
-          {def.fields.map(([key, label, hint]) => {
-            const text = r.fields[key];
-            const docs = r.files.filter((f) => f.field === key).length;
-            return (
-              <li key={key} className={`flex items-center gap-1.5 text-xs ${text || docs ? 'text-slate-700' : 'text-slate-400'}`} title={text ? text.slice(0, 300) : hint}>
-                {text || docs ? <Check size={11} className="shrink-0 text-emerald-600" /> : <Circle size={9} className="mx-px shrink-0" />}
-                <span className="truncate">{label}</span>
-                {text && <PenLine size={10} className="shrink-0 text-slate-400" />}
-                {docs > 0 && <span className="flex shrink-0 items-center gap-0.5 text-slate-500"><FileText size={10} />{docs}</span>}
-              </li>
-            );
-          })}
-        </ul>
+        {def.qualifies && r.sa_response === 'approve' && <SaApprovedNote className="mt-1 whitespace-normal" by={r.sa_response_by} architects={r.architects} />}
       </td>
       <td className="px-3 py-3 text-right" onClick={stop}>
         <div className="flex flex-col items-end gap-1.5">

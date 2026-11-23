@@ -7,7 +7,7 @@ import { db, json } from '../db.js';
 import { reportStager, listPipelines } from '../pipelines.js';
 import { canEditTicket } from '../../src/lib/ticketAccess.js';
 import { ticketEditDenied } from './tickets.js';
-import { addStaffingEvent, staffFromTags } from '../staffing.js';
+import { addStaffingEvent, staffFromTags, gateFlagger, gateOut, gateRule } from '../staffing.js';
 import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
 
 const r = Router();
@@ -28,17 +28,20 @@ function list(user, { done = false } = {}) {
     FROM ticket_process_steps p JOIN tickets t ON t.id = p.ticket_id
     LEFT JOIN users o ON o.id = t.created_by LEFT JOIN users d ON d.id = t.bd_director_id LEFT JOIN territories tr ON tr.id = t.territory_id
     LEFT JOIN sac_ranks mr ON mr.step_id = p.id AND mr.user_id = @me
-    WHERE ${LISTABLE} AND p.completed_at IS ${done ? 'NOT NULL' : 'NULL'}`).all({ me: user.id });
+    WHERE ${LISTABLE} AND p.draft = 0 AND p.completed_at IS ${done ? 'NOT NULL' : 'NULL'}`).all({ me: user.id });
   const ids = rows.map((x) => x.id);
   const files = ids.length ? db.prepare(`SELECT id, process_step_id, process_field, original_name, size, url, uploaded_by FROM ticket_files
     WHERE process_step_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at, id`).all(...ids) : [];
   const users = new Map(db.prepare('SELECT id, first_name, last_name FROM users').all().map((u) => [u.id, u]));
+  const gateFlags = gateFlagger();
+  const rule = gateRule();
   return rows.map((p) => {
     const reviews = cleanReviews(json.parse(p.reviews, {}));
     return {
       id: p.id, ticket_id: p.ticket_id, title: p.opportunity_title, organization: p.organization, stage: p.pipeline_status, value: p.value,
-      labels: json.parse(p.labels, []), step_type: p.step_type, due_date: p.step_date, criticality: p.criticality || 'queued',
-      request: p.notes || '', sa_notes: p.sa_notes || '', sa_response: p.sa_response || '', fields: json.parse(p.fields, {}), decision: p.decision || '', pricing: p.pricing || '',
+      labels: json.parse(p.labels, []), ...gateFlags({ id: p.ticket_id, deal_status: p.deal_status, pipeline_id: p.pipeline_id, pipeline_status: p.pipeline_status }),
+      ...gateOut(p, rule), step_type: p.step_type, due_date: p.step_date, criticality: p.criticality || 'queued',
+      request: p.notes || '', sa_notes: p.sa_notes || '', sa_response: p.sa_response || '', sa_response_by: users.get(p.sa_response_by) || null, fields: json.parse(p.fields, {}), decision: p.decision || '', pricing: p.pricing || '',
       files: files.filter((f) => f.process_step_id === p.id).map((f) => ({ id: f.id, field: f.process_field, name: f.original_name, size: f.size, url: f.url ?? null, mine: f.uploaded_by === user.id })),
       // The solution architects staffed to it: who's named under Solution Architect & Technical.
       architects: reviews.technical.people.map((id) => users.get(id)).filter(Boolean),

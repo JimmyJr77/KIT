@@ -5,6 +5,7 @@ import { stamp } from '../lib/format.js';
 import SidePanel from '../components/SidePanel.jsx';
 import { CardTagSettings } from '../components/Labels.jsx';
 import StageSettings from '../components/StageSettings.jsx';
+import GateRuleSettings from '../components/GateRuleSettings.jsx';
 import {
   CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, RATING_CREDIT, MUST_HAVE_PENALTY, MAX_PWIN, pwin, weightShares,
 } from '../lib/assessment.js';
@@ -12,12 +13,12 @@ import {
 const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
 const everyArea = (rating, override = {}) => Object.fromEntries(CRITERIA.map((c) => [c.key, { score: override[c.key] ?? rating }]));
 
-const TABS = [['pwin', 'PWIN'], ['tags', 'Tags on cards'], ['layout', 'Layout'], ['stages', 'Stages']];
-const SUBTITLES = { pwin: 'PWIN weights and must-have areas', tags: 'The tags you see on the board’s cards', layout: 'How wide the board’s tickets are', stages: 'The board’s columns' };
+const TABS = [['pwin', 'PWIN'], ['gate', 'Qualified lead'], ['tags', 'Tags on cards'], ['layout', 'Layout'], ['stages', 'Stages']];
+const SUBTITLES = { pwin: 'PWIN weights and must-have areas', gate: 'What makes a qualified lead at the Initial Gate', tags: 'The tags you see on the board’s cards', layout: 'How wide the board’s tickets are', stages: 'The board’s columns' };
 
 /**
  * BD Pipeline settings, in tabs: PWIN weights and must-have areas for the bid and win assessment, with a way back to the
- * defaults; which tags each person sees on the board's cards; and the stages of the board's current `pipeline`.
+ * defaults; what makes a qualified lead at the Initial Gate (admins and BD team leads); which tags each person sees on the board's cards; and the stages of the board's current `pipeline`.
  */
 export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChanged, cardWidth, onCardWidth }) {
   const [saved, setSaved] = useState(null); // what the server has
@@ -89,7 +90,7 @@ export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChang
           </button>
         ))}
       </nav>
-      {tab === 'tags' ? <CardTagSettings /> : tab === 'layout' ? <LayoutSettings value={cardWidth} onChange={onCardWidth} /> : tab === 'stages' ? <StageSettings pipeline={pipeline} onChanged={onStagesChanged} /> : !draft ? <p className="text-sm text-slate-400">Loading…</p> : (
+      {tab === 'gate' ? <GateRuleSettings onSaved={onSaved} /> : tab === 'tags' ? <CardTagSettings /> : tab === 'layout' ? <LayoutSettings value={cardWidth} onChange={onCardWidth} /> : tab === 'stages' ? <StageSettings pipeline={pipeline} onChanged={onStagesChanged} /> : !draft ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className="space-y-4">
           <section className="space-y-2 rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
             <p>

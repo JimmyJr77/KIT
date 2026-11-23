@@ -1,5 +1,5 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Ticket, CalendarDays, Megaphone, ContactRound, MessageSquare, StickyNote, CalendarCheck, Mail, FileText, Download, Layers, Star, ChessPawn, Scale, Check, Flag, Pencil, Trophy, XCircle, ExternalLink, Loader2, Upload, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
+import { Ticket, CalendarDays, Megaphone, ContactRound, MessageSquare, StickyNote, CalendarCheck, Mail, FileText, Download, Layers, Star, ChessPawn, Scale, Check, Flag, Pencil, Trophy, XCircle, ExternalLink, Loader2, Upload, ChevronLeft, ChevronRight, Sparkles, ArrowLeftRight, ArrowUpDown } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName, stamp, fullStamp, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
@@ -30,6 +30,11 @@ const CHIP = {
   'Qualify & Gate': 'text-brand-700', 'Plan Response': 'text-sky-700', Develop: 'text-amber-700', 'Review & Approve': 'text-rose-700', 'Submit & Close': 'text-emerald-700',
 };
 
+// Which way the timeline runs is each person's own choice, kept in their browser.
+const ORIENT_KEY = 'kit.processTimeline.orientation';
+const readOrient = () => { try { return localStorage.getItem(ORIENT_KEY) === 'vertical' ? 'vertical' : 'horizontal'; } catch { return 'horizontal'; } };
+const writeOrient = (v) => { try { localStorage.setItem(ORIENT_KEY, v); } catch { /* not kept */ } };
+
 /**
  * The stops along the spine, left to right: how the lead came in, the strategy, then the shaping work and milestones in
  * the order they happened. Everything on the ticket between two milestones (by date) is one shaping stop, oldest on top;
@@ -56,12 +61,16 @@ export function buildLanes(data) {
 /**
  * The Process view of one pipeline ticket: a spine across the upper quarter of the screen from lead to award, a node for each
  * stop, and that stop's content floating above and below the line. `onOpenTool(tool)` opens the ticket on one of its tools
- * (milestones, strategy, assessment…), wherever the view is shown; `reloadKey` makes it fetch again.
+ * (milestones, strategy, assessment…), wherever the view is shown; `reloadKey` makes it fetch again. The button in the strip
+ * turns the timeline on its side: the spine runs down the page instead, each stop a row with its detail beside the heading.
  */
 export default function ProcessTimeline({ ticketId, reloadKey = 0, onOpenTool }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const scroller = useRef(null);
+  const [orient, setOrient] = useState(readOrient);
+  const turn = (v) => { setOrient(v); writeOrient(v); };
+  const vertical = orient === 'vertical';
   const load = () => api.get(`/tickets/${ticketId}/process-view`).then(setData).catch((e) => setError(e.message));
   useEffect(() => { setError(''); load(); }, [ticketId, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const lanes = useMemo(() => (data ? buildLanes(data) : []), [data]);
@@ -80,7 +89,16 @@ export default function ProcessTimeline({ ticketId, reloadKey = 0, onOpenTool })
   const t = data.ticket;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <TicketStrip ticket={t} pwin={data.strategy.pwin} onOpenTool={onOpenTool} />
+      <TicketStrip ticket={t} pwin={data.strategy.pwin} onOpenTool={onOpenTool} orient={orient} onOrient={turn} />
+      {vertical ? (
+        <div className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(ellipse_at_center,_#ffffff_0%,_#f8fafc_55%,_#eef2f7_100%)] outline-none" tabIndex={0} aria-label="Process timeline">
+          <div className="relative mx-auto max-w-5xl px-6 pt-8 pb-2">
+            {/* The spine, running down the page through each stop's node. */}
+            <div aria-hidden className="pointer-events-none absolute inset-y-0 left-[2.625rem] w-2 -translate-x-1/2 rounded-full bg-gradient-to-r from-slate-200 via-slate-400 to-slate-500 shadow-[8px_0_18px_-6px_rgba(15,23,42,.5),inset_1px_0_0_rgba(255,255,255,.9)]" />
+            {lanes.map((lane) => <Stop key={lane.key} vertical lane={lane} data={data} onOpenTool={onOpenTool} onChanged={load} />)}
+          </div>
+        </div>
+      ) : (
       <div className="relative min-h-0 flex-1 bg-[radial-gradient(ellipse_at_center,_#ffffff_0%,_#f8fafc_55%,_#eef2f7_100%)]">
         <div ref={scroller} onWheel={onWheel} className="h-full overflow-x-auto overflow-y-hidden outline-none" tabIndex={0} aria-label="Process timeline"
           onKeyDown={(e) => { if (e.key === 'ArrowRight') slide(1); if (e.key === 'ArrowLeft') slide(-1); }}>
@@ -95,12 +113,14 @@ export default function ProcessTimeline({ ticketId, reloadKey = 0, onOpenTool })
         <button type="button" onClick={() => slide(1)} aria-label="Later" title="Later (→)"
           className="absolute top-[calc(25%+0.875rem)] right-3 z-20 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-slate-500 shadow-md ring-1 ring-slate-200 backdrop-blur hover:text-brand-700"><ChevronRight size={18} /></button>
       </div>
+      )}
     </div>
   );
 }
 
 /** The ticket at a glance, above the timeline. */
-function TicketStrip({ ticket: t, pwin, onOpenTool }) {
+function TicketStrip({ ticket: t, pwin, onOpenTool, orient, onOrient }) {
+  const way = (v) => `flex items-center gap-1 rounded px-2 ${orient === v ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`;
   return (
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 bg-white px-6 py-3">
       <div className="min-w-0">
@@ -117,15 +137,17 @@ function TicketStrip({ ticket: t, pwin, onOpenTool }) {
           {t.director && <span>BD director <span className="font-medium text-slate-800">{fullName(t.director)}</span></span>}
           {t.territory && <span>· {t.territory}</span>}
           {t.projected_win_date && <span>· Projected win {longDate(t.projected_win_date)}</span>}
-          <LabelList labels={t.labels} />
+          <LabelList labels={t.labels} unq={t.unq} qualified={t.qualified} />
         </div>
       </div>
-      {onOpenTool && (
-        <div className="flex shrink-0 gap-1.5">
-          <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => onOpenTool('process')}><Flag size={13} /> Add or edit staffing events</button>
-          <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => onOpenTool(null)}><ExternalLink size={13} /> Open ticket</button>
+      <div className="flex shrink-0 flex-wrap items-stretch justify-end gap-1.5">
+        <div className="flex rounded-md bg-white p-0.5 text-xs ring-1 ring-slate-300" role="group" aria-label="Timeline direction">
+          <button type="button" className={way('horizontal')} aria-pressed={orient === 'horizontal'} onClick={() => onOrient('horizontal')} title="Run the timeline left to right"><ArrowLeftRight size={13} /> Horizontal</button>
+          <button type="button" className={way('vertical')} aria-pressed={orient === 'vertical'} onClick={() => onOrient('vertical')} title="Run the timeline top to bottom"><ArrowUpDown size={13} /> Vertical</button>
         </div>
-      )}
+        {onOpenTool && <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => onOpenTool('process')}><Flag size={13} /> Add or edit staffing events</button>}
+        {onOpenTool && <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => onOpenTool(null)}><ExternalLink size={13} /> Open ticket</button>}
+      </div>
     </div>
   );
 }
@@ -140,7 +162,7 @@ function workSummary(events) {
   return [word('comment', 'comment', 'comments'), word('activity', 'activity', 'activities'), word('file', 'document', 'documents'), word('email', 'email', 'emails')].filter(Boolean).join(' · ') || 'Nothing yet';
 }
 
-function Stop({ lane, data, onOpenTool, onChanged }) {
+function Stop({ lane, data, onOpenTool, onChanged, vertical = false }) {
   const m = lane.kind === 'milestone' ? lane.milestone : null;
   const phase = lane.kind === 'lead' ? 'Lead' : lane.kind === 'strategy' ? 'Strategy'
     : milestoneOf((m || lane.to || lane.from)?.step_type).phase || PHASES[0];
@@ -155,6 +177,33 @@ function Stop({ lane, data, onOpenTool, onChanged }) {
     : lane.kind === 'strategy' ? strategyParts(data.strategy, onOpenTool)
     : m ? milestoneParts(m, data, onOpenTool, onChanged)
     : shapingParts(lane, data.ticket);
+
+  // Top to bottom: the node on the spine at the left, the heading and key facts beside it, the detail to the right of those.
+  if (vertical) {
+    return (
+      <section aria-label={title} className="relative flex gap-5 pb-10">
+        <div className="relative z-10 flex h-9 w-9 shrink-0 items-center justify-center">
+          {major ? (
+            <span className={`grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br text-white shadow-[0_6px_12px_-4px_rgba(15,23,42,.6),inset_0_1px_1px_rgba(255,255,255,.8)] ring-4 ring-white ${NODE[phase]}`} title={title}>
+              <Icon size={15} />
+            </span>
+          ) : (
+            <span className="h-4 w-4 rounded-full bg-gradient-to-br from-white via-slate-300 to-slate-500 shadow-[0_3px_6px_-2px_rgba(15,23,42,.6)] ring-4 ring-white" title={`Shaping · ${workSummary(lane.events)}`} />
+          )}
+        </div>
+        <div className="grid min-w-0 flex-1 gap-x-8 gap-y-3 lg:grid-cols-[18rem_minmax(0,1fr)]">
+          <div className="min-w-0">
+            <div className={`text-[10px] font-semibold tracking-wider uppercase ${CHIP[phase]}`}>{phase === title ? ' ' : phase}</div>
+            <h3 className={`${major ? 'text-base' : 'text-sm'} leading-tight font-semibold text-slate-900`}>{title}</h3>
+            <div className="text-[11px] text-slate-500">{subtitle}</div>
+            {lane.kind === 'shaping' && <div className="text-[11px] text-slate-400">{workSummary(lane.events)}</div>}
+            {content.above && <div className="mt-3 space-y-3 text-xs text-slate-700">{content.above}</div>}
+          </div>
+          <div className="min-w-0 space-y-4 text-xs text-slate-700">{content.below}</div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section aria-label={title} className={`relative flex h-full ${major ? 'w-[21rem]' : 'w-80'} shrink-0 flex-col px-5`}>
@@ -373,9 +422,16 @@ function milestoneParts(m, data, onOpenTool, onChanged) {
         {def.gate && (
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[10px] font-semibold tracking-wider text-slate-400 uppercase">Decision</span>
-            {m.decision
-              ? <span className={`rounded px-2 py-0.5 text-xs font-semibold shadow-sm ${DECISION_STYLE[m.decision]}`}>{m.decision}</span>
-              : <span className="text-slate-400">Not recorded</span>}
+            {def.qualifies
+              ? (m.gate
+                ? <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-px text-[11px] font-semibold text-white shadow-sm ${m.gate.status === 'approved' ? 'bg-emerald-600' : 'bg-red-600'}`}
+                  title={m.gate.status === 'approved' ? 'Went through the Initial Gate: this ticket can move into Qualified and beyond' : 'Closed out without passing the Initial Gate'}>
+                  {m.gate.status === 'approved' && <Check size={11} />} {m.gate.label}{m.gate.overridden ? ' (override)' : ''}
+                </span>
+                : <span className="text-slate-400">Not decided yet</span>)
+              : m.decision
+                ? <span className={`rounded px-2 py-0.5 text-xs font-semibold shadow-sm ${DECISION_STYLE[m.decision]}`}>{m.decision}</span>
+                : <span className="text-slate-400">Not recorded</span>}
             {data.strategy.pwin && <span className="ml-auto rounded bg-brand-50 px-1.5 py-px font-bold text-brand-700 shadow-sm tabular-nums" title="As rated now; the assessment isn't kept per staffing event">PWIN {data.strategy.pwin.score}%</span>}
           </div>
         )}
@@ -440,7 +496,7 @@ function milestoneParts(m, data, onOpenTool, onChanged) {
         </div>
         {m.notes && (
           <div>
-            <Heading>Notes</Heading>
+            <Heading>{def.requestLabel || 'Notes'}</Heading>
             <p className="mt-1 whitespace-pre-wrap">{m.notes}</p>
           </div>
         )}

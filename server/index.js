@@ -51,6 +51,7 @@ import aiRoutes from './routes/ai.js';
 import playbookRoutes from './routes/playbook.js';
 import compensationRoutes from './routes/compensation.js';
 import { seedBdPlaybook } from './services/playbook.js';
+import { grandfatherGates } from './staffing.js';
 
 ensureGsaRates();
 scheduleForecastSnapshots();
@@ -145,4 +146,8 @@ scheduleRollover();
 try { const n = dropAgreed(); if (n) console.log(`Pipedrive: dropped ${n} conflicts on which KIT and Pipedrive agree`); } catch (e) { console.error('Pipedrive conflicts:', e.message); }
 
 const port = Number(process.env.PORT) || 3001;
+{
+  const let_through = grandfatherGates(); // once: tickets already past the gate when gate reviews began
+  if (let_through) console.log(`Gate reviews: ${let_through} tickets grandfathered through the Initial Gate`);
+}
 app.listen(port, () => console.log(`KIT API listening on http://localhost:${port}`));

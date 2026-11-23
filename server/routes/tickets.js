@@ -13,12 +13,12 @@ import { recordWork, recordTicketUpdate } from '../worklog.js';
 import { recordAction, UNDO_HEADER } from '../actions.js';
 import { notifyMentions, notifyTicketOwner } from '../mentions.js';
 import { ticketFields } from './priorities.js';
-import { statusesFor, listPipelines, defaultPipeline, pipelineForNew, kitPipelineAllowed, KIT_PIPELINE_CLOSED } from '../pipelines.js';
+import { statusesFor, listPipelines, defaultPipeline, pipelineForNew, kitPipelineAllowed, KIT_PIPELINE_CLOSED, reportStager } from '../pipelines.js';
 import '../sample/registry.js'; // sample_rows, so sample tickets aren't moved off KIT's own pipeline
 import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields } from '../services/pipedriveFields.js';
-import { PROCESS_TYPES, DECISIONS, SA_RESPONSES, SA_FIELD, cleanReviews, cleanFields, milestoneOf } from '../../src/lib/process.js';
-import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTags } from '../staffing.js';
+import { PROCESS_TYPES, DECISIONS, SA_RESPONSES, SHARED_FIELDS, cleanReviews, cleanFields, cleanQualification, GATE_OVERRIDES, gateDecision, gateRuleText, QUALIFICATION, milestoneOf } from '../../src/lib/process.js';
+import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTags, gateFlagger, gateOut, mayOverrideGate, ensureGateDraft, gateRule, saveGateRule, mayEditGateRule } from '../staffing.js';
 import { NEXT_STEP_SQL } from '../activities.js';
 import { canEditTicket, ownerOnlyMessage } from '../../src/lib/ticketAccess.js';
 import { focusTickets } from '../focus.js';
@@ -124,6 +124,22 @@ function weightsOut() {
 }
 
 r.get('/pwin-weights', (req, res) => res.json(weightsOut()));
+
+// ---- What makes a qualified lead: the rule an Initial Gate Review is decided by. Anyone reads it; admins and BD team leads set it.
+const gateRuleOut = (user) => ({ rule: gateRule(), text: gateRuleText(gateRule()), tests: QUALIFICATION, can_edit: mayEditGateRule(user) });
+r.get('/gate-rule', (req, res) => res.json(gateRuleOut(req.user)));
+
+/**
+ * Body: { yes: [yes/no test keys that must be a Yes], min: { [scored test]: 0-5, 0 for not counted }, sa: whether the
+ * architect must approve }. It decides every review from then on, open or done: the tags on tickets follow at once.
+ */
+r.put('/gate-rule', (req, res) => {
+  if (!mayEditGateRule(req.user)) return res.status(403).json({ error: 'Only an admin or a BD team lead can change what makes a qualified lead' });
+  const min = req.body?.min || {};
+  if (Object.values(min).some((v) => !Number.isInteger(Number(v)) || Number(v) < 0 || Number(v) > 5)) return res.status(400).json({ error: 'Each score must be 1 to 5, or not counted' });
+  saveGateRule(req.body);
+  res.json(gateRuleOut(req.user));
+});
 
 /** Body: { weights: { [criterion]: 0–100 }, gates: [criterion, ...] }. Weights are relative, so they needn't add up to 100. */
 r.put('/pwin-weights', (req, res) => {
@@ -236,9 +252,10 @@ r.get('/', (req, res) => {
   // The personal alias this person has each ticket in, while the ticket is still in that alias's stage.
   const aliasOf = new Map(db.prepare(`SELECT p.ticket_id, p.alias_id FROM stage_alias_tickets p JOIN stage_aliases a ON a.id = p.alias_id JOIN tickets t ON t.id = p.ticket_id
     WHERE p.user_id = ? AND t.pipeline_id IS a.pipeline_id AND t.pipeline_status = a.stage`).all(req.user.id).map((x) => [x.ticket_id, x.alias_id]));
+  const gateFlags = gateFlagger();
   res.json({ tickets: rows.filter((t) => !focus || focus.has(t.id)).map((t) => {
     const lane = laneFor(t);
-    return { ...t, alias_id: aliasOf.get(t.id) ?? null, labels: json.parse(t.labels, []), next_step: json.parse(t.next_step, null), tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
+    return { ...t, ...gateFlags(t), alias_id: aliasOf.get(t.id) ?? null, labels: json.parse(t.labels, []), next_step: json.parse(t.next_step, null), tasks: tasks[t.id] || { open: 0, done: 0 }, pwin: ticketPwin(t, model), lane, archived: isArchived(t, lane) };
   }) });
 });
 
@@ -540,7 +557,8 @@ export function ticketTimeline(id) {
     bd_director_id: t.bd_director_id ?? null, territory_id: t.territory_id ?? null,
     projected_win_date: t.projected_win_date ?? null, win_date_undetermined: !!t.win_date_undetermined,
     lost_reason: t.lost_reason ?? null, probability: t.probability ?? null, currency: t.currency ?? null,
-    labels: json.parse(t.labels, []), source: t.source ?? null, deal_status: t.deal_status || 'open', won_at: t.won_at ?? null, lost_at: t.lost_at ?? null,
+    report_stage: reportStager().of(t.pipeline_id, t.pipeline_status), // the stage reports count it as: a blended custom stage reads as its standard one
+    labels: json.parse(t.labels, []), ...gateFlagger()(t), source: t.source ?? null, deal_status: t.deal_status || 'open', won_at: t.won_at ?? null, lost_at: t.lost_at ?? null,
     pipeline_id: t.pipeline_id ?? null, pipedrive_id: t.pipedrive_id ?? null, organization_id: t.organization_id ?? null,
     lost_reasons: (fieldsOf('deal').find((f) => f.key === 'lost_reason')?.options || []).map((o) => o.label),
     // The events it's tied to: the ones it came out of first.
@@ -714,25 +732,31 @@ const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) 
 
 export function listProcess(ticketId) {
   staffFromTags(ticketId); // a process tag on the ticket stands for an open event
+  ensureGateDraft(ticketId); // a Prospecting lead's Initial Gate Review form is always there to fill in
   const files = db.prepare(`SELECT f.*, u.first_name, u.last_name FROM ticket_files f LEFT JOIN users u ON u.id = f.uploaded_by
     WHERE f.ticket_id = ? AND f.process_step_id IS NOT NULL ORDER BY f.created_at, f.id`).all(ticketId);
-  return db.prepare(`SELECT p.*, a.first_name, a.last_name, e.first_name AS e_first_name, e.last_name AS e_last_name
-    FROM ticket_process_steps p LEFT JOIN users a ON a.id = p.author_id LEFT JOIN users e ON e.id = p.updated_by
+  const rule = gateRule();
+  return db.prepare(`SELECT p.*, a.first_name, a.last_name, e.first_name AS e_first_name, e.last_name AS e_last_name, r.first_name AS r_first_name, r.last_name AS r_last_name
+    FROM ticket_process_steps p LEFT JOIN users a ON a.id = p.author_id LEFT JOIN users e ON e.id = p.updated_by LEFT JOIN users r ON r.id = p.sa_response_by
     WHERE p.ticket_id = ? ORDER BY COALESCE(p.step_date, substr(p.created_at, 1, 10)), p.created_at, p.id`).all(ticketId)
     .map((p) => ({
       id: p.id, step_type: p.step_type, step_date: p.step_date, notes: p.notes || '', sa_notes: p.sa_notes || '', sa_response: p.sa_response || '', reviews: cleanReviews(json.parse(p.reviews, {})),
       decision: p.decision || '', pricing: p.pricing || '', criticality: p.criticality || 'queued', fields: json.parse(p.fields, {}),
+      // An Initial Gate Review's qualification checklist, and whether it passes (the ticket can move into Qualified and beyond).
+      qualification: cleanQualification(json.parse(p.qualification, {})),
+      ...gateOut(p, rule),
       done: !!p.completed_at, completed_at: p.completed_at ?? null,
       created_at: p.created_at, updated_at: p.updated_at,
       author: p.first_name ? { id: p.author_id, first_name: p.first_name, last_name: p.last_name } : null,
       updated_by: p.e_first_name ? { id: p.updated_by, first_name: p.e_first_name, last_name: p.e_last_name } : null,
+      sa_response_by: p.r_first_name ? { id: p.sa_response_by, first_name: p.r_first_name, last_name: p.r_last_name } : null, // who ticked the response
       files: files.filter((f) => f.process_step_id === p.id).map(fileOut),
     }));
 }
 
 r.get('/:id/process', (req, res) => {
   if (!ticketRow(req.params.id)) return res.status(404).json({ error: 'Ticket not found' });
-  res.json({ steps: listProcess(req.params.id), types: PROCESS_TYPES });
+  res.json({ steps: listProcess(req.params.id), types: PROCESS_TYPES, gate_rule: gateRuleText(gateRule()) });
 });
 
 /** Body: { step_type, step_date? (the due date), criticality? }. Staffs the ticket: the event is made, the ticket tagged for it, and it joins the SAC list. */
@@ -741,7 +765,8 @@ r.post('/:id/process', ownerOnly(), (req, res) => {
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   const type = String(req.body?.step_type || '');
   if (!PROCESS_TYPES.includes(type)) return res.status(400).json({ error: 'Choose a staffing event' });
-  const { id } = addStaffingEvent(req.user, t.id, type, { dueDate: isoDate(req.body?.step_date), criticality: req.body?.criticality });
+  // An Initial Gate Review starts as a form to fill in: it reaches the SAC list, and tags the ticket, when it's submitted.
+  const { id } = addStaffingEvent(req.user, t.id, type, { dueDate: isoDate(req.body?.step_date), criticality: req.body?.criticality, draft: !!milestoneOf(type).qualifies });
   res.json({ id, steps: listProcess(t.id), labels: json.parse(ticketRow(t.id).labels, []) });
 });
 
@@ -750,8 +775,9 @@ const OWNER_KEYS = ['step_type', 'step_date', 'criticality', 'decision'];
 
 /**
  * Body may hold step_type, step_date (due date), criticality, decision (Proceed, Revise, No-Bid or none), reviews, notes,
- * sa_notes and sa_response (the Solution Architect Response: approve, deny, more_info or none), pricing, fields ({ key: text })
- * and done. Anyone can write the work (fields, reviews, notes, the response, pricing) and mark it done, so
+ * sa_notes and sa_response (the Solution Architect Response: approve, deny, more_info or none), pricing, fields ({ key: text }),
+ * qualification (an Initial Gate Review's checklist: { key: 'yes' | 'no' | 1-5 }), submit (sends a draft Initial Gate Review
+ * to the SAC list), recall (takes a submitted one back off it, a draft again) and done. Anyone can write the work (fields, reviews, notes, the response, pricing) and mark it done, so
  * solution architects answer from the SAC list; the rest is the ticket owner's or an admin's. Marking it done takes its
  * process tag off the ticket (and the event off the SAC list); reopening it puts the tag back. `architects` (user ids) sets
  * who's staffed to it, the people under Solution Architect & Technical, leaving the rest of the reviews alone.
@@ -769,30 +795,64 @@ r.put('/process/:pid', (req, res) => {
   if (b.step_type !== undefined && b.step_type !== p.step_type && !PROCESS_TYPES.includes(b.step_type)) return res.status(400).json({ error: 'Choose a staffing event' });
   if (b.decision !== undefined && b.decision && !DECISIONS.includes(b.decision)) return res.status(400).json({ error: 'Choose a decision' });
   if (b.sa_response !== undefined && b.sa_response && !SA_RESPONSES.some((x) => x.key === b.sa_response)) return res.status(400).json({ error: 'Choose approve, deny or need more info' });
+  // The Initial Gate's decision is worked out from the answers; only a BD lead or an Exec Ldr sets it by hand ('' hands it back).
+  const overriding = b.gate_override !== undefined && String(b.gate_override || '') !== String(p.gate_override || '');
+  if (overriding) {
+    if (b.gate_override && !GATE_OVERRIDES.includes(b.gate_override)) return res.status(400).json({ error: 'Choose approved or denied' });
+    if (!mayOverrideGate(req.user)) return res.status(403).json({ error: 'Only a BD lead or an Exec Ldr can override the gate decision' });
+  }
   if (b.criticality !== undefined && !isCriticality(b.criticality)) return res.status(400).json({ error: 'Choose how critical it is' });
   const type = b.step_type ?? p.step_type;
   if (Array.isArray(b.architects) && b.reviews === undefined) {
     const reviews = cleanReviews(json.parse(p.reviews, {}));
     b.reviews = { ...reviews, technical: { ...reviews.technical, people: b.architects } };
   }
-  const done = b.done === undefined ? !!p.completed_at : !!b.done;
-  db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, sa_notes = ?, sa_response = ?, decision = ?, pricing = ?, criticality = ?, fields = ?,
+  let done = b.done === undefined ? !!p.completed_at : !!b.done;
+  // An Initial Gate Review is a draft until it's submitted (`submit`), which sends it to the SAC list for the architect's
+  // approval, asked for afresh each time. Approved, it closes itself and leaves the list. Reopened, it's a draft again: it
+  // has to be submitted again.
+  const qualifies = !!milestoneOf(type).qualifies;
+  let draft = qualifies && !!p.draft;
+  let saResponse = b.sa_response !== undefined ? (b.sa_response || null) : p.sa_response;
+  const override = overriding ? (b.gate_override || null) : p.gate_override;
+  if (qualifies) {
+    if (p.completed_at && !done) draft = true;
+    if (b.submit && draft) { draft = false; done = false; saResponse = null; }
+    if (done) draft = false;
+    if (b.recall && !done) draft = true; // taken back from the SAC list to work on: a draft again
+    // The Technical Fit is approved on a named architect's behalf: nobody approves it with no solution architect picked.
+    // With the last architect taken off it, an approval made on their behalf goes too.
+    const hadArchitects = cleanReviews(json.parse(p.reviews, {})).technical.people.length > 0;
+    const hasArchitects = cleanReviews(b.reviews !== undefined ? b.reviews : json.parse(p.reviews, {})).technical.people.length > 0;
+    if (saResponse === 'approve' && !hasArchitects) {
+      if (p.sa_response !== 'approve') return res.status(400).json({ error: 'Pick the solution architect who approved the Technical Fit before approving it' });
+      if (hadArchitects) saResponse = null;
+    }
+    const gate = gateDecision({ step_type: type, qualification: b.qualification !== undefined ? b.qualification : json.parse(p.qualification, {}), sa_response: saResponse, gate_override: override, draft }, gateRule());
+    if (gate.status === 'approved' && (!draft || gate.overridden)) { done = true; draft = false; } // a hand-set approval closes it wherever it stands
+  }
+  db.prepare(`UPDATE ticket_process_steps SET step_type = ?, step_date = ?, reviews = ?, notes = ?, sa_notes = ?, sa_response = ?, sa_response_by = ?, decision = ?, pricing = ?, criticality = ?, fields = ?, qualification = ?, gate_override = ?, gate_override_by = ?, draft = ?,
       completed_at = ?, completed_by = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`).run(
     type,
     b.step_date !== undefined ? isoDate(b.step_date) : p.step_date,
     b.reviews !== undefined ? json.str(cleanReviews(b.reviews)) : p.reviews,
     typeof b.notes === 'string' ? b.notes.trim() : p.notes,
     typeof b.sa_notes === 'string' ? b.sa_notes.trim() : p.sa_notes,
-    b.sa_response !== undefined ? (b.sa_response || null) : p.sa_response,
+    saResponse,
+    (saResponse || null) === (p.sa_response || null) ? p.sa_response_by : saResponse ? req.user.id : null,
     b.decision !== undefined ? (b.decision || null) : p.decision,
     typeof b.pricing === 'string' ? b.pricing.trim() : p.pricing,
     b.criticality ?? p.criticality,
     b.fields !== undefined ? json.str(cleanFields(type, b.fields)) : p.fields,
+    b.qualification !== undefined ? json.str(cleanQualification(b.qualification)) : p.qualification,
+    override,
+    overriding ? (b.gate_override ? req.user.id : null) : p.gate_override_by,
+    draft ? 1 : 0,
     done ? (p.completed_at || new Date().toISOString().slice(0, 19).replace('T', ' ')) : null,
     done ? (p.completed_at ? p.completed_by : req.user.id) : null,
     req.user.id, p.id,
   );
-  if (type !== p.step_type || done !== !!p.completed_at) [...new Set([p.step_type, type])].forEach((k) => settleTag(p.ticket_id, k));
+  if (type !== p.step_type || done !== !!p.completed_at || draft !== !!p.draft) [...new Set([p.step_type, type])].forEach((k) => settleTag(p.ticket_id, k));
   touch(p.ticket_id);
   recordTicketUpdate(req.user, t, `Staffing event: ${type}`);
   res.json({ steps: listProcess(p.ticket_id) });
@@ -813,10 +873,10 @@ r.delete('/process/:pid', ownerOnly(ofStep), (req, res) => {
   res.json({ steps: listProcess(p.ticket_id) });
 });
 
-/** The block of work a document or link answers: one of the event's own, or the Solution Architect Response. */
-const stepField = (p, key) => (key === SA_FIELD || milestoneOf(p.step_type).fields.some(([k]) => k === key) ? String(key) : null);
+/** The block of work a document or link answers: one of the event's own, the Request (BD Notes), the Solution Architect Response or the qualification checklist. */
+const stepField = (p, key) => (SHARED_FIELDS.includes(key) || milestoneOf(p.step_type).fields.some(([k]) => k === key) ? String(key) : null);
 
-/** A document for a staffing event; with ?field=<key>, the answer to one of its blocks of work (sa_response: the Solution Architect Response). Anyone can add one. */
+/** A document for a staffing event; with ?field=<key>, the answer to one of its blocks of work (or request, sa_response, qualification). Anyone can add one. */
 r.post('/process/:pid/files', upload.single('file'), (req, res) => {
   const p = processRow(req.params.pid);
   if (!req.file) return res.status(400).json({ error: 'Choose a file to upload' });
@@ -923,7 +983,8 @@ r.get('/:id/process-view', (req, res) => {
     pwin: ticketPwin(t), model: pwinModel(),
   };
 
-  const milestones = listProcess(t.id);
+  // An Initial Gate Review joins the timeline once it's closed out: while it's being filled in or is with the SAC it isn't a milestone yet.
+  const milestones = listProcess(t.id).filter((m) => m.done || !milestoneOf(m.step_type).qualifies);
   const people = {};
   milestones.forEach((m) => Object.values(m.reviews).forEach((a) => [...a.people, ...a.approved].forEach((id) => { if (!people[id]) people[id] = userRow(id); })));
   res.json({ ticket, lead, strategy, milestones, events: tl.events.filter((e) => e.type !== 'ticket'), people });

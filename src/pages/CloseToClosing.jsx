@@ -388,7 +388,7 @@ function Row({ row: r, selected, onOpen, run }) {
       <td className="px-4 py-3 print:px-1.5 print:py-1.5">
         <button type="button" className="text-left font-semibold text-slate-900 hover:text-brand-700">{r.title}</button>
         <div className="mt-0.5 text-xs text-slate-500 print:text-[8px]">{[r.organization, r.owner && fullName(r.owner)].filter(Boolean).join(' · ')}</div>
-        <LabelList labels={r.labels} className="mt-1.5 print:mt-1 print:origin-top-left print:scale-[0.8]" />
+        <LabelList labels={r.labels} unq={r.unq} qualified={r.qualified} className="mt-1.5 print:mt-1 print:origin-top-left print:scale-[0.8]" />
       </td>
       <td className="px-3 py-3 print:px-1.5 print:py-1.5 text-right font-medium whitespace-nowrap text-emerald-700 tabular-nums">{money(r.value)}</td>
       <td className="px-3 py-3 print:px-1.5 print:py-1.5 text-slate-700" onClick={r.can_edit ? stop : undefined}><Duration row={r} run={run} /></td>

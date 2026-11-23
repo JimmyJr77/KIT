@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, Fragment, useContext, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { X, Plus, Trash2, Loader2, Check, Eye, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, Ticket, Megaphone, RotateCcw } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
@@ -7,8 +7,9 @@ import { api } from '../lib/api.js';
 import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
-import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, CRITICALITY, DEFAULT_CRITICALITY, SA_FIELD, defaultCriticality, criticalityOf, milestoneOf } from '../lib/process.js';
-import { SaChecks, SaFiles, SaAttach } from '../components/SaResponse.jsx';
+import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, CRITICALITY, DEFAULT_CRITICALITY, SA_FIELD, REQUEST_FIELD, QUAL_FIELD, SHARED_FIELDS, QUALIFICATION, QUAL_SCORES, STAFF_PICKS, canOverrideGate,
+  defaultCriticality, criticalityOf, milestoneOf } from '../lib/process.js';
+import { SaChecks, SaFiles, SaAttach, SaApprovedNote, NEEDS_ARCHITECT } from '../components/SaResponse.jsx';
 import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { MarketingDrawer } from './TicketMarketing.jsx';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
@@ -218,7 +219,7 @@ function LinkFromCrm({ ticket, linked, onLinked }) {
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 const today = () => new Date().toLocaleDateString('en-CA');
 const stepForm = (s) => ({ step_type: s.step_type, step_date: s.step_date || '', notes: s.notes, sa_notes: s.sa_notes || '', sa_response: s.sa_response || '', reviews: s.reviews, decision: s.decision || '', pricing: s.pricing || '',
-  criticality: s.criticality || DEFAULT_CRITICALITY, fields: { ...(s.fields || {}) }, done: !!s.done });
+  criticality: s.criticality || DEFAULT_CRITICALITY, fields: { ...(s.fields || {}) }, qualification: { ...(s.qualification || {}) }, done: !!s.done });
 const DECISION_STYLE = { Proceed: 'bg-emerald-100 text-emerald-800', Revise: 'bg-amber-100 text-amber-800', 'No-Bid': 'bg-red-100 text-red-800' };
 /** Open ones first, by due date (undated last); done ones after, latest first. */
 const byDue = (a, b) => (a.done - b.done) || (a.done ? String(b.completed_at).localeCompare(String(a.completed_at))
@@ -250,14 +251,22 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpe
   const [date, setDate] = useState('');
   const [criticality, setCriticality] = useState(() => defaultCriticality(ticket.pipeline_status)); // As Available from Prospecting
   const [openId, setOpenId] = useState(initialOpen);
+  const [gateRule, setGateRule] = useState(''); // what makes a qualified lead, in a sentence (set in the pipeline's settings)
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const dirty = useRef(false);
   const setDirty = (v) => { dirty.current = v; onDirty?.(v); };
   useEffect(() => {
-    api.get(`/tickets/${ticket.id}/process`).then((d) => setSteps(d.steps)).catch((e) => setError(e.message));
+    api.get(`/tickets/${ticket.id}/process`).then((d) => { setSteps(d.steps); setGateRule(d.gate_rule || ''); }).catch((e) => setError(e.message));
     api.get('/users').then((d) => setUsers(d.users));
   }, [ticket.id]);
+  // A Prospecting lead opens on its Initial Gate Review form, unless something else was asked for.
+  const stage = ticket.report_stage || ticket.pipeline_status;
+  useEffect(() => {
+    if (!steps || initialOpen || staffing || openId || stage !== 'Prospecting') return;
+    const gate = steps.find((x) => milestoneOf(x.step_type).qualifies && !x.done);
+    if (gate) setOpenId(gate.id);
+  }, [!!steps]); // eslint-disable-line react-hooks/exhaustive-deps
   // Opened on one event: bring it into view.
   useEffect(() => {
     if (steps && initialOpen) document.getElementById(`staffing-${initialOpen}`)?.scrollIntoView({ block: 'start' });
@@ -329,7 +338,7 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpe
         {sorted && sorted.length > 0 && (
           <ol className="relative space-y-3 before:absolute before:top-3 before:bottom-3 before:left-[11px] before:w-px before:bg-slate-200">
             {sorted.map((s) => (
-              <ProcessStep key={s.id} step={s} open={openId === s.id} onToggle={() => toggle(s.id)} byId={byId} userOptions={userOptions}
+              <ProcessStep key={s.id} step={s} open={openId === s.id} onToggle={() => toggle(s.id)} byId={byId} userOptions={userOptions} users={users} gateRule={gateRule}
                 onDirty={setDirty} apply={apply}
                 onDeleted={() => { setDirty(false); setOpenId(null); }} />
             ))}
@@ -340,7 +349,7 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpe
   );
 }
 
-function ProcessStep({ step: s, open, onToggle, byId, userOptions, onDirty, apply, onDeleted }) {
+function ProcessStep({ step: s, open, onToggle, byId, userOptions, users, gateRule, onDirty, apply, onDeleted }) {
   const { user } = useAuth();
   const def = milestoneOf(s.step_type);
   const involved = REVIEW_AREAS.filter((a) => s.reviews[a.key].people.length || s.reviews[a.key].notes);
@@ -354,32 +363,51 @@ function ProcessStep({ step: s, open, onToggle, byId, userOptions, onDirty, appl
       <div className={`min-w-0 flex-1 rounded-lg border bg-white transition ${open ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200 hover:border-brand-500'} ${s.done && !open ? 'opacity-75' : ''}`}>
         <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full items-start gap-2 p-2.5 text-left">
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="text-sm font-semibold text-slate-800">{s.step_type}</span>
-              <DueDate date={s.step_date} done={s.done} className="text-xs" />
-              {s.done ? <span className="rounded bg-emerald-100 px-1.5 py-px text-[11px] font-semibold text-emerald-800">Done</span> : <CriticalityPill value={s.criticality} />}
-              {s.decision && <span className={`rounded px-1.5 py-px text-[11px] font-semibold ${DECISION_STYLE[s.decision] || 'bg-slate-100 text-slate-700'}`}>{s.decision}</span>}
-            </div>
-            {!open && (
-              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
-                {def.fields.length > 0 && <span className="rounded bg-slate-100 px-1.5 py-0.5">{written} of {def.fields.length} blocks written</span>}
-                {involved.map((a) => <span key={a.key} className="rounded bg-slate-100 px-1.5 py-0.5">{a.short}</span>)}
-                {s.files.length > 0 && <span className="flex items-center gap-0.5"><FileText size={11} /> {s.files.length}</span>}
-                {people.length > 0 && <span className="flex -space-x-1">{people.slice(0, 5).map((u) => <Avatar key={u.id} user={u} size="xs" className="ring-2 ring-white" />)}</span>}
+            {def.qualifies ? (
+              // The Initial Gate, folded: its decision, then when it's due, how critical and who's on it.
+              <>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-sm font-semibold text-slate-800">{s.step_type}</span>
+                  <GateTag gate={s.gate} />
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <DueDate date={s.step_date} done={s.done} className="text-xs" />
+                  {s.done ? <span className="rounded bg-emerald-100 px-1.5 py-px text-[11px] font-semibold text-emerald-800">Done</span> : <CriticalityPill value={s.criticality} />}
+                  {s.files.length > 0 && <span className="flex items-center gap-0.5 text-[11px] text-slate-500"><FileText size={11} /> {s.files.length}</span>}
+                  {people.length > 0 && <span className="flex -space-x-1">{people.map((u) => <Avatar key={u.id} user={u} size="xs" className="ring-2 ring-white" />)}</span>}
+                </div>
+              </>
+            ) : (
+              <>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-sm font-semibold text-slate-800">{s.step_type}</span>
+                <DueDate date={s.step_date} done={s.done} className="text-xs" />
+                {s.done ? <span className="rounded bg-emerald-100 px-1.5 py-px text-[11px] font-semibold text-emerald-800">Done</span> : <CriticalityPill value={s.criticality} />}
+                {s.decision && !def.qualifies && <span className={`rounded px-1.5 py-px text-[11px] font-semibold ${DECISION_STYLE[s.decision] || 'bg-slate-100 text-slate-700'}`}>{s.decision}</span>}
+                <GateTag gate={s.gate} />
               </div>
+              {!open && (
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                  {def.fields.length > 0 && <span className="rounded bg-slate-100 px-1.5 py-0.5">{written} of {def.fields.length} blocks written</span>}
+                  {involved.map((a) => <span key={a.key} className="rounded bg-slate-100 px-1.5 py-0.5">{a.short}</span>)}
+                  {s.files.length > 0 && <span className="flex items-center gap-0.5"><FileText size={11} /> {s.files.length}</span>}
+                  {people.length > 0 && <span className="flex -space-x-1">{people.slice(0, 5).map((u) => <Avatar key={u.id} user={u} size="xs" className="ring-2 ring-white" />)}</span>}
+                </div>
+              )}
+              {!open && s.notes && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{s.notes}</p>}
+              </>
             )}
-            {!open && s.notes && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{s.notes}</p>}
           </div>
           {open ? <ChevronDown size={15} className="mt-0.5 shrink-0 text-slate-400" /> : <ChevronRight size={15} className="mt-0.5 shrink-0 text-slate-300" />}
         </button>
-        {open && <ProcessStepEditor step={s} user={user} userOptions={userOptions} onDirty={onDirty} apply={apply} onDeleted={onDeleted} />}
+        {open && <ProcessStepEditor step={s} user={user} userOptions={userOptions} users={users} gateRule={gateRule} onDirty={onDirty} apply={apply} onDeleted={onDeleted} />}
       </div>
     </li>
   );
 }
 
 /** One block of an event's work: a big area to write in, and the documents that answer it. */
-function WorkBlock({ id, label, hint, value, onChange, files, onUpload, placeholder, rows = 6 }) {
+function WorkBlock({ id, label, hint, value, onChange, files, onUpload, placeholder, rows = 6, children }) {
   const [uploading, setUploading] = useState(false);
   const ref = useRef(null);
   const upload = async (file) => {
@@ -400,6 +428,7 @@ function WorkBlock({ id, label, hint, value, onChange, files, onUpload, placehol
       </div>
       <textarea id={id} rows={rows} className="input min-h-28 resize-y bg-white text-sm leading-relaxed" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
       {files?.length > 0 && <FileList files={files} className="mt-1.5" />}
+      {children}
     </section>
   );
 }
@@ -421,26 +450,112 @@ function FileList({ files, className = '' }) {
   );
 }
 
+const GATE_TONE = { draft: 'bg-slate-200 text-slate-700', failure: 'bg-red-600 text-white', review: 'bg-amber-100 text-amber-900 ring-1 ring-amber-300', denied: 'bg-red-600 text-white', approved: 'bg-emerald-600 text-white' };
+const GATE_ABOUT = {
+  draft: 'Being filled in. Submit it at the foot of the form to send it to the SAC list.',
+  failure: 'Submitted with a criterion not met.',
+  review: 'Submitted and the criteria are met: waiting on the solution architect’s approval.',
+  denied: 'Not qualified: the Technical Fit was denied.',
+  approved: 'Qualified: this ticket can move into Qualified and beyond.',
+};
+/** Where an Initial Gate Review stands, worked out each time it's saved (or set by hand): Not submitted, Gate Failure, With SA, Denied or Approved. */
+export function GateTag({ gate, className = '' }) {
+  if (!gate) return null;
+  return (
+    <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-px text-[11px] font-semibold ${GATE_TONE[gate.status]} ${className}`}
+      title={`${GATE_ABOUT[gate.status]}${gate.overridden ? ' This decision was set by hand by a BD lead or an Exec Ldr.' : ''}`}>
+      {gate.status === 'approved' && <Check size={11} />}{(gate.status === 'failure' || gate.status === 'denied') && <X size={11} />} {gate.label}{gate.overridden ? ' (override)' : ''}
+    </span>
+  );
+}
+
+/**
+ * One answer among a few, as a row of buttons. Pressing the one that's picked clears it. `onPoint(value | null)` says which
+ * one the pointer (or keyboard focus) is on, so the row can explain it.
+ */
+function Choice({ options, value, onChange, label, onPoint }) {
+  return (
+    <span role="group" aria-label={label} className="inline-flex shrink-0 overflow-hidden rounded-md ring-1 ring-slate-300" onMouseLeave={() => onPoint?.(null)}>
+      {options.map((o) => {
+        const on = value === o.value;
+        return (
+          <button key={o.value} type="button" aria-pressed={on} onClick={() => onChange(on ? undefined : o.value)} title={o.title}
+            onMouseEnter={() => onPoint?.(o.value)} onFocus={() => onPoint?.(o.value)} onBlur={() => onPoint?.(null)}
+            className={`min-w-8 border-l border-slate-300 px-2 py-1 text-xs font-semibold first:border-l-0 ${on ? (o.tone || 'bg-brand-600 text-white') : 'bg-white text-slate-600 hover:bg-slate-50'}`}>{o.label}</button>
+        );
+      })}
+    </span>
+  );
+}
+const YES_NO = [{ value: 'yes', label: 'Yes', tone: 'bg-emerald-600 text-white' }, { value: 'no', label: 'No', tone: 'bg-red-600 text-white' }];
+
+/**
+ * The qualification checklist of an Initial Gate Review: three yes / no gates, three tests scored 1 to 5, and the links and
+ * documents behind the answers. `onAnswer(key, value)` sets one (undefined clears it). The answers save with the event; links and documents save straight away.
+ */
+function Qualification({ id, value, onAnswer, rule, files, canRemove, onRemove, onLink, onUpload }) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-2.5" aria-labelledby={`${id}-title`}>
+      <div id={`${id}-title`} className="text-xs font-semibold text-slate-700">Qualification</div>
+      <p className="mt-0.5 text-[11px] text-slate-500">{rule}</p>
+      <ol className="mt-2 divide-y divide-slate-100">
+        {QUALIFICATION.map((q) => <QualificationTest key={q.key} test={q} value={value[q.key]} onChange={(v) => onAnswer(q.key, v)} />)}
+      </ol>
+      <SaFiles files={files} className="mt-1" canRemove={canRemove} onRemove={onRemove} />
+      <SaAttach className="mt-1.5" onLink={onLink} onUpload={onUpload} />
+    </section>
+  );
+}
+
+/** One test of the checklist. Pointing at a score swaps the line under its name for what that score means, in blue. */
+function QualificationTest({ test: q, value, onChange }) {
+  const [pointed, setPointed] = useState(null);
+  const meaning = q.scale?.[pointed];
+  return (
+    <li className="flex items-start justify-between gap-3 py-2">
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-slate-800">{q.n}. {q.label}</div>
+        {meaning
+          ? <p className="mt-0.5 text-[11px] leading-snug font-medium text-blue-600" aria-live="polite"><span className="font-bold">{pointed}:</span> {meaning}</p>
+          : <p className="mt-0.5 text-[11px] leading-snug text-slate-500">{q.hint}</p>}
+      </div>
+      {q.kind === 'gate'
+        ? <Choice options={YES_NO} value={value} onChange={onChange} label={`${q.label}: yes or no`} />
+        : <Choice options={QUAL_SCORES.map((n) => ({ value: n, label: String(n), title: q.scale?.[n] }))} value={value} onChange={onChange} onPoint={setPointed} label={`${q.label}: score from 1 to 5`} />}
+    </li>
+  );
+}
+
 /**
  * A staffing event open for editing. What it is, when it's due, how critical and a gate's decision are the ticket owner's
  * (or an admin's); the request, the blocks of work, who was there and done are anyone's, so solution architects answer here.
  */
-function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDeleted }) {
+function ProcessStepEditor({ step: s, user, userOptions, users, gateRule, onDirty, apply, onDeleted }) {
   const { readOnly } = useContext(TicketAccess);
   const [form, setForm] = useState(() => stepForm(s));
   const [saved, setSaved] = useState(() => JSON.stringify(stepForm(s)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [showPeople, setShowPeople] = useState(() => REVIEW_AREAS.some((a) => s.reviews[a.key].people.length || s.reviews[a.key].notes));
+  const [showNotes, setShowNotes] = useState(false);
   const dirty = JSON.stringify(form) !== saved;
   useEffect(() => { onDirty(dirty); }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setField = (k, v) => setForm((f) => ({ ...f, fields: { ...f.fields, [k]: v } }));
+  // An answer on the qualification checklist; undefined clears it.
+  const setAnswer = (k, v) => setForm((f) => { const { [k]: _, ...rest } = f.qualification; return { ...f, qualification: v === undefined ? rest : { ...rest, [k]: v } }; });
   const setReview = (area, k, v) => setForm((f) => ({ ...f, reviews: { ...f.reviews, [area]: { ...f.reviews[area], [k]: v } } }));
   // Only people who were there can have approved.
-  const setPeople = (area, v) => setForm((f) => ({ ...f, reviews: { ...f.reviews, [area]: { ...f.reviews[area], people: v, approved: f.reviews[area].approved.filter((id) => v.includes(id)) } } }));
+  // On an Initial Gate Review the Technical Fit is approved on a named architect's behalf: with none left, the approval goes.
+  const setPeople = (area, v) => setForm((f) => ({
+    ...f,
+    sa_response: area === 'technical' && !v.length && f.sa_response === 'approve' && milestoneOf(f.step_type).qualifies ? '' : f.sa_response,
+    reviews: { ...f.reviews, [area]: { ...f.reviews[area], people: v, approved: f.reviews[area].approved.filter((id) => v.includes(id)) } },
+  }));
   const def = milestoneOf(form.step_type);
+  const architects = form.reviews.technical.people.map((id) => users.find((u) => u.id === id)).filter(Boolean); // the solution architects named on it
+  const mayOverride = canOverrideGate(users.find((u) => u.id === user.id)); // a BD lead or an Exec Ldr
   // An earlier milestone keeps its type in the list; new ones are staffing events only.
   const types = PROCESS_TYPES.includes(s.step_type) ? PROCESS_TYPES : [s.step_type, ...PROCESS_TYPES];
 
@@ -468,14 +583,50 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
     fd.append('file', file);
     try { await apply(api.post(`/tickets/process/${s.id}/files${field ? `?field=${encodeURIComponent(field)}` : ''}`, fd)); } catch (e) { setError(e.message); }
   };
-  const addLink = (url, name) => apply(api.post(`/tickets/process/${s.id}/links`, { url, name, field: SA_FIELD }));
-  const addSaFile = (file) => { const fd = new FormData(); fd.append('file', file); return apply(api.post(`/tickets/process/${s.id}/files?field=${SA_FIELD}`, fd)); };
-  const removeFile = (f) => apply(api.del(`/tickets/process/files/${f.id}`)).catch((e) => setError(e.message));
-  const saFiles = s.files.filter((f) => f.field === SA_FIELD);
-  const otherFiles = s.files.filter((f) => !f.field || (f.field !== SA_FIELD && !def.fields.some(([k]) => k === f.field)));
+  // Links and documents for the Request (BD Notes), the Solution Architect Response and the qualification checklist.
+  const attach = (field) => ({
+    files: s.files.filter((f) => f.field === field),
+    canRemove: (f) => !readOnly || f.uploaded_by?.id === user.id,
+    onRemove: (f) => apply(api.del(`/tickets/process/files/${f.id}`)).catch((e) => setError(e.message)),
+    onLink: (url, name) => apply(api.post(`/tickets/process/${s.id}/links`, { url, name, field })),
+    onUpload: (file) => { const fd = new FormData(); fd.append('file', file); return apply(api.post(`/tickets/process/${s.id}/files?field=${field}`, fd)); },
+  });
+  const request = attach(REQUEST_FIELD);
+  const sa = attach(SA_FIELD);
+  const otherFiles = s.files.filter((f) => !f.field || (!SHARED_FIELDS.includes(f.field) && !def.fields.some(([k]) => k === f.field)));
+  // Who can be picked for each of the people at the top: those the role allows, and anyone already there (so they can come off).
+  const picks = (key) => users.filter((u) => STAFF_PICKS[key].can(u) || form.reviews[key].people.includes(u.id)).map((u) => ({ value: u.id, label: fullName(u), sub: u.title || u.team_name }));
+  const written = def.fields.filter(([k]) => form.fields[k] || s.files.some((f) => f.field === k)).length + (def.pricing && form.pricing ? 1 : 0);
+  const pricingBlock = def.pricing && (
+    <WorkBlock key="pricing" id={`ps-pricing-${s.id}`} label="Price considerations" rows={3} value={form.pricing} onChange={(v) => set('pricing', v)}
+      placeholder="Initial price, ROM, price-to-win, margin, B&P budget…" />
+  );
+  const blocks = (
+    <>
+      {def.fields.map(([key, label, hint]) => (
+        <Fragment key={key}>
+          {def.pricingBefore === key && pricingBlock}
+          <WorkBlock id={`ps-f-${s.id}-${key}`} label={label} hint={hint} value={form.fields[key] || ''} onChange={(v) => setField(key, v)}
+            files={s.files.filter((f) => f.field === key)} onUpload={(file) => upload(file, key)} placeholder={`${hint || 'Write it here'}. Or answer with a document.`} />
+        </Fragment>
+      ))}
+      {!def.fields.some(([k]) => k === def.pricingBefore) && pricingBlock}
+    </>
+  );
 
   return (
     <div className="space-y-4 border-t border-slate-100 px-3 pt-3 pb-3">
+      {/* Who's on it, picked by typing a name: each box offers only the people its role allows. */}
+      {def.staff && (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {def.staff.map((key) => (
+            <div key={key}>
+              <span className="mb-0.5 block text-[11px] font-medium text-slate-600">{STAFF_PICKS[key].label}</span>
+              <MultiSelect compact options={picks(key)} value={form.reviews[key].people} onChange={(v) => setPeople(key, v)} placeholder={STAFF_PICKS[key].placeholder} />
+            </div>
+          ))}
+        </div>
+      )}
       {/* What it is, when it's due and how critical: the ticket owner's. */}
       <fieldset disabled={readOnly} className="min-w-0 space-y-2">
         <div className="grid grid-cols-3 gap-2">
@@ -497,7 +648,7 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
           </div>
         </div>
         {def.about && <p className="text-[11px] text-slate-500">{def.phase} · {def.about}{def.tag ? ` · tagged ${def.tag}` : ''}</p>}
-        {def.gate && (
+        {def.gate && !def.qualifies && (
           <div>
             <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-decision-${s.id}`}>Gate decision</label>
             <select id={`ps-decision-${s.id}`} className="input py-1.5 text-sm" value={form.decision} onChange={(e) => set('decision', e.target.value)}>
@@ -508,30 +659,55 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
         )}
       </fieldset>
 
-      <WorkBlock id={`ps-notes-${s.id}`} label="Request" rows={4} value={form.notes} onChange={(v) => set('notes', v)}
-        placeholder="What's needed from the solution architect: the ask, the customer's deadline, open questions…" />
+      {/* The decision shows in the card's header. A BD lead or an Exec Ldr can set it by hand, whatever the answers come to. */}
+      {def.qualifies && mayOverride && (
+        <div className="flex items-center justify-end gap-1.5">
+          {s.gate?.overridden && <button type="button" className="btn px-2 py-1 text-xs" disabled={busy} onClick={() => save({ gate_override: '' })} title="Hand the decision back to the answers">Back to automatic</button>}
+          <button type="button" className="btn px-2 py-1 text-xs" disabled={busy} onClick={() => save({ gate_override: s.gate?.result === 'approved' ? 'denied' : 'approved' })}
+            title="BD leads and Exec Ldrs only: set the gate decision by hand, whatever the answers come to">
+            Override to {s.gate?.result === 'approved' ? 'Denied' : 'Approved'}
+          </button>
+        </div>
+      )}
+
+      <WorkBlock id={`ps-notes-${s.id}`} label={def.requestLabel || 'Request'} rows={4} value={form.notes} onChange={(v) => set('notes', v)}
+        placeholder={def.requestLabel ? 'BD’s notes on the lead: what it is, what’s needed from the solution architect, the customer’s deadline, open questions…' : "What's needed from the solution architect: the ask, the customer's deadline, open questions…"}>
+        <SaFiles files={request.files} className="mt-1.5" canRemove={request.canRemove} onRemove={request.onRemove} />
+        <SaAttach className="mt-1.5" onLink={request.onLink} onUpload={request.onUpload} />
+      </WorkBlock>
 
       {/* The Solution Architect Response: the architect's notes, links and documents, then where they landed. Anyone can write it. */}
       <section className="rounded-lg border border-brand-100 bg-brand-50/40 p-2.5">
-        <div className="mb-1.5 text-xs font-semibold text-slate-700">Solution Architect Response</div>
+        <div className="mb-1.5 text-xs font-semibold text-slate-700">{def.saLabel || 'Solution Architect Response'}</div>
         <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-sa-${s.id}`}>SA Notes</label>
         <textarea id={`ps-sa-${s.id}`} rows={4} className="input min-h-24 resize-y bg-white text-sm leading-relaxed" value={form.sa_notes} onChange={(e) => set('sa_notes', e.target.value)}
           placeholder="The solution architect's thoughts on the request. Add a link or a document below." />
-        <SaFiles files={saFiles} className="mt-1.5" canRemove={(f) => !readOnly || f.uploaded_by?.id === user.id} onRemove={removeFile} />
-        <SaAttach className="mt-1.5" onLink={addLink} onUpload={addSaFile} />
-        <SaChecks className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-brand-100 pt-2" value={form.sa_response} onChange={(v) => set('sa_response', v)} about={s.step_type} />
+        <SaFiles files={sa.files} className="mt-1.5" canRemove={sa.canRemove} onRemove={sa.onRemove} />
+        <SaAttach className="mt-1.5" onLink={sa.onLink} onUpload={sa.onUpload} />
+        <SaChecks className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-brand-100 pt-2" value={form.sa_response} onChange={(v) => set('sa_response', v)} about={s.step_type}
+          blocked={def.qualifies && !architects.length ? { approve: NEEDS_ARCHITECT } : {}} />
+        {def.qualifies && !architects.length && form.sa_response !== 'approve' && <p className="mt-1 text-[11px] text-slate-500">To approve, first pick the solution architect at the top of this form.</p>}
+        {/* Whoever ticks Approve does it on the named architect's behalf; a saved approval keeps the name of who ticked it. */}
+        {def.qualifies && form.sa_response === 'approve' && (
+          <SaApprovedNote className="mt-1" architects={architects} by={s.sa_response === 'approve' && s.sa_response_by ? s.sa_response_by : users.find((u) => u.id === user.id) || user} />
+        )}
       </section>
 
-      {def.fields.map(([key, label, hint]) => (
-        <WorkBlock key={key} id={`ps-f-${s.id}-${key}`} label={label} hint={hint} value={form.fields[key] || ''} onChange={(v) => setField(key, v)}
-          files={s.files.filter((f) => f.field === key)} onUpload={(file) => upload(file, key)} placeholder={`${hint || 'Write it here'}. Or answer with a document.`} />
-      ))}
+      {def.qualifies && <Qualification id={`ps-qual-${s.id}`} value={form.qualification} onAnswer={setAnswer} rule={gateRule} {...attach(QUAL_FIELD)} />}
 
-      {def.pricing && (
-        <WorkBlock id={`ps-pricing-${s.id}`} label="Price considerations" rows={3} value={form.pricing} onChange={(v) => set('pricing', v)}
-          placeholder="Initial price, ROM, price-to-win, margin, B&P budget…" />
-      )}
+      {/* The write-up: folded away under its own title on an Initial Gate Review, laid out in full on the others. */}
+      {def.notesTitle ? (
+        <section>
+          <button type="button" onClick={() => setShowNotes(!showNotes)} aria-expanded={showNotes}
+            className="flex w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-left text-xs font-semibold text-slate-700 hover:border-brand-500">
+            {showNotes ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{def.notesTitle}
+            <span className="ml-auto font-normal text-slate-400">{written} of {def.fields.length + (def.pricing ? 1 : 0)} written</span>
+          </button>
+          {showNotes && <div className="mt-2 space-y-4">{blocks}</div>}
+        </section>
+      ) : blocks}
 
+      {!def.staff && (
       <section>
         <button type="button" onClick={() => setShowPeople(!showPeople)} aria-expanded={showPeople}
           className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase hover:text-slate-800">
@@ -563,6 +739,7 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
         </div>
         )}
       </section>
+      )}
 
       <section>
         <div className="mb-1 flex items-center justify-between">
@@ -580,13 +757,27 @@ function ProcessStepEditor({ step: s, user, userOptions, onDirty, apply, onDelet
           {!readOnly && (s.author?.id === user.id || user.role === 'admin') && (
             <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500 hover:text-red-600" onClick={remove} aria-label="Delete staffing event" title="Delete staffing event"><Trash2 size={13} /></button>
           )}
-          <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => save({ done: !form.done })} disabled={busy}
-            title={form.done ? 'Put it back on the SAC list' : 'Mark it done: it leaves the SAC list'}>
-            {form.done ? <><RotateCcw size={12} /> Reopen</> : <><Check size={12} /> Done</>}
-          </button>
+          {!s.draft && (
+            <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => save({ done: !form.done })} disabled={busy}
+              title={form.done ? (def.qualifies ? 'Reopen it to make changes: it has to be submitted again to go back to the SAC list' : 'Put it back on the SAC list') : 'Mark it done: it leaves the SAC list'}>
+              {form.done ? <><RotateCcw size={12} /> Reopen</> : <><Check size={12} /> Done</>}
+            </button>
+          )}
           <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={() => save()} disabled={!dirty || busy}>
             {busy ? <><Loader2 size={12} className="animate-spin" /> Saving…</> : 'Save'}
           </button>
+          {def.qualifies && !s.draft && !s.done && (
+            <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => save({ recall: true })} disabled={busy}
+              title="Take it back off the SAC list to work on it. The Initial Gate tag comes off the ticket until it’s submitted again.">
+              <RotateCcw size={12} /> Recall from SAC
+            </button>
+          )}
+          {s.draft && (
+            <button type="button" className="btn-primary bg-emerald-600 px-3 py-1.5 text-xs hover:bg-emerald-700" onClick={() => save({ submit: true })} disabled={busy}
+              title="Save it and send it to the SAC list for the solution architect’s approval. The ticket is tagged Initial Gate until then.">
+              Submit to SAC
+            </button>
+          )}
         </span>
       </div>
     </div>

@@ -12,6 +12,7 @@ import { fieldByName } from '../services/pipedriveFields.js';
 import { recordTicketUpdate } from '../worklog.js';
 import { canEditTicket } from '../../src/lib/ticketAccess.js';
 import { ticketEditDenied } from './tickets.js';
+import { gateFlagger } from '../staffing.js';
 
 const r = Router();
 
@@ -77,6 +78,7 @@ function list(user) {
         author: m.first_name ? { id: m.author_id, first_name: m.first_name, last_name: m.last_name } : null, mine: m.author_id === user.id });
     });
   }
+  const gateFlags = gateFlagger();
   return rows.map((t) => {
     const term = termFromFields(t.custom_fields);
     const mine = notes.get(t.id) || [];
@@ -84,7 +86,7 @@ function list(user) {
     return {
       ticket_id: t.id, title: t.opportunity_title, organization: t.organization, value: t.value, currency: t.currency,
       stage: t.pipeline_status, close_date: t.win_date_undetermined ? null : t.projected_win_date,
-      term_months: term.months, term_text: term.text, labels: json.parse(t.labels, []), added_at: t.added_at,
+      term_months: term.months, term_text: term.text, labels: json.parse(t.labels, []), ...gateFlags(t), added_at: t.added_at,
       outcome, closed: outcome === 'paid' || outcome === 'closed',
       status: SET_STATUSES.includes(t.c_status) ? t.c_status : null,
       expectation: EXPECTATIONS.includes(t.c_expectation) ? t.c_expectation : null,

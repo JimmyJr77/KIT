@@ -3,20 +3,43 @@ import { FileText, Link2, Loader2, Upload, X } from 'lucide-react';
 import { SA_RESPONSES } from '../lib/process.js';
 
 // The pieces of a staffing event's Solution Architect Response, shared by the event's form and the SAC list: the approve /
-// deny / need more info boxes, and the links and documents attached to it.
+// deny / need more info boxes, and the links and documents attached to it. The Request (BD Notes) and the qualification
+// checklist attach links and documents the same way.
 
-/** Approve, Deny, Need more info: one at most. Ticking the one that's ticked clears it. */
-export function SaChecks({ value, onChange, disabled = false, about = '', className = '' }) {
+/**
+ * Approve, Deny, Need more info: one at most. Ticking the one that's ticked clears it. `blocked` ({ [key]: why }) greys out
+ * a choice that can't be made yet and says why (it can still be unticked).
+ */
+export function SaChecks({ value, onChange, disabled = false, about = '', className = '', blocked = {} }) {
   return (
     <div role="group" aria-label={`Solution architect response${about ? ` on ${about}` : ''}`} className={className}>
-      {SA_RESPONSES.map((o) => (
-        <label key={o.key} className={`flex items-center gap-1.5 text-xs whitespace-nowrap ${disabled ? '' : 'cursor-pointer'} ${value === o.key ? `font-semibold ${o.tone}` : 'text-slate-600'}`}>
-          <input type="checkbox" checked={value === o.key} disabled={disabled} onChange={() => onChange(value === o.key ? '' : o.key)} />
-          {o.label}
-        </label>
-      ))}
+      {SA_RESPONSES.map((o) => {
+        const off = disabled || (!!blocked[o.key] && value !== o.key);
+        return (
+          <label key={o.key} title={off && !disabled ? blocked[o.key] : undefined}
+            className={`flex items-center gap-1.5 text-xs whitespace-nowrap ${off ? 'cursor-not-allowed' : 'cursor-pointer'} ${value === o.key ? `font-semibold ${o.tone}` : off && !disabled ? 'text-slate-400' : 'text-slate-600'}`}>
+            <input type="checkbox" checked={value === o.key} disabled={off} onChange={() => onChange(value === o.key ? '' : o.key)} />
+            {o.label}
+          </label>
+        );
+      })}
     </div>
   );
+}
+
+/** Why an Initial Gate Review's Technical Fit can't be approved yet: no solution architect is named on it. */
+export const NEEDS_ARCHITECT = 'Pick the solution architect who approved it first';
+
+/**
+ * Under an approved Technical Fit: who ticked Approve (`by`) and the solution architects named on the review, whose approval
+ * it is. An architect who ticks it themselves is just "Approved by".
+ */
+export function SaApprovedNote({ by, architects, className = '' }) {
+  if (!by) return null;
+  const name = (u) => [u.first_name, u.last_name].filter(Boolean).join(' ');
+  const others = architects.filter((u) => u.id !== by.id).map(name);
+  const list = others.length > 1 ? `${others.slice(0, -1).join(', ')} and ${others[others.length - 1]}` : others[0];
+  return <p className={`text-[11px] text-emerald-800 ${className}`}>Approved by <span className="font-semibold">{name(by)}</span>{list && <> on behalf of <span className="font-semibold">{list}</span></>}</p>;
 }
 
 /** The response's links and documents. A link opens where it lives; a document downloads. `canRemove(file)` shows its remove button. */
@@ -33,7 +56,7 @@ export function SaFiles({ files, canRemove = () => false, onRemove, className = 
           </a>
           {canRemove(f) && (
             <button type="button" aria-label={`Remove ${f.name}`} title={f.url ? 'Remove this link' : 'Remove this document'}
-              onClick={() => confirm(`Remove “${f.name}” from the response? It comes off the ticket too.`) && onRemove(f)}
+              onClick={() => confirm(`Remove “${f.name}”? It comes off the ticket too.`) && onRemove(f)}
               className="shrink-0 rounded p-0.5 text-slate-300 hover:bg-slate-100 hover:text-red-600"><X size={12} /></button>
           )}
         </li>

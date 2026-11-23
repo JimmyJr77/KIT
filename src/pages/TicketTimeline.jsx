@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft, Megaphone, UserPlus, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { StickyNote, FileText, Ticket, Upload, Loader2, Download, MessageSquarePlus, Pencil, ChevronRight, CalendarDays, CalendarCheck, Archive, RotateCcw, Mail, Pin, ExternalLink, Trash2, Trophy, XCircle, Undo2, BriefcaseBusiness, Workflow, ArrowLeft, Megaphone, UserPlus, Flag } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format.js';
@@ -14,6 +14,7 @@ import { PlanRail, PlanDrawer, TicketAccess, ViewOnlyNote } from './TicketPlanni
 import { canEditTicket } from '../lib/ticketAccess.js';
 import { AssignmentBar } from './TicketAssignment.jsx';
 import ProcessTimeline from '../components/ProcessTimeline.jsx';
+import { nextGate } from '../lib/process.js';
 
 const FILTERS = [
   ['all', 'Everything', () => true],
@@ -53,10 +54,32 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   const showTool = (next) => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setOpenStep(null); setStaffing(false); setTool(next); } };
   const staffTicket = () => { if (leaveTool()) { toolDirty.current = false; setOpenActivity(null); setOpenStep(null); setStaffing(true); setTool('process'); } };
   const close = () => { if (leaveTool()) onClose(); };
-  // With the ticket's pane tucked away there's nothing behind a tool: turning it off in the menu bar brings the ticket back,
-  // and closing it closes the lot.
+  // The ticket's next review gate: opens its staffing event (the open one, else the latest, else a new one with no due
+  // date) expanded in the Staffing events pane, with the ticket's own pane tucked away.
+  const [gateBusy, setGateBusy] = useState(false);
+  const openGate = async (type, canStaff) => {
+    if (gateBusy || !leaveTool()) return;
+    setGateBusy(true);
+    setError('');
+    try {
+      const mine = (await api.get(`/tickets/${ticketId}/process`)).steps.filter((s) => s.step_type === type);
+      let id = (mine.find((s) => !s.done) || mine[mine.length - 1])?.id;
+      if (!id) {
+        if (!canStaff) throw new Error(`No ${type} yet. Only the ticket’s owner (or an admin) can start one.`);
+        id = (await api.post(`/tickets/${ticketId}/process`, { step_type: type })).id;
+        refresh();
+      }
+      toolDirty.current = false; setOpenActivity(null); setStaffing(false); setOpenStep(id); setTool('process'); setMainHidden(true);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setGateBusy(false);
+    }
+  };
+  // With the ticket's pane tucked away there's nothing behind a tool: turning it off in the menu bar brings the ticket back.
+  // Closing the tool does too, except from the SAC list (which opens on the tool alone), where it closes the lot.
   const pickTool = (next) => { if (!next && mainHidden) setMainHidden(false); switchTool(next); };
-  const closeTool = () => (mainHidden ? close() : switchTool(null));
+  const closeTool = () => { if (mainHidden && drawerOnly) return close(); if (!leaveTool()) return; toolDirty.current = false; setMainHidden(false); switchTool(null); };
   const load = () => api.get(`/tickets/${ticketId}/timeline`).then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [ticketId]); // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = () => { load(); onChanged?.(); setProcessKey((k) => k + 1); };
@@ -77,22 +100,14 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   const { user } = useAuth();
   const canEdit = canEditTicket(user, t);
   const access = { readOnly: !!t && !canEdit, ownerName: t?.owner_name ?? null };
+  const gate = t?.ticket_type === 'bid' && t.deal_status === 'open' ? nextGate(t.report_stage || t.pipeline_status) : null;
 
   return (
     <TicketAccess.Provider value={access}>
     <SidePanel wide onClose={close} title={t ? <TicketName ticket={t} canEdit={canEdit && t.ticket_type !== 'account'} onChanged={refresh} /> : 'Loading…'}
       onEscape={processOpen ? () => setProcessOpen(false) : tool ? closeTool : close}
-      mainHidden={mainHidden && !!tool}
-      rail={t && <>
-        <PlanRail ticket={t} active={tool} onSelect={pickTool} skip={t.ticket_type === 'account' ? ['strategy', 'tickets'] : []} />
-        {drawerOnly && tool && (
-          <button type="button" onClick={() => setMainHidden(!mainHidden)} aria-pressed={!mainHidden}
-            title={mainHidden ? 'Show the ticket' : 'Hide the ticket'} aria-label={mainHidden ? 'Show the ticket' : 'Hide the ticket'}
-            className="mt-1 grid h-9 w-9 place-items-center rounded-md border-t border-slate-200 text-slate-500 transition hover:bg-white hover:text-brand-700 hover:shadow-sm">
-            {mainHidden ? <ChevronsLeft size={18} /> : <ChevronsRight size={18} />}
-          </button>
-        )}
-      </>}
+      mainHidden={mainHidden && !!tool} onMainHidden={setMainHidden}
+      rail={t && <PlanRail ticket={t} active={tool} onSelect={pickTool} skip={t.ticket_type === 'account' ? ['strategy', 'tickets'] : []} />}
       drawerWide={tool === 'process'}
       drawer={t && tool && <PlanDrawer key={`${tool}-${openActivity}-${openStep}-${staffing}`} tool={tool} ticket={t} activityId={openActivity} stepId={openStep} staffing={staffing}
         onClose={closeTool} onChanged={refresh} onDirty={setToolDirty} />}
@@ -132,6 +147,13 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
                 {canEdit && t.deal_status === 'open' && (
                   <button type="button" className="btn px-2.5 py-1 text-xs" onClick={staffTicket} title="Staff this ticket for an RFI response, white paper, gate review, SOO, SOW, ROM or proposal: it joins the SAC list">
                     <UserPlus size={13} /> Staff Ticket
+                  </button>
+                )}
+                {gate && (
+                  <button type="button" disabled={gateBusy} onClick={() => openGate(gate.type, canEdit)}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900 ring-1 ring-amber-400 transition hover:bg-amber-200 disabled:opacity-60"
+                    title={`The next review gate for a ticket in ${t.report_stage || t.pipeline_status}: opens the ${gate.type}, starting one if there isn’t one yet (no due date needed)`}>
+                    <Flag size={13} /> {gate.tag}
                   </button>
                 )}
                 <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => showTool('marketing')} title="Marketing requests, lead source and marketing dollars for this ticket"><Megaphone size={13} /> Marketing</button>

@@ -211,7 +211,9 @@ export default function Pipeline() {
     try {
       if (stageMoved) await api.put(`/tickets/${t.id}/stage`, { pipeline_status: stage });
       if (aliasMoved) await api.put('/stages/aliases/place', { ticket_id: t.id, alias_id: aliasId });
-      if (ranking) { await api.put(`/tickets/${t.id}/board-position`, { before_id }); load(); }
+      if (ranking) await api.put(`/tickets/${t.id}/board-position`, { before_id });
+      // A new stage changes what KIT works out for the card (the UNQUALIFIED and Qualified tags), so the board is read again.
+      if (ranking || stageMoved) load();
     } catch (e) {
       setTickets(prev);
       setError(`Couldn’t move “${t.opportunity_title}”: ${e.message}`);
@@ -411,11 +413,11 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
       <NextStepBadge step={t.next_step} onOpen={() => onOpenStep?.(t)} className="absolute top-1/2 right-2 -translate-y-1/2" />
       <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
       <div className="mt-0.5 h-4 truncate text-xs text-slate-500">{[t.organization, t.account_type].filter(Boolean).join(' · ')}</div>
-      {(t.ticket_type === 'work' || t.priority_of || t.labels?.length > 0) && (
+      {(t.ticket_type === 'work' || t.priority_of || t.unq || t.qualified || t.labels?.length > 0) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1 empty:hidden">
           <TicketKindTag ticket={t} />
           {!priorityOff && <PriorityTag of={t.priority_of} />}
-          <LabelList labels={t.labels} card />
+          <LabelList labels={t.labels} unq={t.unq} qualified={t.qualified} card />
         </div>
       )}
       <div className="mt-2 flex items-center justify-between gap-2">

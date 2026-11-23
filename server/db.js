@@ -31,7 +31,7 @@ const WRITE = /^(\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+
 const prepare = db.prepare.bind(db);
 db.prepare = (sql) => prepare(sql.replace(WRITE, (m, verb, q, name) => `${verb}main.${q}${name}${q}`));
 
-export const TEAMS = ['BD', 'Operations', 'Technical Solutioning', 'Marketing', 'Admin', 'Google', 'Proposal Mgmt', 'Finance'];
+export const TEAMS = ['BD', 'Operations', 'Technical Solutioning', 'Marketing', 'Admin', 'Google', 'Proposal Mgmt', 'Finance', 'Exec Ldr'];
 
 export const DEFAULT_SETTINGS = {
   // GSA FY2027 standard CONUS rate (overwritten by the GSA file on import).
@@ -1164,6 +1164,8 @@ CREATE INDEX IF NOT EXISTS activity_subtasks_task ON activity_subtasks(task_id);
 CREATE INDEX IF NOT EXISTS ticket_tasks_order ON ticket_tasks(ticket_id, done, position);
 `);
 addColumn('priority_cards', 'activity_id', 'INTEGER REFERENCES ticket_tasks(id) ON DELETE SET NULL');
+// A priority can be one subtask of its activity rather than the whole of it: the card then follows that subtask alone.
+addColumn('priority_cards', 'subtask_id', 'INTEGER REFERENCES activity_subtasks(id) ON DELETE CASCADE');
 addColumn('priority_cards', 'locked_rank', 'INTEGER'); // the activity's place on its ticket when the week's planning closed
 // A priority left unfinished when its week ends rolls into the next week (rollUnfinished in routes/priorities.js).
 addColumn('priority_cards', 'rolled_at', 'TEXT');    // on the card left behind: when it rolled. It stays as it stood that week.
@@ -1947,6 +1949,19 @@ addColumn('meetings', 'objectives', 'TEXT'); // what we want out of the meeting
   // deny or more_info). Its links and documents are ticket_files with process_field 'sa_response'.
   addColumn('ticket_process_steps', 'sa_notes', 'TEXT');
   addColumn('ticket_process_steps', 'sa_response', 'TEXT');
+  // Who ticked the response (approve, deny or need more info): on an Initial Gate Review they approve on behalf of the named architect.
+  addColumn('ticket_process_steps', 'sa_response_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+  // An Initial Gate Review's qualification checklist: JSON of its answers, keyed as QUALIFICATION in src/lib/process.js (yes or
+  // no for the gates, 1 to 5 for the scored tests). Its links and documents are ticket_files with process_field
+  // 'qualification'; the Request's (BD Notes') are 'request'.
+  addColumn('ticket_process_steps', 'qualification', 'TEXT');
+  // An Initial Gate Review's decision is worked out from its answers; gate_override ('approved' or 'denied') is a BD lead's or
+  // Exec Ldr's hand on it, and gate_override_by who set it.
+  // draft: an Initial Gate Review still being filled in. It isn't on the SAC list and the ticket isn't tagged for it until
+  // it's submitted.
+  addColumn('ticket_process_steps', 'draft', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('ticket_process_steps', 'gate_override', 'TEXT');
+  addColumn('ticket_process_steps', 'gate_override_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
   addColumn('ticket_files', 'process_field', 'TEXT');
   // Milestones recorded before were a record of what had happened: those dated before today (or undated) count as done, so
   // only ones still ahead join the SAC list.

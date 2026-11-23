@@ -33,7 +33,12 @@ export const STAFFING_EVENTS = [
       ['schedule_cost', 'Schedule, milestones & ROM cost', 'Phases, milestones and a rough order of magnitude cost'],
       ['team', 'Team & qualifications', 'Key people, partners and the past performance that proves we can do it'],
     ] },
-  { type: 'Initial Gate Review', tag: 'Initial Gate', phase: 'Qualify & Gate', gate: true, pricing: true,
+  // The Initial Gate Review is where a lead is qualified (`qualifies`): BD Notes and the architect's technical fit on top, the
+  // qualification checklist under them, and the write-up folded away as Pursuit Notes, with price considerations ahead of
+  // the recommendation. `staff` names who's picked at the top of its form, in place of who was there and who approved.
+  { type: 'Initial Gate Review', tag: 'Initial Gate', phase: 'Qualify & Gate', gate: true, pricing: true, qualifies: true,
+    requestLabel: 'BD Notes', saLabel: 'Technical Fit - Solution Architect Response', notesTitle: 'Pursuit Notes', pricingBefore: 'recommendation',
+    staff: ['technical', 'strategy', 'pricing'],
     about: 'Gate Checklist presented; the SVP of Growth decides whether to pursue (S-1.3, S-1.4)',
     fields: [
       ['opportunity', 'Opportunity summary', 'Customer, requirement, estimated value, vehicle, set-aside, key dates, and where it came from'],
@@ -41,8 +46,7 @@ export const STAFFING_EVENTS = [
       ['alignment', 'Capability alignment & feasibility', 'The Solution Architect’s read (S-1.2): what we can deliver, what’s proven, and the gaps'],
       ['competition', 'Competition & win strategy', 'Incumbent, likely competitors, our discriminators and win themes, and why the PWIN is what it is'],
       ['teaming', 'Teaming & gap resolution', 'Partners needed and how each gap closes; NDAs and teaming agreements to put in place'],
-      ['resources', 'Resources & B&P', 'Who has to work on it, the bid and proposal cost, and whether the schedule is achievable'],
-      ['recommendation', 'Recommendation', 'Proceed, No-Bid, or revise and resolve gaps (S-1.4), with the reasons'],
+      ['recommendation', 'Recommendations & Notes', 'Proceed, No-Bid, or revise and resolve gaps (S-1.4), with the reasons, and anything else worth keeping'],
     ] },
   { type: 'Final Gate Review', tag: 'Final Gate', phase: 'Review & Approve', gate: true,
     about: 'Gold Team approval and final compliance check before submission (S-1.12, S-1.13)',
@@ -108,7 +112,7 @@ export const MILESTONES = [...STAFFING_EVENTS, ...EARLIER];
 export const EARLIER_FIELDS = {
   'RFI Response': { ask: ['responses'], approach: ['capability'], past_performance: ['past_performance'], questions: [null, 'Gaps & questions back to the customer'] },
   'White Paper': { problem: ['need'], solution: ['approach'], differentiators: ['innovation'], draft: [null, 'Draft'] },
-  'Initial Gate Review': { fit: ['opportunity'], feasibility: ['alignment'], resources: ['resources'], recommendation: ['recommendation'] },
+  'Initial Gate Review': { fit: ['opportunity'], feasibility: ['alignment'], resources: [null, 'Resources & B&P'], recommendation: ['recommendation'] },
   'Final Gate Review': { compliance: ['compliance'], solution: [null, 'Solution summary'], risks: ['risks'], recommendation: [null, 'Recommendation'] },
   'Statement of Objectives': { objectives: ['objectives'], approach: [null, 'Approach'], assumptions: ['constraints'] },
   'Statement of Work': { scope: ['scope'], deliverables: ['deliverables'], staffing: ['tasks'], assumptions: [null, 'Assumptions'] },
@@ -146,6 +150,12 @@ export const BUCKETS_BY_STAGE = {
   Qualified: ['RFI Response', 'White Paper'],
   Capture: ['RFI Response', 'White Paper', 'Final Gate Review', 'Statement of Objectives', 'Statement of Work', 'Rough Order of Magnitude', 'Proposal'],
 };
+/**
+ * The review gate a ticket is headed for next, by the stage its reports count it as: the Initial Gate Review out of
+ * Prospecting, the Final Gate Review from Qualified or Capture. Other stages have none.
+ */
+export const NEXT_GATE = { Prospecting: 'Initial Gate Review', Qualified: 'Final Gate Review', Capture: 'Final Gate Review' };
+export const nextGate = (stage) => (NEXT_GATE[stage] ? milestoneOf(NEXT_GATE[stage]) : null);
 export const bucketsFor = (stage) => (BUCKETS_BY_STAGE[stage] || PROCESS_TYPES).map(milestoneOf);
 
 /** Field text keyed by the event's field keys, trimmed; unknown keys are dropped. */
@@ -166,6 +176,136 @@ export const SA_RESPONSES = [
 ];
 /** The process_field of a link or document attached to the Solution Architect Response. */
 export const SA_FIELD = 'sa_response';
+/** The process_field of a link or document attached to the Request (BD Notes on an Initial Gate Review). */
+export const REQUEST_FIELD = 'request';
+/** The process_field of a link or document attached to the qualification checklist. */
+export const QUAL_FIELD = 'qualification';
+/** The process_fields that aren't one of an event's own blocks of work. */
+export const SHARED_FIELDS = [SA_FIELD, REQUEST_FIELD, QUAL_FIELD];
+
+/**
+ * What makes a lead qualified, answered on the Initial Gate Review: three yes / no gates, then three scored 1 to 5.
+ * [key, label, what it asks], numbered in this order.
+ */
+export const QUALIFICATION = [
+  { key: 'requirement', kind: 'gate', label: 'Real requirement', hint: 'An identifiable need with a named customer office: a forecast entry, a sources sought notice or RFI, an expiring incumbent contract, or a direct conversation with the program office' },
+  { key: 'funding', kind: 'gate', label: 'Funding', hint: 'The money is appropriated, budgeted, or credibly planned' },
+  { key: 'eligibility', kind: 'gate', label: 'Eligibility and access', hint: 'We can actually bid: we hold, or can team onto, the contract vehicle, meet the set-aside status and NAICS size standard, and have any required clearances or certifications' },
+  { key: 'fit', kind: 'score', label: 'Competitive Fit', hint: 'Relevant past performance, and we can staff and deliver the work at a competitive price; if a partner fills a gap, we know who it is',
+    scale: {
+      1: "Zero fit: no relevant past performance, no staff to deliver the work, and no partner identified to fill the gaps.",
+      2: "Weak fit: only loosely related past performance, we cannot staff or price the work competitively today, and no partner is identified for the gaps.",
+      3: "Partial fit: relevant past performance and we can staff and deliver the work, but our price is unproven or one gap remains with no partner named.",
+      4: "Strong fit: directly relevant past performance, we can staff and deliver at a competitive price, and a named partner covers any remaining gap.",
+      5: "Perfect fit: we have done this exact work for this kind of customer, the staff is on hand, our price is known to be competitive, and there are no gaps.",
+    },
+  },
+  { key: 'timing', kind: 'score', label: 'Timing', hint: 'There is an expected solicitation or award date, far enough out to shape the deal',
+    scale: {
+      1: "Zero timing: no solicitation date and no award date is known or expected.",
+      2: "A rough window only (a fiscal year or a rumor), or a date so close that there is no time left to shape the deal.",
+      3: "An expected quarter for the solicitation or the award, with time to position ourselves but not to influence the requirement.",
+      4: "An expected date stated by the customer or in a published forecast, and enough time to shape the requirement and build the team.",
+      5: "Certain timing: the customer has confirmed the date in writing, and there is ample time to shape every part of the deal.",
+    },
+  },
+  { key: 'position', kind: 'score', label: 'Customer access and competitive position', hint: 'We know the decision makers and have or can get a meeting; we know the incumbent and whether they are vulnerable',
+    scale: {
+      1: "Zero access: we do not know the decision makers, we have had no contact with the customer, and we do not know who the incumbent is.",
+      2: "We know who the decision makers are or who the incumbent is, but we have had no contact and have no meeting in sight.",
+      3: "We know the decision makers and can get a meeting, and we know who the incumbent is, but not whether they are vulnerable.",
+      4: "We have met the decision makers, and we know the incumbent and where they are vulnerable.",
+      5: "Full access: the decision makers know us and take our meetings, and the incumbent is confirmed vulnerable or there is no incumbent.",
+    },
+  },
+].map((q, i) => ({ ...q, n: i + 1 }));
+/** The scores a scored test can take. Each scored test's `scale` says exactly what each one means: 1 is zero, 5 is certainty. */
+export const QUAL_SCORES = [1, 2, 3, 4, 5];
+/**
+ * What makes a qualified lead, as admins and BD leads set it in the pipeline's settings: `yes`, the yes/no tests that must
+ * be a Yes; `min`, the least each scored test must score (0: the test isn't counted); and `sa`, whether the solution
+ * architect has to approve the Technical Fit. This is the rule KIT starts with.
+ */
+export const DEFAULT_GATE_RULE = { yes: ['requirement', 'eligibility'], min: { fit: 2, timing: 2, position: 2 }, sa: true };
+/** A rule as sent or saved, made whole: unknown tests dropped, scores held to 0-5, anything missing as the default has it. */
+export function cleanGateRule(input) {
+  const gates = QUALIFICATION.filter((q) => q.kind === 'gate').map((q) => q.key);
+  const min = {};
+  QUALIFICATION.filter((q) => q.kind === 'score').forEach((q) => {
+    const v = Number(input?.min?.[q.key]);
+    min[q.key] = Number.isInteger(v) && v >= 0 && v <= 5 ? v : DEFAULT_GATE_RULE.min[q.key];
+  });
+  return { yes: Array.isArray(input?.yes) ? gates.filter((k) => input.yes.includes(k)) : [...DEFAULT_GATE_RULE.yes], min, sa: input?.sa === undefined ? DEFAULT_GATE_RULE.sa : !!input.sa };
+}
+/** The rule in a sentence, for the checklist's heading. */
+export function gateRuleText(rule = DEFAULT_GATE_RULE) {
+  const n = (k) => QUALIFICATION.find((q) => q.key === k).n;
+  const list = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0]);
+  const yes = QUALIFICATION.filter((q) => rule.yes.includes(q.key)).map((q) => q.n);
+  const scored = QUALIFICATION.filter((q) => q.kind === 'score' && rule.min[q.key] > 0);
+  const same = scored.every((q) => rule.min[q.key] === rule.min[scored[0].key]);
+  const parts = [
+    yes.length && `${list(yes)} a Yes`,
+    scored.length && (same ? `${list(scored.map((q) => q.n))} ${scored.length > 1 ? 'each ' : ''}at ${rule.min[scored[0].key]} or higher` : scored.map((q) => `${n(q.key)} at ${rule.min[q.key]} or higher`).join(', ')),
+    rule.sa && 'the Technical Fit approved',
+  ].filter(Boolean);
+  if (!parts.length) return 'Passes as soon as it is submitted: nothing is required.';
+  return `Passes with ${parts.length > 2 ? `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}` : parts.join(' and ')}.`;
+}
+/** The checklist's answers, keyed as in QUALIFICATION: 'yes' or 'no' for a gate, 1 to 5 for a score; anything else is dropped. */
+export function cleanQualification(input) {
+  const out = {};
+  QUALIFICATION.forEach(({ key, kind }) => {
+    const v = input?.[key];
+    if (kind === 'gate' && (v === 'yes' || v === 'no')) out[key] = v;
+    if (kind === 'score' && QUAL_SCORES.includes(Number(v))) out[key] = Number(v);
+  });
+  return out;
+}
+
+/** Whether the checklist's own criteria are met under `rule`: its required gates a Yes and every counted test at its minimum or higher. */
+export function criteriaMet(qualification, rule = DEFAULT_GATE_RULE) {
+  const q = cleanQualification(qualification);
+  return rule.yes.every((k) => q[k] === 'yes') && QUALIFICATION.filter((x) => x.kind === 'score' && rule.min[x.key] > 0).every((x) => q[x.key] >= rule.min[x.key]);
+}
+/** What a BD lead or an Exec Ldr can set an Initial Gate Review's decision to by hand, over what the answers come to. */
+export const GATE_OVERRIDES = ['approved', 'denied'];
+/**
+ * Where an Initial Gate Review stands, by status: draft (being filled in, not yet submitted to the SAC), failure (submitted
+ * with a criterion not met), review (submitted, criteria met, waiting on the solution architect), denied (the architect
+ * denied the Technical Fit) or approved (criteria met and the architect approved).
+ */
+export const GATE_STATUS = {
+  draft: 'Not submitted', failure: 'Gate Failure', review: 'With SA', denied: 'Denied', approved: 'Approved',
+};
+/**
+ * An Initial Gate Review's decision, made for it each time it's saved: { status (a GATE_STATUS key), label, result
+ * ('approved' | 'denied'), auto (the status the answers come to), overridden }. A hand-set gate_override wins. Null for
+ * other events. `draft` is a review not yet submitted. `rule` is what makes a qualified lead (the saved setting).
+ */
+export function gateDecision(p = {}, rule = DEFAULT_GATE_RULE) {
+  if (!milestoneOf(p.step_type).qualifies) return null;
+  const overridden = GATE_OVERRIDES.includes(p.gate_override);
+  const auto = p.draft ? 'draft' : !criteriaMet(p.qualification, rule) ? 'failure' : !rule.sa || p.sa_response === 'approve' ? 'approved' : p.sa_response === 'deny' ? 'denied' : 'review';
+  const status = overridden ? p.gate_override : auto;
+  return { status, label: GATE_STATUS[status], result: status === 'approved' ? 'approved' : 'denied', auto, overridden };
+}
+/** Whether a staffing event is a gate review a lead has passed (approved): the ticket can move into Qualified and beyond. */
+export const gatePassed = (p, rule) => gateDecision(p, rule)?.result === 'approved';
+
+/**
+ * Who can be picked for each of the people at the top of an Initial Gate Review, given a person's teams ([{ name, role }]):
+ * solution architects are on Technical Solutioning; leadership is a BD lead or an Exec Ldr; pricing is Finance or an Exec Ldr.
+ */
+export const EXEC_TEAM = 'Exec Ldr';
+const onTeam = (u, name, role) => (u?.teams || []).some((t) => t.name === name && (!role || t.role === role));
+/** Who can set an Initial Gate Review's decision by hand: a BD lead or an Exec Ldr. */
+export const canOverrideGate = (u) => onTeam(u, 'BD', 'lead') || onTeam(u, EXEC_TEAM);
+export const STAFF_PICKS = {
+  technical: { label: 'Solution Architect', placeholder: 'Type a solution architect…', can: (u) => onTeam(u, 'Technical Solutioning') },
+  strategy: { label: 'Leadership', placeholder: 'Type a BD lead or exec…', can: (u) => onTeam(u, 'BD', 'lead') || onTeam(u, EXEC_TEAM) },
+  pricing: { label: 'Pricing', placeholder: 'Type someone in finance…', can: (u) => onTeam(u, 'Finance') || onTeam(u, EXEC_TEAM) },
+};
 
 /** What a gate review decided. */
 export const DECISIONS = ['Proceed', 'Revise', 'No-Bid'];
