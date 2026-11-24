@@ -1804,6 +1804,20 @@ export const LEAD_TAG_COLOR = 'purple';
 export const PROCESS_TAGS = PROCESS_TAG_NAMES;
 /** The category a tag is shown under: Process, Source (where the lead came from), or Other. */
 export const tagCategory = (kind) => ({ process: 'process', lead: 'source' }[kind] || 'other');
+// Where an admin has put a tag (BD Pipeline › Settings › Tags); null leaves it under the category its kind gives it.
+addColumn('labels', 'category', 'TEXT'); // process | source | other
+// A Pipedrive label renamed or deleted in KIT (admins, same place) is renamed or deleted in Pipedrive with the next send.
+// pipedrive_name is the name Pipedrive has: a different name here is a rename waiting to go. A deleted label waits in
+// label_deletes, which also keeps pulls from bringing it back.
+addColumn('labels', 'pipedrive_name', 'TEXT');
+db.exec(`
+UPDATE main.labels SET pipedrive_name = name WHERE pipedrive_name IS NULL AND pipedrive_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS main.label_deletes (
+  pipedrive_id INTEGER PRIMARY KEY,
+  name TEXT,
+  deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
 {
   const keep = db.prepare(`INSERT INTO main.labels (name, color, position, kind) VALUES (@name, @color, (SELECT COALESCE(MAX(position) + 1, 0) FROM main.labels), @kind)
     ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, color = CASE WHEN pipedrive_id IS NULL AND excluded.kind != 'process' THEN excluded.color ELSE color END`);

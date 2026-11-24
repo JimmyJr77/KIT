@@ -5,17 +5,19 @@ import { useClickAway } from './UserCombobox.jsx';
 import MultiSelect from './MultiSelect.jsx';
 
 // Pipedrive's label colors: solid, with white text (dark text on yellow), as Pipedrive draws them.
-const COLORS = {
+export const LABEL_COLORS = {
   green: '#08a742', blue: '#317ae2', red: '#f94839', yellow: '#ffcc00', purple: '#721ea9', gray: '#8c9196',
   orange: '#f7931e', brown: '#8b5a2b', pink: '#e8579f', 'dark-gray': '#4b4f56',
 };
+const COLORS = LABEL_COLORS;
 export const LABEL_COLOR_NAMES = Object.keys(COLORS);
 
 // The tag list, shared by every chip and picker on the page, loaded once.
 let catalog = null;
 let loading = null;
 const listeners = new Set();
-const setCatalog = (labels) => { catalog = labels; listeners.forEach((fn) => fn(labels)); };
+/** Replace the shared tag list (after a tag is made, changed or deleted), so every chip and picker follows. */
+export const setCatalog = (labels) => { catalog = labels; listeners.forEach((fn) => fn(labels)); };
 const loadCatalog = () => (loading ||= api.get('/labels').then((d) => setCatalog(d.labels)).finally(() => { loading = null; }));
 
 export function useLabels() {

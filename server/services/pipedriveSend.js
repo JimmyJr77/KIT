@@ -201,6 +201,17 @@ function plan(kinds, scope, { auto = false } = {}) {
     if (stages.add.length || stages.edit.length || stages.remove.length) out.stages = stages;
   }
   if (on('labels')) out.labels = tickets.filter((t) => t.labels_pending).map((t) => ({ ticket_id: t.id, title: t.opportunity_title, labels: json.parse(t.labels, []) }));
+  // Every tag in KIT is a label in Pipedrive, whether or not a deal carries it yet (not one whose label was deleted there).
+  if (on('labels') && everyDeal(scope)) {
+    const tagsNew = db.prepare('SELECT id, name FROM labels WHERE pipedrive_id IS NULL AND pipedrive_gone = 0 ORDER BY position, name').all();
+    if (tagsNew.length) out.tagsNew = tagsNew;
+    // Pipedrive's labels an admin renamed or deleted in KIT.
+    const tagsEdit = db.prepare('SELECT id, name, pipedrive_id, pipedrive_name AS "from" FROM labels WHERE pipedrive_id IS NOT NULL AND pipedrive_name IS NOT NULL ORDER BY position, name').all()
+      .filter((l) => l.name !== l.from);
+    if (tagsEdit.length) out.tagsEdit = tagsEdit;
+    const tagsRemove = db.prepare('SELECT pipedrive_id, name FROM label_deletes ORDER BY name').all();
+    if (tagsRemove.length) out.tagsRemove = tagsRemove;
+  }
   if (on('notes')) {
     const notes = db.prepare(NOTE_SQL).all({ ids });
     out.notes = {
@@ -433,6 +444,9 @@ function byKey(out) {
   const put = (key, kind, item) => m.set(key, [...(m.get(key) || []), [kind, item]]);
   ['deals', 'labels', 'dealsNew'].forEach((k) => (out[k] || []).forEach((x) => put(x.ticket_id, k, x)));
   (out.dealsRemove || []).forEach((d) => put(`d${d.kind}${d.pipedrive_id}`, 'deals', d));
+  (out.tagsNew || []).forEach((l) => put(`tag${l.id}`, 'labels', l));
+  (out.tagsEdit || []).forEach((l) => put(`tagedit${l.id}`, 'labels', l));
+  (out.tagsRemove || []).forEach((l) => put(`tagdel${l.pipedrive_id}`, 'labels', l));
   if (out.stages) put('stages', 'stages', out.stages);
   ['notes', 'activities', 'files', 'products', 'installments'].forEach((k) => {
     [...(out[k]?.add || []), ...(out[k]?.edit || [])].forEach((x) => put(x.ticket_id, k, x));
@@ -459,6 +473,9 @@ function without(out, gone) {
   const keepDelete = (d) => !gone.has(`d${d.kind}${d.pipedrive_id}`);
   ['deals', 'labels', 'followers', 'dealsNew'].forEach((k) => { if (out[k]) out[k] = out[k].filter(keep); });
   if (out.dealsRemove) out.dealsRemove = out.dealsRemove.filter(keepDelete);
+  if (out.tagsNew) out.tagsNew = out.tagsNew.filter((l) => !gone.has(`tag${l.id}`));
+  if (out.tagsEdit) out.tagsEdit = out.tagsEdit.filter((l) => !gone.has(`tagedit${l.id}`));
+  if (out.tagsRemove) out.tagsRemove = out.tagsRemove.filter((l) => !gone.has(`tagdel${l.pipedrive_id}`));
   if (gone.has('stages')) delete out.stages;
   ['notes', 'activities', 'files', 'products', 'installments'].forEach((k) => {
     if (!out[k]) return;
@@ -594,6 +611,7 @@ export async function createProject(programId) {
  * Makes Pipedrive deal labels of the KIT-made tags among these names, and links each tag to its label. A label Pipedrive
  * already has under that name is used as it is. Tags whose label was deleted in Pipedrive stay KIT's. Returns how many were made.
  */
+const LABEL_FIELD = 'dealFields/label_ids'; // the v2 API's name for the deal's Label field
 async function sendNewLabels(names) {
   const rows = db.prepare(`SELECT id, name, color FROM labels WHERE pipedrive_id IS NULL AND pipedrive_gone = 0
     AND name IN (SELECT value FROM json_each(?))`).all(json.str(names));
@@ -611,7 +629,7 @@ async function sendNewLabels(names) {
   }
   rows.forEach((l) => {
     const o = optionFor(theirs, l);
-    if (o) db.prepare('UPDATE labels SET pipedrive_id = ?, color = ? WHERE id = ?').run(o.id, o.color || l.color, l.id);
+    if (o) db.prepare('UPDATE labels SET pipedrive_id = ?, pipedrive_name = ?, color = ? WHERE id = ?').run(o.id, o.label, o.color || l.color, l.id);
   });
   saveOptions('deal', 'label', theirs);
   return fresh.filter((l) => optionFor(theirs, l)).length;
@@ -836,7 +854,52 @@ async function send({ out, tickets }, phase) {
     }
   }
 
-  // Tags: a tag made in KIT becomes a Pipedrive label the first time it's on a deal being sent.
+  // Pipedrive's labels renamed or deleted in KIT, before any new ones: a new tag may take a name one of these gave up.
+  if (out.tagsEdit?.length || out.tagsRemove?.length) {
+    phase('Sending tags');
+    const keys = [...(out.tagsEdit || []).map((l) => `tagedit${l.id}`), ...(out.tagsRemove || []).map((l) => `tagdel${l.pipedrive_id}`)];
+    let theirs = null;
+    await attempt('Label changes', async () => { theirs = (await call(LABEL_FIELD, {}, { v2: true })).data?.options || []; });
+    if (!theirs) keys.forEach((k) => troubled.add(k));
+    for (const e of theirs ? out.tagsEdit || [] : []) {
+      await attempt(`Label ${e.name}`, async () => {
+        const l = db.prepare('SELECT * FROM labels WHERE id = ?').get(e.id);
+        const o = theirs.find((x) => x.id === l?.pipedrive_id);
+        if (!l || !o || l.name === l.pipedrive_name) return; // gone on either side, or put back: the next pull settles it
+        if (o.label !== l.pipedrive_name && o.label !== l.name) return skip(`tagedit${l.id}`, `Label ${l.name}: renamed in Pipedrive too (${o.label}), so KIT’s name wasn’t sent. Pipedrive’s name comes to KIT with the next pull.`);
+        if (o.label !== l.name) {
+          await call(`${LABEL_FIELD}/options`, {}, { method: 'PATCH', v2: true, body: [{ id: o.id, label: l.name }] });
+          o.label = l.name;
+          count('labelsRenamed');
+        }
+        db.prepare('UPDATE labels SET pipedrive_name = ? WHERE id = ?').run(l.name, l.id);
+      }, `tagedit${e.id}`);
+    }
+    for (const d of theirs ? out.tagsRemove || [] : []) {
+      await attempt(`Label ${d.name}`, async () => {
+        if (theirs.some((x) => x.id === d.pipedrive_id)) {
+          await call(`${LABEL_FIELD}/options`, {}, { method: 'DELETE', v2: true, body: [{ id: d.pipedrive_id }] });
+          theirs = theirs.filter((x) => x.id !== d.pipedrive_id);
+          count('labelsDeleted');
+        }
+        db.prepare('DELETE FROM label_deletes WHERE pipedrive_id = ?').run(d.pipedrive_id);
+      }, `tagdel${d.pipedrive_id}`);
+    }
+    if (theirs) saveOptions('deal', 'label', theirs);
+  }
+
+  // Tags: every tag made in KIT becomes a Pipedrive label, in use or not.
+  if (out.tagsNew?.length) {
+    phase('Sending tags');
+    await attempt('New tags', async () => {
+      const made = await sendNewLabels(out.tagsNew.map((l) => l.name));
+      if (made) count('labelsAdded', made);
+    });
+    // A tag Pipedrive didn't take is left be until it changes, like anything else that didn't go.
+    const left = out.tagsNew.filter((l) => !db.prepare('SELECT pipedrive_id FROM labels WHERE id = ?').get(l.id)?.pipedrive_id);
+    left.forEach((l) => troubled.add(`tag${l.id}`));
+    if (left.length && errors.length < LIST_MAX) errors.push(`Tags not made in Pipedrive: ${left.map((l) => l.name).join(', ')}`);
+  }
   for (const l of out.labels || []) {
     phase('Sending tags');
     const t = ticketById.get(l.ticket_id);

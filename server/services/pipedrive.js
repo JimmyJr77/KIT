@@ -661,11 +661,27 @@ function write({ users, pipelines, stages, deals, persons, organizations, partic
   });
   // Pipedrive's labels, with their colors. A KIT tag with the same name becomes that label. A label gone from Pipedrive
   // becomes a KIT-only tag (nothing is deleted), marked so sending never makes it a label again.
+  // What an admin changed in KIT and hasn't been sent yet stays: a label deleted here isn't brought back, and one
+  // renamed here keeps KIT's name unless Pipedrive renamed it too (then Pipedrive's name wins, on tickets as well).
+  const labelDeletes = new Set(db.prepare('SELECT pipedrive_id FROM label_deletes').all().map((x) => x.pipedrive_id));
+  if (labelField) db.prepare('DELETE FROM label_deletes WHERE pipedrive_id NOT IN (SELECT value FROM json_each(?))').run(json.str((labelField.options || []).map((o) => o.id)));
   (labelField?.options || []).forEach((o, i) => {
-    const row = db.prepare('SELECT id FROM labels WHERE pipedrive_id = ?').get(o.id) || db.prepare('SELECT id FROM labels WHERE name = ? COLLATE NOCASE').get(o.label);
-    if (row) db.prepare('UPDATE labels SET name = ?, color = ?, position = ?, pipedrive_id = ?, pipedrive_gone = 0 WHERE id = ?').run(o.label, o.color || 'gray', i, o.id, row.id);
-    else db.prepare('INSERT INTO labels (name, color, position, pipedrive_id) VALUES (?, ?, ?, ?)').run(o.label, o.color || 'gray', i, o.id);
+    if (labelDeletes.has(o.id)) return;
+    const row = db.prepare('SELECT * FROM labels WHERE pipedrive_id = ?').get(o.id) || db.prepare('SELECT * FROM labels WHERE name = ? COLLATE NOCASE').get(o.label);
+    if (!row) return db.prepare('INSERT INTO labels (name, color, position, pipedrive_id, pipedrive_name) VALUES (?, ?, ?, ?, ?)').run(o.label, o.color || 'gray', i, o.id, o.label);
+    const renamedHere = row.pipedrive_id === o.id && row.pipedrive_name != null && row.name !== row.pipedrive_name && o.label === row.pipedrive_name;
+    const name = renamedHere ? row.name : o.label;
+    db.prepare('UPDATE labels SET name = ?, color = ?, position = ?, pipedrive_id = ?, pipedrive_name = ?, pipedrive_gone = 0 WHERE id = ?').run(name, o.color || 'gray', i, o.id, o.label, row.id);
+    if (name !== row.name) {
+      db.prepare(`UPDATE tickets SET labels = (SELECT json_group_array(CASE WHEN j.value = ? COLLATE NOCASE THEN ? ELSE j.value END) FROM json_each(tickets.labels) j)
+        WHERE json_valid(labels) AND EXISTS (SELECT 1 FROM json_each(tickets.labels) j WHERE j.value = ? COLLATE NOCASE)`).run(row.name, name, row.name);
+    }
   });
+  // Deals still carry Pipedrive's names: a label renamed in KIT reads as KIT's name, and one deleted in KIT is left off.
+  const labelRenames = new Map(db.prepare('SELECT name, pipedrive_name FROM labels WHERE pipedrive_id IS NOT NULL AND pipedrive_name IS NOT NULL').all()
+    .filter((l) => l.name !== l.pipedrive_name).map((l) => [l.pipedrive_name.toLowerCase(), l.name]));
+  const labelsLeftOff = new Set(db.prepare('SELECT name FROM label_deletes').all().map((x) => String(x.name).toLowerCase()));
+  const kitLabels = (names) => names.filter((n) => !labelsLeftOff.has(n.toLowerCase())).map((n) => labelRenames.get(n.toLowerCase()) || n);
   if (labelField) db.prepare('UPDATE labels SET pipedrive_id = NULL, pipedrive_gone = 1 WHERE pipedrive_id IS NOT NULL AND pipedrive_id NOT IN (SELECT value FROM json_each(?))').run(json.str((labelField.options || []).map((o) => o.id)));
   const kitOnly = new Set(db.prepare('SELECT name FROM labels WHERE pipedrive_id IS NULL').all().map((l) => l.name.toLowerCase()));
 
@@ -750,7 +766,7 @@ function write({ users, pipelines, stages, deals, persons, organizations, partic
     if (!view.bd_director_id && d.user_id) custom.push({ name: OWNER_FIELD, value: d.user_id.name || d.owner_name || 'Unknown' });
     const other = {
       currency: d.currency && d.currency !== 'USD' ? d.currency : null,
-      labels: json.str(labelField && d.label ? fieldText(labelField, d.label).split(', ').filter(Boolean) : []),
+      labels: json.str(labelField && d.label ? kitLabels(fieldText(labelField, d.label).split(', ').filter(Boolean)) : []),
       source: (channelField && fieldText(channelField, d.channel)) || null, source_channel_id: d.channel_id || null,
       source_origin: (originField && fieldText(originField, d.origin)) || d.origin || null, source_origin_id: d.origin_id || null,
       organization_id: organization(idOf(d.org_id)), pipeline_id: pipelineId, snapshot: snapshotOf(view, tracked),

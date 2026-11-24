@@ -146,7 +146,7 @@ const KINDS = [
 ];
 const SENT = {
   stagesAdded: 'new stage', stagesRenamed: 'renamed stage', stagesDeleted: 'deleted stage',
-  deals: 'deal', dealsAdded: 'new deal', dealsLinked: ['deal linked by its title', 'deals linked by their titles'], dealsDeleted: 'deleted deal', labels: ['deal’s tags', 'deals’ tags'], labelsAdded: 'new label', notesAdded: 'new note', notesUpdated: 'edited note', notesDeleted: 'deleted note',
+  deals: 'deal', dealsAdded: 'new deal', dealsLinked: ['deal linked by its title', 'deals linked by their titles'], dealsDeleted: 'deleted deal', labels: ['deal’s tags', 'deals’ tags'], labelsAdded: 'new label', labelsRenamed: 'renamed label', labelsDeleted: 'deleted label', notesAdded: 'new note', notesUpdated: 'edited note', notesDeleted: 'deleted note',
   activitiesAdded: ['new activity', 'new activities'], activitiesUpdated: ['edited activity', 'edited activities'], activitiesDeleted: ['deleted activity', 'deleted activities'],
   filesAdded: 'file', filesDeleted: 'deleted file', project_filesDeleted: 'deleted project file', productsAdded: 'new product', productsUpdated: 'changed product', productsDeleted: 'removed product',
   catalogProductsAdded: 'new catalog product', installmentsAdded: 'new installment', installmentsUpdated: 'changed installment', installmentsDeleted: 'removed installment',
@@ -230,6 +230,24 @@ function Preview({ p }) {
             <Item key={d.ticket_id} title={d.title}>{d.changes.map((c) => `${c.label}: ${c.from} → ${c.to}`).join('; ')}</Item>
           ))}
           {more(p.deals)}
+        </Section>
+      )}
+      {p.tagsNew && (
+        <Section title="New labels" count={n(p.tagsNew)} note="tags in KIT that Pipedrive doesn’t have yet, in use or not">
+          <li>{p.tagsNew.items.map((l) => l.name).join(', ')}</li>
+          {more(p.tagsNew)}
+        </Section>
+      )}
+      {p.tagsEdit && (
+        <Section title="Renamed labels" count={n(p.tagsEdit)} note="Pipedrive labels renamed in KIT">
+          <li>{p.tagsEdit.items.map((l) => `${l.from} → ${l.name}`).join(', ')}</li>
+          {more(p.tagsEdit)}
+        </Section>
+      )}
+      {p.tagsRemove && (
+        <Section title="Deleted labels" count={n(p.tagsRemove)} note="Pipedrive labels deleted in KIT; they come off every deal in Pipedrive">
+          <li>{p.tagsRemove.items.map((l) => l.name).join(', ')}</li>
+          {more(p.tagsRemove)}
         </Section>
       )}
       {p.labels && (

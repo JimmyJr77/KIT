@@ -4,6 +4,8 @@ import { api } from '../lib/api.js';
 import { stamp } from '../lib/format.js';
 import SidePanel from '../components/SidePanel.jsx';
 import { CardTagSettings } from '../components/Labels.jsx';
+import TagManager from '../components/TagManager.jsx';
+import { useAuth } from '../lib/auth.jsx';
 import StageSettings from '../components/StageSettings.jsx';
 import GateRuleSettings from '../components/GateRuleSettings.jsx';
 import {
@@ -13,12 +15,12 @@ import {
 const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k));
 const everyArea = (rating, override = {}) => Object.fromEntries(CRITERIA.map((c) => [c.key, { score: override[c.key] ?? rating }]));
 
-const TABS = [['pwin', 'PWIN'], ['gate', 'Qualified lead'], ['tags', 'Tags on cards'], ['layout', 'Layout'], ['stages', 'Stages']];
-const SUBTITLES = { pwin: 'PWIN weights and must-have areas', gate: 'What makes a qualified lead at the Initial Gate', tags: 'The tags you see on the board’s cards', layout: 'How wide the board’s tickets are', stages: 'The board’s columns' };
+const TABS = [['pwin', 'PWIN'], ['gate', 'Qualified lead'], ['tags', 'Tags'], ['layout', 'Layout'], ['stages', 'Stages']];
+const SUBTITLES = { pwin: 'PWIN weights and must-have areas', gate: 'What makes a qualified lead at the Initial Gate', tags: 'The tags you see on the board’s cards, and the tag list', layout: 'How wide the board’s tickets are', stages: 'The board’s columns' };
 
 /**
  * BD Pipeline settings, in tabs: PWIN weights and must-have areas for the bid and win assessment, with a way back to the
- * defaults; what makes a qualified lead at the Initial Gate (admins and BD team leads); which tags each person sees on the board's cards; and the stages of the board's current `pipeline`.
+ * defaults; what makes a qualified lead at the Initial Gate (admins and BD team leads); which tags each person sees on the board's cards, with the tag list itself for admins to manage; and the stages of the board's current `pipeline`.
  */
 export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChanged, cardWidth, onCardWidth }) {
   const [saved, setSaved] = useState(null); // what the server has
@@ -90,7 +92,7 @@ export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChang
           </button>
         ))}
       </nav>
-      {tab === 'gate' ? <GateRuleSettings onSaved={onSaved} /> : tab === 'tags' ? <CardTagSettings /> : tab === 'layout' ? <LayoutSettings value={cardWidth} onChange={onCardWidth} /> : tab === 'stages' ? <StageSettings pipeline={pipeline} onChanged={onStagesChanged} /> : !draft ? <p className="text-sm text-slate-400">Loading…</p> : (
+      {tab === 'gate' ? <GateRuleSettings onSaved={onSaved} /> : tab === 'tags' ? <TagSettings onChanged={onSaved} /> : tab === 'layout' ? <LayoutSettings value={cardWidth} onChange={onCardWidth} /> : tab === 'stages' ? <StageSettings pipeline={pipeline} onChanged={onStagesChanged} /> : !draft ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className="space-y-4">
           <section className="space-y-2 rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
             <p>
@@ -178,6 +180,27 @@ export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChang
         </div>
       )}
     </SidePanel>
+  );
+}
+
+/**
+ * The Tags tab. Everyone chooses which tags show on their own cards; admins can switch to managing the tag list itself
+ * (add, rename, recolor, delete, and drag a tag to another category). `onChanged` reloads the board after a change.
+ */
+function TagSettings({ onChanged }) {
+  const { user } = useAuth();
+  const [view, setView] = useState('cards');
+  if (user.role !== 'admin') return <CardTagSettings />;
+  return (
+    <div className="space-y-4">
+      <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="tablist" aria-label="Tags">
+        {[['cards', 'On your cards'], ['manage', 'Manage tags']].map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={view === k} onClick={() => setView(k)}
+            className={`flex-1 rounded px-3 ${view === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{label}</button>
+        ))}
+      </div>
+      {view === 'manage' ? <TagManager onChanged={onChanged} /> : <CardTagSettings />}
+    </div>
   );
 }
 
