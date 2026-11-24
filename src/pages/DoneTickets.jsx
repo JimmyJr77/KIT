@@ -118,7 +118,7 @@ export default function DoneTickets() {
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-800">{t.opportunity_title}</div>
                     <div className="text-xs text-slate-500">{t.organization || `Ticket #${t.id}`}</div>
-                    <LabelList labels={t.labels} unq={t.unq} qualified={t.qualified} className="mt-1" />
+                    <LabelList labels={t.labels} unq={t.unq} qualified={t.qualified} marketing={t.marketing} className="mt-1" />
                   </td>
                   <td className="px-4 py-3 text-slate-600">{ownerOf(t) || '—'}</td>
                   <td className="px-4 py-3 text-slate-600">{t.territory_name || '—'}</td>

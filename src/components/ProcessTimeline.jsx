@@ -137,7 +137,7 @@ function TicketStrip({ ticket: t, pwin, onOpenTool, orient, onOrient }) {
           {t.director && <span>BD director <span className="font-medium text-slate-800">{fullName(t.director)}</span></span>}
           {t.territory && <span>· {t.territory}</span>}
           {t.projected_win_date && <span>· Projected win {longDate(t.projected_win_date)}</span>}
-          <LabelList labels={t.labels} unq={t.unq} qualified={t.qualified} />
+          <LabelList labels={t.labels} unq={t.unq} qualified={t.qualified} marketing={t.marketing} />
         </div>
       </div>
       <div className="flex shrink-0 flex-wrap items-stretch justify-end gap-1.5">

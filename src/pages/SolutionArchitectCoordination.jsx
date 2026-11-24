@@ -204,7 +204,7 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
       <td className="px-3 py-3">
         <div className="font-semibold text-slate-900">{r.title}</div>
         <div className="mt-0.5 text-xs text-slate-500">{[r.organization, r.owner && fullName(r.owner), r.territory?.name].filter(Boolean).join(' · ')}</div>
-        <LabelList labels={r.labels} unq={r.unq} qualified={r.qualified} className="mt-1.5" />
+        <LabelList labels={r.labels} unq={r.unq} qualified={r.qualified} marketing={r.marketing} className="mt-1.5" />
       </td>
       <td className="px-3 py-3">
         <div className="font-medium text-slate-800">{r.step_type}</div>

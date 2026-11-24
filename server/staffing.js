@@ -148,10 +148,26 @@ export function mayEditGateRule(user) {
 }
 
 /**
- * The two tags KIT works out from the Initial Gate, for an open pipeline ticket, by the stage reports count it in:
- * unq (shown as UNQUALIFIED): it sits in a qualified stage (Qualified or later) without a passed Initial Gate Review;
+ * What Marketing has done for each pipeline ticket, which KIT shows as a tag nobody sets or removes:
+ * marketing: 'requested' (Marketing requested) once a marketing request is for the ticket or names it, and 'supported'
+ *   (Marketing supported) once Marketing has finished the work ticket it made for one of those requests.
+ * Marketing dollars are a metric (the Marketing impact report), not a tag. Returns flags(ticketId) -> { marketing }.
+ */
+function marketingFlagger() {
+  const state = new Map(db.prepare(`SELECT x.ticket_id AS id, MAX(w.id IS NOT NULL AND (w.done_at IS NOT NULL OR w.lane = 'done')) AS supported
+    FROM (SELECT id AS request_id, for_ticket_id AS ticket_id FROM event_support_requests WHERE for_ticket_id IS NOT NULL
+      UNION SELECT request_id, ticket_id FROM marketing_request_tickets) x
+      JOIN event_support_requests q ON q.id = x.request_id LEFT JOIN tickets w ON w.id = q.ticket_id
+    GROUP BY x.ticket_id`).all().map((r) => [r.id, r.supported ? 'supported' : 'requested']));
+  return (id) => ({ marketing: state.get(id) || null });
+}
+
+/**
+ * The tags KIT works out for a pipeline ticket. The marketing one (see marketingFlagger) shows on any pipeline ticket.
+ * The two from the Initial Gate show on an open one, by the stage reports count it in:
+ * unq (shown as Unqualified): it sits in a qualified stage (Qualified or later) without a passed Initial Gate Review;
  * qualified (shown as Qualified): it has passed one and is still in Prospecting, ready to be moved over.
- * Nobody sets or removes either. Returns flags(ticket) -> { unq, qualified }, for rows carrying id, ticket_type, deal_status,
+ * Nobody sets or removes any of them. Returns flags(ticket) -> { unq, qualified, marketing }, for rows carrying id, ticket_type, deal_status,
  * pipeline_id and pipeline_status.
  */
 export function gateFlagger() {
@@ -161,11 +177,13 @@ export function gateFlagger() {
     WHERE step_type IN (${gates.map(() => '?').join(',')})`).all(...gates)
     .filter((p) => gatePassed({ ...p, qualification: json.parse(p.qualification, {}) }, rule)).map((p) => p.ticket_id));
   const stage = reportStager();
+  const marketing = marketingFlagger();
   return (t) => {
-    if (!t || (t.ticket_type ?? 'bid') !== 'bid' || (t.deal_status || 'open') !== 'open') return { unq: false, qualified: false };
+    if (!t || (t.ticket_type ?? 'bid') !== 'bid') return { unq: false, qualified: false, marketing: null };
+    if ((t.deal_status || 'open') !== 'open') return { unq: false, qualified: false, ...marketing(t.id) };
     const at = stage.of(t.pipeline_id ?? null, t.pipeline_status);
     const ok = passed.has(t.id);
-    return { unq: !ok && QUALIFIED_STAGES.includes(at), qualified: ok && at === 'Prospecting' };
+    return { unq: !ok && QUALIFIED_STAGES.includes(at), qualified: ok && at === 'Prospecting', ...marketing(t.id) };
   };
 }
 /** The Initial Gate Review, the event that qualifies a lead. */

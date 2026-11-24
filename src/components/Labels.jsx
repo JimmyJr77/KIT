@@ -86,19 +86,19 @@ export function LabelChip({ name, color, onRemove }) {
 }
 
 /**
- * UNQUALIFIED: the ticket sits in a qualified stage without having passed an Initial Gate Review. KIT puts it on and takes
+ * Unqualified: the ticket sits in a qualified stage without having passed an Initial Gate Review. KIT puts it on and takes
  * it off; nobody can remove it, hide it on cards, or send it to Pipedrive.
  */
 export function UnqTag() {
   return (
     <span className="inline-flex h-5 items-center rounded-full bg-red-600 px-2 text-[11px] leading-none font-bold tracking-wide whitespace-nowrap text-white"
-      title="Unqualified: in a qualified stage without a passed Initial Gate Review. It clears when the gate review passes.">UNQUALIFIED</span>
+      title="Unqualified: in a qualified stage without a passed Initial Gate Review. It clears when the gate review passes.">Unqualified</span>
   );
 }
 
 /**
  * Qualified: the ticket has passed its Initial Gate Review and is still in Prospecting, ready to be moved to Qualified. KIT
- * puts it on and takes it off (it goes once the ticket moves over); like UNQUALIFIED it can't be removed, hidden or sent.
+ * puts it on and takes it off (it goes once the ticket moves over); like Unqualified it can't be removed, hidden or sent.
  */
 export function QualifiedTag() {
   return (
@@ -108,14 +108,36 @@ export function QualifiedTag() {
 }
 
 /**
- * A row of tags, for ticket cards. With `card` (pipeline cards), tags the viewer has turned off for cards are left out.
- * `unq` or `qualified` leads the row with the UNQUALIFIED or Qualified tag, which is never left out.
+ * What Marketing has done for a pipeline ticket, worked out by KIT like Unqualified (nobody puts it on or takes it off, and
+ * it isn't sent to Pipedrive). `state` 'requested': a marketing request is for the ticket or names it. 'supported': Marketing
+ * has finished the work ticket it made for one of those requests, and the tag changes from requested to supported.
  */
-export function LabelList({ labels, className = '', card = false, unq = false, qualified = false }) {
+export function MarketingTag({ state }) {
+  if (state !== 'requested' && state !== 'supported') return null;
+  const done = state === 'supported';
+  return (
+    <span className={`inline-flex h-5 items-center rounded-full px-2 text-[11px] leading-none font-bold tracking-wide whitespace-nowrap text-white ${done ? 'bg-teal-600' : 'bg-fuchsia-600'}`}
+      title={done ? 'Marketing supported: Marketing finished the work it took on for a request on this ticket.'
+        : 'Marketing requested: a marketing request is for this ticket. It becomes Marketing supported when Marketing completes its work ticket.'}>
+      {done ? 'Marketing supported' : 'Marketing requested'}
+    </span>
+  );
+}
+
+/** The tags KIT works out for a ticket (`unq`, `qualified` and `marketing` on it), in order. Never editable. */
+export function AutoTags({ unq, qualified, marketing }) {
+  return <>{unq && <UnqTag />}{qualified && <QualifiedTag />}<MarketingTag state={marketing} /></>;
+}
+
+/**
+ * A row of tags, for ticket cards. With `card` (pipeline cards), tags the viewer has turned off for cards are left out.
+ * `unq`, `qualified` and `marketing` lead the row with the tags KIT works out, which are never left out.
+ */
+export function LabelList({ labels, className = '', card = false, unq = false, qualified = false, marketing = null }) {
   const off = useHiddenCardTags();
   const shown = (card ? (labels || []).filter((l) => !off.includes(String(l).toLowerCase())) : labels) || [];
-  if (!shown.length && !unq && !qualified) return null;
-  return <div className={`flex flex-wrap gap-1 ${className}`}>{unq && <UnqTag />}{qualified && <QualifiedTag />}{shown.map((l) => <LabelChip key={l} name={l} />)}</div>;
+  if (!shown.length && !unq && !qualified && !marketing) return null;
+  return <div className={`flex flex-wrap gap-1 ${className}`}><AutoTags unq={unq} qualified={qualified} marketing={marketing} />{shown.map((l) => <LabelChip key={l} name={l} />)}</div>;
 }
 
 /**
@@ -226,8 +248,7 @@ export function TicketLabels({ ticket, onChanged, readOnly = false }) {
   };
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {ticket.unq && <UnqTag />}
-      {ticket.qualified && <QualifiedTag />}
+      <AutoTags unq={ticket.unq} qualified={ticket.qualified} marketing={ticket.marketing} />
       {labels.map((l) => <LabelChip key={l} name={l} onRemove={readOnly ? undefined : () => save(labels.filter((x) => x !== l))} />)}
       {!readOnly && <LabelPicker value={labels} onChange={save} />}
       {error && <span className="text-[11px] text-red-600">{error}</span>}

@@ -42,7 +42,7 @@ export default function GateRuleSettings({ onSaved }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-600">
-        What an Initial Gate Review needs to come out Approved. It decides every review, and the Qualified and UNQUALIFIED tags on tickets follow it as soon as it’s saved.
+        What an Initial Gate Review needs to come out Approved. It decides every review, and the Qualified and Unqualified tags on tickets follow it as soon as it’s saved.
         {locked && ' Only an admin or a BD team lead can change it.'}
       </p>
       <fieldset disabled={locked} className="space-y-4">

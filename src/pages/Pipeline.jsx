@@ -219,7 +219,7 @@ export default function Pipeline() {
       if (stageMoved) await api.put(`/tickets/${t.id}/stage`, { pipeline_status: stage });
       if (aliasMoved) await api.put('/stages/aliases/place', { ticket_id: t.id, alias_id: aliasId });
       if (ranking) await api.put(`/tickets/${t.id}/board-position`, { before_id });
-      // A new stage changes what KIT works out for the card (the UNQUALIFIED and Qualified tags), so the board is read again.
+      // A new stage changes what KIT works out for the card (the Unqualified and Qualified tags), so the board is read again.
       if (ranking || stageMoved) load();
     } catch (e) {
       setTickets(prev);
@@ -420,15 +420,15 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
   const idle = `${Math.floor(days)} day${Math.floor(days) === 1 ? '' : 's'} since last activity (${fullStamp(t.last_activity)})`;
   const zoom = TEXT_ZOOM[useContext(CardTextSize)] || 1; // the board's text size; 1 anywhere else the card is used
   return (
-    <div style={zoom === 1 ? undefined : { zoom }} className={`relative cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pr-10 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${overlay ? 'w-60 rotate-2 shadow-xl' : ''} ${className}`}>
-      <NextStepBadge step={t.next_step} onOpen={() => onOpenStep?.(t)} className="absolute top-1/2 right-2 -translate-y-1/2" />
+    <div style={zoom === 1 ? undefined : { zoom }} className={`relative cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pr-8 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${overlay ? 'w-60 rotate-2 shadow-xl' : ''} ${className}`}>
+      <NextStepBadge small step={t.next_step} onOpen={() => onOpenStep?.(t)} className="absolute top-1/2 right-2 -translate-y-1/2" />
       <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
       <div className="mt-0.5 h-4 truncate text-xs text-slate-500">{[t.organization, t.account_type].filter(Boolean).join(' · ')}</div>
-      {(t.ticket_type === 'work' || t.priority_of || t.unq || t.qualified || t.labels?.length > 0) && (
+      {(t.ticket_type === 'work' || t.priority_of || t.unq || t.qualified || t.marketing || t.labels?.length > 0) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1 empty:hidden">
           <TicketKindTag ticket={t} />
           {!priorityOff && <PriorityTag of={t.priority_of} />}
-          <LabelList labels={t.labels} unq={t.unq} qualified={t.qualified} card />
+          <LabelList labels={t.labels} unq={t.unq} qualified={t.qualified} marketing={t.marketing} card />
         </div>
       )}
       {/* On a narrow ticket the counts drop to a line of their own, and the ticket grows, instead of running into the value and PWIN. */}
