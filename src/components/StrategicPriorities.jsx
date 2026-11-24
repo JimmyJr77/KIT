@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Building2, Star, Users, UserRound } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useStored } from '../lib/stored.js';
 import { fullName, initials } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PriorityAccounts, { AccountPanel } from './PriorityAccounts.jsx';
@@ -10,8 +11,7 @@ import NextStepQuick from './NextStepQuick.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 import { isClosed } from '../lib/lanes.js';
-const readPref = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
-const writePref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
+
 /** " · $1,200,000" over the open pipeline tickets among these; nothing when they're all work tickets. */
 const pipelineTotal = (open) => { const bids = open.filter((k) => k.ticket_type !== 'work'); return bids.length ? ` · ${money(bids.reduce((s, k) => s + (k.value || 0), 0))}` : ''; };
 const hasAny = (p) => p.list.length > 0 || p.tiers.some((t) => t.accounts.length);
@@ -22,8 +22,7 @@ const hasAny = (p) => p.list.length > 0 || p.tiers.some((t) => t.accounts.length
  * them); "By member" shows each person's own, exactly as on their dashboard (yours editable).
  */
 export default function StrategicPriorities({ members, me }) {
-  const [mode, setModeState] = useState(() => readPref('kit.priorities.strategic', 'team'));
-  const setMode = (m) => { setModeState(m); writePref('kit.priorities.strategic', m); };
+  const [mode, setMode] = useStored('priorities.strategic', 'team', { valid: (v) => typeof v === 'string', legacy: 'kit.priorities.strategic' });
   const [people, setPeople] = useState(null);
   const [error, setError] = useState('');
   const ids = members.map((m) => m.id).join(',');

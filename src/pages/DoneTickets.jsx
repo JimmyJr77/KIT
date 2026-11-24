@@ -3,13 +3,14 @@ import { Link } from 'react-router-dom';
 import { Search, ChevronUp, ChevronDown, ChevronsUpDown, CheckCircle2, ArrowLeft } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
+import { useStored, usePrune, isText, oneOf, isSort } from '../lib/stored.js';
 import { shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import { daysToArchive, ARCHIVE_AFTER_DAYS } from '../lib/lanes.js';
 import { byDirector } from '../lib/directors.js';
 import PageHeader from '../components/PageHeader.jsx';
 import DirectorSelect from '../components/DirectorSelect.jsx';
-import { LabelList, TagFilter, byTags } from '../components/Labels.jsx';
+import { LabelList, TagFilter, byTags, useStoredTags } from '../components/Labels.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 
 const money = (n) => (n == null ? '—' : usd(Math.round(n)).replace('.00', ''));
@@ -23,12 +24,14 @@ const ownerOf = (t) => (t.owner_first_name ? `${t.owner_first_name} ${t.owner_la
 export default function DoneTickets() {
   const territories = useApi('/territories');
   const [tickets, setTickets] = useState(null);
-  const [q, setQ] = useState('');
-  const [where, setWhere] = useState(''); // '' | board | archived
-  const [territory, setTerritory] = useState('');
-  const [director, setDirector] = useState('');
-  const [tags, setTags] = useState([]);
-  const [sort, setSort] = useState({ key: 'done', dir: 'desc' });
+  // The search, filters and sort are kept for this person; a territory or tag that's gone drops out.
+  const [q, setQ] = useStored('done.q', '', { valid: isText });
+  const [where, setWhere] = useStored('done.where', '', { valid: oneOf('', 'board', 'archived') }); // '' | board | archived
+  const [territory, setTerritory] = useStored('done.territory', '', { valid: isText });
+  usePrune(territory, setTerritory, territories.data ? ['none', ...territories.data.territories.map((t) => t.id)] : null);
+  const [director, setDirector] = useStored('done.director', '', { valid: isText });
+  const [tags, setTags] = useStoredTags('done');
+  const [sort, setSort] = useStored('done.sort', { key: 'done', dir: 'desc' }, { valid: isSort(['title', 'value', 'owner', 'territory', 'done']) });
   const [openId, setOpenId] = useState(null);
 
   // Work tickets only: won and lost pipeline tickets are in Closed deals.

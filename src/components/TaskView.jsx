@@ -2,17 +2,14 @@ import { useState } from 'react';
 import { ArrowLeftRight, Building2, CalendarClock, CalendarDays, Flag, LayoutList, Rows3, SquareCheck, Star, UsersRound } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
+import { useStored } from '../lib/stored.js';
 import { todayIso } from '../lib/format.js';
 import TicketTimeline from '../pages/TicketTimeline.jsx';
 import { TYPE_ICONS, WaitingIcon, when } from '../pages/TicketActivities.jsx';
 import { DataTable, StatTile } from './Charts.jsx';
 
-const readPref = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
-const writePref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
-const usePref = (key, initial) => {
-  const [value, setValue] = useState(() => readPref(key, initial));
-  return [value, (v) => { setValue(v); writePref(key, v); }];
-};
+// Kept for the person signed in (see lib/stored.js), starting from what this browser had before.
+const usePref = (key, initial) => useStored(key.replace(/^kit\./, ''), initial, { valid: (v) => typeof v === 'string', legacy: key });
 const SECTION_ICONS = { week: CalendarDays, due: CalendarClock, strategic: Star, tier: Building2 };
 
 /**

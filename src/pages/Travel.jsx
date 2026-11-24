@@ -4,6 +4,7 @@ import { Plus, RefreshCw, Upload, Settings, Settings2, ChevronUp, ChevronDown, C
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
+import { useStored, usePrune, isText, oneOf, isSort } from '../lib/stored.js';
 import { usd, upcomingQuarters, shiftQuarter } from '../lib/travelCalc.js';
 import { fullName, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -19,11 +20,15 @@ export default function Travel() {
   const users = useApi('/users');
   const teams = useApi('/teams');
   const meta = useApi('/travel/meta');
-  const [traveler, setTraveler] = useState(null);
-  const [team, setTeam] = useState('');
-  const [quarter, setQuarter] = useState('');
-  const [month, setMonth] = useState(''); // an actual spend month card's month, "2026-11": the actual costs list shows only that month
-  const [sort, setSort] = useState({ key: 'date', dir: 'desc' });
+  // The traveler, team, quarter, list and sort are kept for this person; a traveler or team that's gone, or a quarter
+  // that's dropped off the list, goes back to all of them.
+  const [traveler, setTraveler] = useStored('travel.traveler', null, { valid: Number.isInteger });
+  const [team, setTeam] = useStored('travel.team', '', { valid: isText });
+  usePrune(traveler, setTraveler, users.data ? users.data.users.map((u) => u.id) : null, null);
+  usePrune(team, setTeam, teams.data ? teams.data.teams.map((t) => t.id) : null);
+  const [quarter, setQuarter] = useStored('travel.quarter', '', { valid: (v) => /^\d{4} Q[1-4]$/.test(v) && Math.abs(Number(v.slice(0, 4)) - new Date().getFullYear()) <= 1 });
+  const [month, setMonth] = useStored('travel.month', '', { valid: (v) => /^\d{4}-\d{2}$/.test(v) }); // an actual spend month card's month, "2026-11": the actual costs list shows only that month
+  const [sort, setSort] = useStored('travel.sort', { key: 'date', dir: 'desc' }, { valid: isSort(['traveler', 'team', 'date', 'estimate']) });
   const [trips, setTrips] = useState([]);
   const [quarterTotals, setQuarterTotals] = useState({}); // each quarter's estimated and actual totals, for the Quarter column
   const [refreshing, setRefreshing] = useState(false);
@@ -33,8 +38,10 @@ export default function Travel() {
   const [locking, setLocking] = useState(null); // the trip whose estimate is open in the side panel
   const thisQuarter = useMemo(() => upcomingQuarters(1)[0], []);
   const [outlook, setOutlook] = useState(null);
-  const [outlookStart, setOutlookStart] = useState(thisQuarter); // the first of the four quarters the outlook shows
-  const [mode, setMode] = useState('estimated'); // estimated | actual: what the list below the filters shows
+  // Where the arrows have moved the outlook and the actual spend cards is kept until the quarter turns over.
+  const aQuarter = { valid: (v) => /^\d{4} Q[1-4]$/.test(v), until: thisQuarter };
+  const [outlookStart, setOutlookStart] = useStored('travel.outlook', thisQuarter, aQuarter); // the first of the four quarters the outlook shows
+  const [mode, setMode] = useStored('travel.mode', 'estimated', { valid: oneOf('estimated', 'actual') }); // estimated | actual: what the list below the filters shows
   // The cards above pick what the list shows, one card at a time: a card replaces whichever was picked before, and
   // clicking the picked card again shows everything. A card is picked when the list is in its mode with its filters.
   const estimatePicked = (q) => mode === 'estimated' && quarter === q;
@@ -44,10 +51,10 @@ export default function Travel() {
   const showMode = (k) => { setMode(k); setMonth(''); };
   const [actuals, setActuals] = useState([]);
   const [actualSummary, setActualSummary] = useState(null);
-  const [actualQuarter, setActualQuarter] = useState(thisQuarter); // the quarter the actual spend cards show
+  const [actualQuarter, setActualQuarter] = useStored('travel.actualQuarter', thisQuarter, aQuarter); // the quarter the actual spend cards show
   const [editingActual, setEditingActual] = useState(null);
   const [awaiting, setAwaiting] = useState([]); // requests waiting on my approval
-  const [onlyAwaiting, setOnlyAwaiting] = useState(false);
+  const [onlyAwaiting, setOnlyAwaiting] = useStored('travel.awaiting', false, { valid: (v) => typeof v === 'boolean' });
   const [askDefault, setAskDefault] = useState(null); // a saved trip whose travel-from might become my default
 
   // Arriving from Events with an event: open a new trip filled in from it (once the mileage rate is known).

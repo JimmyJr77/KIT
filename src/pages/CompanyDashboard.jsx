@@ -1,5 +1,5 @@
-import { useState } from 'react';
 import { useApi } from '../lib/data.js';
+import { useStored, usePrune, isText } from '../lib/stored.js';
 import { fullName, todayIso } from '../lib/format.js';
 import { StatTile, ChartCard, BarList, StackedColumns, SERIES, compact, fullMoney } from '../components/Charts.jsx';
 import BdDashboard from '../components/BdDashboard.jsx';
@@ -16,15 +16,21 @@ import { isBdDirector } from '../lib/bd.js';
  */
 export default function CompanyDashboard() {
   const teams = useApi('/teams').data?.teams || [];
-  const users = useApi('/users').data?.users || [];
-  const territories = useApi('/territories').data?.territories || [];
-  const [team, setTeam] = useState('BD');
-  const [person, setPerson] = useState('');
-  const [territory, setTerritory] = useState('');
+  const userList = useApi('/users').data?.users;
+  const users = userList || [];
+  const territoryList = useApi('/territories').data?.territories;
+  const territories = territoryList || [];
+  // The team, person and territory are kept for this person; one that's gone drops back to BD, or to everyone.
+  const [team, setTeam] = useStored('company.team', 'BD', { valid: isText });
+  const [person, setPerson] = useStored('company.person', '', { valid: isText });
+  const [territory, setTerritory] = useStored('company.territory', '', { valid: isText });
+  usePrune(team, setTeam, teams.length ? teams.map((t) => t.name) : null, 'BD');
+  usePrune(territory, setTerritory, territoryList ? territoryList.map((t) => t.id) : null);
   const teamRow = teams.find((t) => t.name === team);
   // BD's people picker lists the BD directors only (BD Team's "BD numbers" switch).
   const members = users.filter((u) => (team === 'BD' ? isBdDirector(u) : u.teams?.some((t) => t.name === team))).sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }));
   const chosen = members.find((u) => u.id === Number(person));
+  usePrune(person, setPerson, userList ? members.map((u) => u.id) : null);
   const isBd = team === 'BD';
   const pickTeam = (name) => { setTeam(name); setPerson(''); setTerritory(''); };
 

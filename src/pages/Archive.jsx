@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Archive as ArchiveIcon, RotateCcw, Trash2, Search, Layers, Upload } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useStored, isText } from '../lib/stored.js';
 import { stamp, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -24,10 +25,12 @@ const contents = (d) => {
 export default function Archive() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const tab = TABS.some(([k]) => k === params.get('tab')) ? params.get('tab') : 'bid';
+  // A link's ?tab= wins; otherwise the tab last used here.
+  const [keptTab, setKeptTab] = useStored('archive.tab', 'bid', { valid: (v) => TABS.some(([k]) => k === v) });
+  const tab = TABS.some(([k]) => k === params.get('tab')) ? params.get('tab') : keptTab;
   const [data, setData] = useState(null);
   const [selected, setSelected] = useState(new Set());
-  const [q, setQ] = useState('');
+  const [q, setQ] = useStored('archive.q', '', { valid: isText });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
 
@@ -84,7 +87,7 @@ export default function Archive() {
       <PageHeader title="Archive" subtitle="Tickets and priority cards taken off the boards. Restore them, or delete them for good.">
         <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="tablist">
           {TABS.map(([k, l]) => (
-            <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setParams({ tab: k })}
+            <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => { setKeptTab(k); setParams({ tab: k }); }}
               className={`rounded px-3 whitespace-nowrap ${tab === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>
               {l}{counts && <span className="ml-1 opacity-70">{counts[k]}</span>}
             </button>

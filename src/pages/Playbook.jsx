@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BookOpenText, CalendarClock, ChevronDown, ChevronUp, Eye, Pencil, Plus, Search, Sparkles, Trash2, Workflow, X } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useStored, isText } from '../lib/stored.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, stamp } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -8,9 +9,6 @@ import SidePanel from '../components/SidePanel.jsx';
 import Markdown, { plainText, termsRegex } from '../components/Markdown.jsx';
 import PlaybookAssistant from '../components/PlaybookAssistant.jsx';
 
-const TEAM_KEY = 'kit.playbook.team';
-const readTeam = () => { try { return Number(localStorage.getItem(TEAM_KEY)) || null; } catch { return null; } };
-const writeTeam = (id) => { try { localStorage.setItem(TEAM_KEY, String(id)); } catch { /* ignore */ } };
 
 const terms = (q) => q.trim().split(/\s+/).filter(Boolean);
 const anchor = (s) => `section-${s.id}`;
@@ -133,10 +131,11 @@ function WorkflowViewer({ src, title, onClose }) {
 export default function Playbook() {
   const { user } = useAuth();
   const [teams, setTeams] = useState([]);
-  const [teamId, setTeamId] = useState(readTeam);
+  // The team is kept for this person; one that's gone falls back below.
+  const [teamId, setTeamId] = useStored('playbook.team', null, { valid: Number.isInteger, legacy: 'kit.playbook.team' });
   const [playbook, setPlaybook] = useState(null);
   const [loadError, setLoadError] = useState('');
-  const [q, setQ] = useState('');
+  const [q, setQ] = useStored('playbook.q', '', { valid: isText });
   const [asking, setAsking] = useState(false);
   const [panel, setPanel] = useState(null); // 'new' | 'details' | a section
   const [workflow, setWorkflow] = useState(false);
@@ -150,7 +149,7 @@ export default function Playbook() {
   }, [teams, teamId, user]);
 
   const load = (id) => api.get(`/playbook/${id}`).then((d) => { setPlaybook(d); setLoadError(''); }).catch((e) => setLoadError(e.message));
-  useEffect(() => { if (teamId) { writeTeam(teamId); setPlaybook(null); load(teamId); } }, [teamId]);
+  useEffect(() => { if (teamId) { setPlaybook(null); load(teamId); } }, [teamId]);
 
   const words = useMemo(() => terms(q), [q]);
   const re = useMemo(() => termsRegex(words), [words]);

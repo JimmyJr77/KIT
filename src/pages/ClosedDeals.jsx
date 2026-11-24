@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, ChevronUp, ChevronDown, ChevronsUpDown, FolderArchive, TriangleAlert } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useStored, isText, isSort } from '../lib/stored.js';
 import { shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import { byDirector } from '../lib/directors.js';
@@ -51,10 +52,11 @@ function detail(d) {
 /** Where deals go once they're closed, sorted into In execution, Executed, Lost and Other. Select one for its timeline. */
 export default function ClosedDeals() {
   const [deals, setDeals] = useState(null);
-  const [group, setGroup] = useState('execution');
-  const [q, setQ] = useState('');
-  const [director, setDirector] = useState('');
-  const [sort, setSort] = useState({ key: 'closed', dir: 'desc' });
+  // The group, search, BD director and sort are kept for this person.
+  const [group, setGroup] = useStored('closed.group', 'execution', { valid: (v) => GROUPS.some((g) => g.key === v) });
+  const [q, setQ] = useStored('closed.q', '', { valid: isText });
+  const [director, setDirector] = useStored('closed.director', '', { valid: isText });
+  const [sort, setSort] = useStored('closed.sort', { key: 'closed', dir: 'desc' }, { valid: isSort(SORTS) });
   const [openId, setOpenId] = useState(null);
 
   const load = () => api.get('/delivery/closed').then((d) => setDeals(d.deals));

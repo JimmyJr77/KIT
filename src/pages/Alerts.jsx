@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, Undo2, ArrowRight, CheckCheck, StickyNote, Megaphone, Ticket, CalendarDays, Loader2, Handshake, Receipt, Plane } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useStored, oneOf } from '../lib/stored.js';
 import { ago, fullName, fullStamp, ticketKind, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
@@ -65,7 +66,7 @@ export default function Alerts() {
   };
 
   const unread = (alerts || []).filter((a) => !a.read).length;
-  const [tab, setTab] = useState('alerts'); // 'alerts', or 'actions' for your own recent actions
+  const [tab, setTab] = useStored('alerts.tab', 'alerts', { valid: oneOf('alerts', 'actions') }); // 'alerts', or 'actions' for your own recent actions
 
   return (
     <div className="space-y-5 p-8">

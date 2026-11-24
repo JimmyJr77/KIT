@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Search, ChevronUp, ChevronDown, ChevronsUpDown, Lightbulb, Trash2, List, Sparkles, TrendingUp } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useStored, usePrune, isText, isSort } from '../lib/stored.js';
 import { fullName, parseUtc, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
@@ -144,13 +145,15 @@ const Verdict = ({ kind }) => (
 export default function LessonsLearned() {
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState('');
-  const [view, setView] = useState('lessons');
+  // The view, search, filters and sort are kept for this person; a tag that's gone drops out of the filter.
+  const [view, setView] = useStored('lessons.view', 'lessons', { valid: (v) => VIEWS.some(([k]) => k === v) });
   const [gemini, setGemini] = useState(true);
-  const [q, setQ] = useState('');
-  const [kind, setKind] = useState('');
-  const [action, setAction] = useState('');
-  const [tagFilter, setTagFilter] = useState([]);
-  const [sort, setSort] = useState({ key: 'id', dir: 'desc' });
+  const [q, setQ] = useStored('lessons.q', '', { valid: isText });
+  const [kind, setKind] = useStored('lessons.kind', '', { valid: (v) => KINDS.some(([k]) => k === v) });
+  const [action, setAction] = useStored('lessons.action', '', { valid: (v) => ACTIONS.some(([k]) => k === v) });
+  const [tagFilter, setTagFilter] = useStored('lessons.tags', [], { valid: Array.isArray });
+  usePrune(tagFilter, setTagFilter, data ? (data.tags || []).map((t) => t.id) : null);
+  const [sort, setSort] = useStored('lessons.sort', { key: 'id', dir: 'desc' }, { valid: isSort(SORTS) });
   const [panel, setPanel] = useState(null); // 'new', or the lesson open
 
   const load = () => api.get('/lessons').then((d) => { setData(d); setLoadError(''); }).catch((e) => setLoadError(e.message));

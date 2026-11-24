@@ -4,6 +4,7 @@ import { Check, X, ShieldCheck, Trash2, UserPlus, Users, Search, Pencil } from '
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi } from '../lib/data.js';
+import { useStored, usePrune, isText } from '../lib/stored.js';
 import { fullName, stamp, fullStamp } from '../lib/format.js';
 import { TeamTags, AddTeamSelect } from '../components/TeamPicker.jsx';
 import ProfileFields from '../components/ProfileFields.jsx';
@@ -80,10 +81,12 @@ export function TeamLeadView() {
   const led = leadPages(user, teams);
   const mine = ledTeams(user);
   const [params, setParams] = useSearchParams();
-  const team = led.find((t) => t.name === params.get('team')) || led.find((t) => t.name === 'BD') || led[0];
+  // A link's ?team= wins; otherwise the team last looked at here.
+  const [keptTeam, setKeptTeam] = useStored('admin.team', '', { valid: isText });
+  const team = led.find((t) => t.name === params.get('team')) || led.find((t) => t.name === keptTeam) || led.find((t) => t.name === 'BD') || led[0];
   const leads = mine.some((t) => t.id === team.id);
   const Page = LEAD_PAGES[team.name];
-  const pick = (t) => setParams((p) => { p.set('team', t.name); return p; }, { replace: true });
+  const pick = (t) => { setKeptTeam(t.name); setParams((p) => { p.set('team', t.name); return p; }, { replace: true }); };
   return (
     <>
       {led.length > 1 && (
@@ -279,8 +282,9 @@ function RevokeButton({ email, onRevoked, onError }) {
 /** Everyone with an active account: their teams, role and contact details. */
 function DirectoryPanel({ approved, users, teams, territories, onError }) {
   const { user: me, setUser } = useAuth();
-  const [q, setQ] = useState('');
-  const [team, setTeam] = useState('');
+  const [q, setQ] = useStored('admin.directory.q', '', { valid: isText });
+  const [team, setTeam] = useStored('admin.directory.team', '', { valid: isText });
+  usePrune(team, setTeam, teams?.length ? teams.map((t) => t.id) : null);
   const [editing, setEditing] = useState(null);
   const approvedEmails = new Set((approved.data?.approved || []).map((a) => a.email.toLowerCase()));
   const all = users.data?.users || [];

@@ -13,7 +13,8 @@ import { PROCESS_TYPES, CRITICALITY, SA_FIELD, REQUEST_FIELD, milestoneOf } from
 import { DueDate, CriticalityPill, GateTag } from './TicketPlanning.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import { SaChecks, SaFiles, SaAttach, SaApprovedNote, NEEDS_ARCHITECT } from '../components/SaResponse.jsx';
-import PipelineHeader, { AddExistingButton, useOwnerTerritoryFilter } from '../components/PipelineHeader.jsx';
+import PipelineHeader, { AddExistingButton, useOwnerTerritoryFilter, useStoredTags, useStoredScope } from '../components/PipelineHeader.jsx';
+import { useStored } from '../lib/stored.js';
 
 const CRIT_RANK = Object.fromEntries(CRITICALITY.map((c, i) => [c.key, i]));
 const today = () => new Date().toLocaleDateString('en-CA');
@@ -33,8 +34,6 @@ const SORTS = {
   event: { label: 'Staffing event', compare: () => (a, b) => (PROCESS_TYPES.indexOf(a.step_type) - PROCESS_TYPES.indexOf(b.step_type)) || dueCompare(a, b) },
   name: { label: 'Opportunity', compare: () => (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }) || dueCompare(a, b) },
 };
-const saved = (key, ok, fallback) => { try { const v = localStorage.getItem(key); return ok(v) ? v : fallback; } catch { return fallback; } };
-const keep = (key, v) => { try { localStorage.setItem(key, v); } catch { /* not kept */ } };
 
 /**
  * SAC, Solution Architect Coordination: every open staffing event on a pipeline ticket (RFI responses, white papers, gate
@@ -49,7 +48,7 @@ export default function SolutionArchitectCoordination() {
   const [canRankMaster, setCanRankMaster] = useState(false);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(null); // { ticket_id, id } of the event whose pane is open, or { ticket_id, staff } to staff a ticket
-  const [showDone, setShowDone] = useState(false);
+  const [showDone, setShowDone] = useStored('sac.done', false, { valid: (v) => typeof v === 'boolean' });
   const [architects, setArchitects] = useState([]); // the solution architects who can be staffed
   const take = (d) => { setRows(d.rows); setCanRankMaster(!!d.can_rank_master); setArchitects(d.architects || []); };
   const load = () => api.get(`/sac${showDone ? '?done=1' : ''}`).then(take).catch((e) => setError(e.message));
@@ -60,15 +59,13 @@ export default function SolutionArchitectCoordination() {
   const requestSaved = (id) => { if (open && rows?.find((x) => x.id === id)?.ticket_id === open.ticket_id) setFormVersion((v) => v + 1); return load(); };
   const run = async (call) => { setError(''); try { await call(); await load(); } catch (e) { setError(e.message); } };
 
-  const [scope, setScopeState] = useState(() => saved('kit.sac.scope', (v) => ['mine', 'all'].includes(v), 'all'));
-  const setScope = (v) => { setScopeState(v); keep('kit.sac.scope', v); };
-  const filter = useOwnerTerritoryFilter(); // account owners and territories, as on the board
-  const [tags, setTags] = useState([]);
-  const [q, setQ] = useState('');
-  const [type, setType] = useState('');
+  const [scope, setScope] = useStoredScope('sac', 'kit.sac.scope');
+  const filter = useOwnerTerritoryFilter('sac'); // account owners and territories, as on the board
+  const [tags, setTags] = useStoredTags('sac');
+  const [q, setQ] = useStored('sac.q', '', { valid: (v) => typeof v === 'string' });
+  const [type, setType] = useStored('sac.type', '', { valid: (v) => PROCESS_TYPES.includes(v) });
   const nameOf = useTagName();
-  const [sort, setSortState] = useState(() => saved('kit.sac.sort', (v) => !!SORTS[v], 'priority'));
-  const setSort = (v) => { setSortState(v); keep('kit.sac.sort', v); };
+  const [sort, setSort] = useStored('sac.sort', 'priority', { valid: (v) => !!SORTS[v], legacy: 'kit.sac.sort' });
 
   const shown = useMemo(() => {
     const words = q.trim().toLowerCase();

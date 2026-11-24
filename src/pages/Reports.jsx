@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Printer, Presentation, Loader2 } from 'lucide-react';
 import { useApi } from '../lib/data.js';
+import { useStored, usePrune, isText, oneOf } from '../lib/stored.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, todayIso, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -34,18 +35,21 @@ function recentWeeks() {
  * movement, with a cheat sheet of the tickets behind it, and downloads as a single slide.
  */
 export default function Reports() {
-  const users = useApi('/users').data?.users || [];
+  const userList = useApi('/users').data?.users;
+  const users = userList || [];
   const directors = users.filter(isBdDirector);
   const [basis] = useYearBasis();
   const options = periods(basis);
-  const [view, setView] = useState('report'); // report | trends | tactical
+  // The view, period, weeks and person are kept for this person. A week picked is kept until the week turns over.
+  const [view, setView] = useStored('reports.view', 'report', { valid: oneOf('report', 'trends', 'tactical') }); // report | trends | tactical
   const weekOptions = recentWeeks();
-  const [week, setWeek] = useState(weekOptions[0]);
-  const [weeks, setWeeks] = useState(13);
-  const [choice, setChoice] = useState('q');
+  const [week, setWeek] = useStored('reports.week', weekOptions[0], { valid: (v) => weekOptions.includes(v), until: weekOptions[0] });
+  const [weeks, setWeeks] = useStored('reports.weeks', 13, { valid: oneOf(13, 26, 52) });
+  const [choice, setChoice] = useStored('reports.period', 'q', { valid: (v) => options.some((o) => o.key === v) });
   // With Focus on the report is your own (the server gives nothing else), so there's no one to pick.
   const { user } = useAuth();
-  const [picked, setDirector] = useState('');
+  const [picked, setDirector] = useStored('reports.director', '', { valid: isText });
+  usePrune(picked, setDirector, userList ? directors.map((u) => u.id) : null);
   const director = user.focus ? String(user.id) : picked;
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState('');

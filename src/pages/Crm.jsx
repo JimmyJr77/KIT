@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, Plus, ContactRound, X } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useStored, isText, oneOf } from '../lib/stored.js';
 import { ago, fullStamp } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
@@ -17,11 +18,9 @@ export default function Crm() {
   const organization = params.get('organization') || '';
   const clearOrganization = () => setParams((p) => { p.delete('organization'); return p; }, { replace: true });
   // ?tab=objectives opens on that tab (links from the dashboard); otherwise the tab last used.
-  const [tab, setTabState] = useState(() => {
-    if (['contacts', 'objectives'].includes(params.get('tab'))) return params.get('tab');
-    try { return localStorage.getItem('kit.crm.tab') || 'contacts'; } catch { return 'contacts'; }
-  });
-  const setTab = (t) => { setTabState(t); try { localStorage.setItem('kit.crm.tab', t); } catch { /* ignore */ } };
+  const [keptTab, setKeptTab] = useStored('crm.tab', 'contacts', { valid: oneOf('contacts', 'objectives'), legacy: 'kit.crm.tab' });
+  const [tab, setTabState] = useState(() => (['contacts', 'objectives'].includes(params.get('tab')) ? params.get('tab') : keptTab));
+  const setTab = (t) => { setTabState(t); setKeptTab(t); };
   const tabs = (
     <>
       <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300" role="tablist">
@@ -51,8 +50,8 @@ export default function Crm() {
 
 /** The master contact list: everyone added anywhere in the app, with how well we know them and what tickets they're on. */
 function Contacts({ tabs, organization }) {
-  const [q, setQ] = useState('');
-  const [minLevel, setMinLevel] = useState('');
+  const [q, setQ] = useStored('crm.contacts.q', '', { valid: isText });
+  const [minLevel, setMinLevel] = useStored('crm.contacts.level', '', { valid: (v) => isText(v) && /^\d*$/.test(v) });
   const [contacts, setContacts] = useState(null);
   const [open, setOpen] = useState(null); // contact id, or 'new'
 

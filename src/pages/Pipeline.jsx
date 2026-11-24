@@ -12,7 +12,8 @@ import { useApi } from '../lib/data.js';
 import { fullStamp, ticketKind } from '../lib/format.js';
 import { activityTimer, daysSince } from '../lib/activityTimer.js';
 import { usd } from '../lib/travelCalc.js';
-import PipelineHeader, { AddButton, useOwnerTerritoryFilter } from '../components/PipelineHeader.jsx';
+import PipelineHeader, { AddButton, useOwnerTerritoryFilter, useStoredTags, useStoredScope } from '../components/PipelineHeader.jsx';
+import { useStored } from '../lib/stored.js';
 import Avatar from '../components/Avatar.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel, { PIPELINE_CLOSED_HINT } from './NewTicketPanel.jsx';
@@ -65,23 +66,18 @@ const compareOn = (key, dir) => (a, b) => {
 };
 // Ties go by last entry, except in priority order, where tickets nobody has placed go newest first (as the server numbers them).
 const compareBy = ({ key, dir }) => (a, b) => compareOn(key, dir)(a, b) || (key === 'priority' ? b.id - a.id : compareOn('activity', 'desc')(a, b));
-const savedSort = () => {
-  try {
-    const v = JSON.parse(localStorage.getItem('kit.pipeline.sort.v3'));
-    if (SORTS[v?.key] && ['asc', 'desc'].includes(v.dir)) return v;
-  } catch { /* none saved */ }
-  return { key: 'next', dir: 'desc' };
-};
+const validSort = (v) => !!SORTS[v?.key] && ['asc', 'desc'].includes(v.dir);
 
 export default function Pipeline() {
   const meta = useApi('/priorities/meta');
   const sacMeta = useApi('/sac/meta');
   const [staffed, setStaffed] = useState(''); // what the last drop on a bucket did
-  const [scope, setScope] = useState('all');
-  const filter = useOwnerTerritoryFilter(); // account owners and territories
+  // What's set here (my or all tickets, search, owners, territories, tags, sort, the pipeline) is kept for this person.
+  const [scope, setScope] = useStoredScope('pipeline');
+  const filter = useOwnerTerritoryFilter('pipeline'); // account owners and territories
   const filters = filter.value;
-  const [q, setQ] = useState('');
-  const [tags, setTags] = useState([]);
+  const [q, setQ] = useStored('pipeline.q', '', { valid: (v) => typeof v === 'string' });
+  const [tags, setTags] = useStoredTags('pipeline');
   const [tickets, setTickets] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [openStep, setOpenStep] = useState(undefined); // the activity to open the ticket on, from the next-step popup
@@ -103,12 +99,9 @@ export default function Pipeline() {
     try { localStorage.setItem('kit.pipeline.minimized', JSON.stringify(next)); } catch { /* not kept */ }
     return next;
   });
-  const [sort, setSortState] = useState(savedSort);
-  const setSort = (v) => {
-    setSortState(v);
-    try { localStorage.setItem('kit.pipeline.sort.v3', JSON.stringify(v)); } catch { /* not kept */ }
-  };
-  const [pipelineKey, setPipelineKey] = useState(() => { try { return localStorage.getItem('kit.pipeline') || ''; } catch { return ''; } });
+  const [sort, setSort] = useStored('pipeline.sort', { key: 'next', dir: 'desc' }, { valid: validSort, legacy: 'kit.pipeline.sort.v3' });
+  // A stored pipeline that's gone falls back to the first one with tickets (see `pipeline` below).
+  const [pipelineKey, setPipelineKey] = useStored('pipeline.pipeline', '', { valid: (v) => typeof v === 'string', legacy: 'kit.pipeline' });
   // Re-render every minute so the activity bars keep growing.
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -142,7 +135,7 @@ export default function Pipeline() {
     return list.filter((p) => p.id != null || counts.get('kit') || list.length === 1).map((p) => ({ ...p, key: keyOf(p.id), count: counts.get(keyOf(p.id)) || 0 }));
   }, [meta.data, shown]);
   const pipeline = pipelines.find((p) => p.key === pipelineKey) || pipelines.find((p) => p.count) || pipelines[0];
-  const choosePipeline = (k) => { setPipelineKey(k); try { localStorage.setItem('kit.pipeline', k); } catch { /* not saved */ } };
+  const choosePipeline = setPipelineKey;
 
   const stages = (pipeline?.statuses || []).filter((s) => s !== 'Lost');
   const lastStage = stages[stages.length - 1];

@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Search, BriefcaseBusiness, Ticket, Trash2, UserPlus, AlertTriangle, Landmark, ReceiptText, Plus, MapPin, LayoutGrid, Table2, ChevronUp, ChevronDown, ChevronsUpDown, Upload, FileText, Loader2, FolderKanban, CheckSquare, Pin, StickyNote, ExternalLink, CalendarCheck, CheckCircle2, RefreshCw, Pencil, ArrowLeft, ChevronRight } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
+import { useStored, isText, oneOf, isSort } from '../lib/stored.js';
 import { fullName, shortDate, parseUtc, todayIso } from '../lib/format.js';
 import { CONTRACT_DOC_TYPES, ADDITIONAL_DOCS } from '../lib/process.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -30,13 +31,17 @@ const PastPop = ({ program: p, className = '' }) => (p.past_pop
 export default function Delivery() {
   const users = useApi('/users');
   const teams = useApi('/teams');
-  const [status, setStatus] = useState('active');
-  const [q, setQ] = useState('');
+  // The status, search and view are kept for this person. A link to one contract shows every status for that visit,
+  // without changing what's kept.
+  const [keptStatus, setKeptStatus] = useStored('delivery.status', 'active', { valid: oneOf('active', 'complete', 'canceled', 'held', 'all') });
+  const [linked, setLinked] = useState(false);
+  const status = linked ? 'all' : keptStatus;
+  const setStatus = (v) => { setLinked(false); setKeptStatus(v); };
+  const [q, setQ] = useStored('delivery.q', '', { valid: isText });
   const [programs, setPrograms] = useState(null);
   const [openId, setOpenId] = useState(null);
-  // Tickets (cards) or a table; the choice is remembered on this browser.
-  const [view, setViewState] = useState(() => { try { return localStorage.getItem('kit.delivery.view') || 'cards'; } catch { return 'cards'; } });
-  const setView = (v) => { setViewState(v); try { localStorage.setItem('kit.delivery.view', v); } catch { /* not saved */ } };
+  // Tickets (cards) or a table.
+  const [view, setView] = useStored('delivery.view', 'cards', { valid: oneOf('cards', 'table'), legacy: 'kit.delivery.view' });
 
   const [held, setHeld] = useState(0);
   const [meta, setMeta] = useState({ phases: [], project_labels: [], activity_types: [] });
@@ -51,7 +56,7 @@ export default function Delivery() {
     const id = Number(params.get('open'));
     const ticket = Number(params.get('ticket'));
     if (!id && !ticket) return;
-    setStatus('all');
+    setLinked(true);
     if (id) setOpenId(id); else setTicketWanted(ticket);
     setParams({}, { replace: true });
   }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -842,7 +847,7 @@ const SORTS = {
 
 /** The contracts as a sortable table. Selecting a row opens it in the side pane, as a card does. */
 function ProgramTable({ programs, openId, onOpen }) {
-  const [sort, setSort] = useState({ key: 'won', dir: 'desc' });
+  const [sort, setSort] = useStored('delivery.sort', { key: 'won', dir: 'desc' }, { valid: isSort(SORTS) });
   const get = SORTS[sort.key];
   const sign = sort.dir === 'asc' ? 1 : -1;
   const rows = [...programs].sort((a, b) => { const x = get(a), y = get(b); return x < y ? -sign : x > y ? sign : 0; });

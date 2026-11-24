@@ -5,6 +5,7 @@ import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ago, fullStamp, ticketKind } from '../lib/format.js';
 import { useApi } from '../lib/data.js';
+import { useStored, usePrune } from '../lib/stored.js';
 import { usd } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
@@ -20,28 +21,27 @@ export default function Tickets() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const teams = useApi('/teams');
-  const [scope, setScope] = useState('mine'); // mine | all
-  const [teamId, setTeamId] = useState('');
-  const [q, setQ] = useState('');
+  // What's set on this page is kept for this person: it's still set after a reload or a visit to another page.
+  const text = { valid: (v) => typeof v === 'string' };
+  const [scope, setScope] = useStored('tickets.scope', 'mine', { valid: (v) => ['mine', 'all'].includes(v) }); // mine | all
+  const [teamId, setTeamId] = useStored('tickets.team', '', text);
+  const [q, setQ] = useStored('tickets.q', '', text);
   const [tickets, setTickets] = useState(null);
   const [creating, setCreating] = useState(false);
-  // Alphabetical cards or swim lanes; the choice is remembered on this browser.
-  const [view, setViewState] = useState(() => { try { return localStorage.getItem('kit.tickets.view') || 'az'; } catch { return 'az'; } });
-  const setView = (v) => { setViewState(v); try { localStorage.setItem('kit.tickets.view', v); } catch { /* ignore */ } };
-  // Which ticket types show: bid, work, or both. Also remembered on this browser.
-  const [types, setTypesState] = useState(() => { try { return JSON.parse(localStorage.getItem('kit.tickets.types')) || ['bid', 'work']; } catch { return ['bid', 'work']; } });
-  // Group the A–Z cards by territory or BD director, and narrow to one territory. Both remembered on this browser.
-  const [groupBy, setGroupByState] = useState(() => { try { return localStorage.getItem('kit.tickets.group') || 'none'; } catch { return 'none'; } });
-  const setGroupBy = (v) => { setGroupByState(v); try { localStorage.setItem('kit.tickets.group', v); } catch { /* ignore */ } };
-  const [territory, setTerritory] = useState('');
-  const [person, setPerson] = useState(''); // someone on the chosen team (or anyone, with all teams)
+  // Alphabetical cards or swim lanes.
+  const [view, setView] = useStored('tickets.view', 'az', { valid: (v) => ['az', 'lanes'].includes(v), legacy: 'kit.tickets.view' });
+  // Which ticket types show: bid, work, or both.
+  const [types, setTypes] = useStored('tickets.types', ['bid', 'work'], { valid: (v) => Array.isArray(v) && v.every((x) => ['bid', 'work'].includes(x)), legacy: 'kit.tickets.types' });
+  // Group the A–Z cards by territory or BD director, and narrow to one territory or one person.
+  const [groupBy, setGroupBy] = useStored('tickets.group', 'none', { valid: (v) => ['none', 'territory', 'director'].includes(v), legacy: 'kit.tickets.group' });
+  const [territory, setTerritory] = useStored('tickets.territory', '', text);
+  const [person, setPerson] = useStored('tickets.person', '', text); // someone on the chosen team (or anyone, with all teams)
   const users = useApi('/users');
   const territories = useApi('/territories');
-  const toggleType = (k) => setTypesState((ts) => {
-    const next = ts.includes(k) ? ts.filter((x) => x !== k) : [...ts, k];
-    try { localStorage.setItem('kit.tickets.types', JSON.stringify(next)); } catch { /* ignore */ }
-    return next;
-  });
+  // A kept team or territory that's since been deleted goes back to all of them (PersonSelect does the same for the person).
+  usePrune(teamId, setTeamId, teams.data ? teams.data.teams.map((t) => t.id) : null);
+  usePrune(territory, setTerritory, territories.data ? ['none', ...territories.data.territories.map((t) => t.id)] : null);
+  const toggleType = (k) => setTypes((ts) => (ts.includes(k) ? ts.filter((x) => x !== k) : [...ts, k]));
   const openId = Number(params.get('open')) || null;
 
   const load = () => {

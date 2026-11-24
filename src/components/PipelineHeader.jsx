@@ -6,29 +6,38 @@ import { usd } from '../lib/travelCalc.js';
 import { useApi } from '../lib/data.js';
 import { fullName } from '../lib/format.js';
 import MultiSelect from './MultiSelect.jsx';
-import { TagFilter, LabelChip } from './Labels.jsx';
+import { TagFilter, LabelChip, useStoredTags } from './Labels.jsx';
+import { useStored, usePrune } from '../lib/stored.js';
 import { useClickAway } from './UserCombobox.jsx';
 
 /**
  * The account owner / territory filter every BD Pipeline page shares: BD account owners (everyone on the BD team,
  * alphabetical), then the territories (Pipedrive's "Account"). Values are "o:<user id>" and "t:<territory id>".
+ * `page` names the page it's on ("pipeline", "c2c"…): what's picked is kept for that page, and a pick that's gone is dropped.
  */
-export function useOwnerTerritoryFilter() {
+export function useOwnerTerritoryFilter(page) {
   const users = useApi('/users');
   const territories = useApi('/territories');
-  const [value, setValue] = useState([]);
+  const [value, setValue] = useStored(`${page}.owners`, [], { valid: (v) => Array.isArray(v) && v.every((x) => typeof x === 'string') });
   const options = useMemo(() => [
     ...(users.data?.users || []).filter((u) => (u.teams || []).some((t) => t.name === 'BD'))
       .sort((a, b) => fullName(a).localeCompare(fullName(b), undefined, { sensitivity: 'base' }))
       .map((u) => ({ value: `o:${u.id}`, label: fullName(u), group: 'BD account owners' })),
     ...(territories.data?.territories || []).map((t) => ({ value: `t:${t.id}`, label: t.name, group: 'Territories' })),
   ], [users.data, territories.data]);
+  usePrune(value, setValue, users.data && territories.data ? options.map((o) => o.value) : null);
   const owners = value.filter((f) => f.startsWith('o:')).map((f) => Number(f.slice(2)));
   const territoryIds = value.filter((f) => f.startsWith('t:')).map((f) => Number(f.slice(2)));
   /** Whether a row with this owner id and territory id passes the filter. */
   const passes = (ownerId, territoryId) => (!owners.length || owners.includes(ownerId)) && (!territoryIds.length || territoryIds.includes(territoryId));
   return { options, value, setValue, owners, territories: territoryIds, passes };
 }
+
+export { useStoredTags };
+
+const SCOPES = ['mine', 'all'];
+/** My tickets / All tickets on a BD Pipeline page, kept for that page. */
+export const useStoredScope = (page, legacy) => useStored(`${page}.scope`, 'all', { valid: (v) => SCOPES.includes(v), legacy });
 
 /**
  * The header every BD Pipeline page (Pipeline, Process, C2C, SAC) shares, so they look and work alike:

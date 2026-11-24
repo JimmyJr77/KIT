@@ -7,6 +7,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useApi, DAYS } from '../lib/data.js';
+import { useStored, usePrune } from '../lib/stored.js';
 import { fullName, initials, shortDate, todayIso, stamp } from '../lib/format.js';
 import { addDays } from '../lib/travelCalc.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -25,8 +26,10 @@ const collision = (args) => {
   return card ? [card] : hits.length ? hits : closestCenter(args);
 };
 
-const readPref = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
-const writePref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
+
+/** The Monday of this calendar week: a picked week is kept only until the week turns over. */
+const thisMonday = () => addDays(todayIso(), -((new Date().getDay() + 6) % 7));
+const MODES = ['weekly', 'strategic', 'tasks'];
 
 export default function WeeklyPriorities() {
   const { user } = useAuth();
@@ -34,31 +37,29 @@ export default function WeeklyPriorities() {
   const teams = useApi('/teams');
   const allUsers = useApi('/users');
   const meta = useApi('/priorities/meta');
-  // Open on your team's board; someone on several teams (or none) starts on All.
-  const [teamId, setTeamId] = useState(user.team_ids?.length === 1 ? user.team_ids[0] : 'all');
-  const [weekDate, setWeekDate] = useState(todayIso());
+  // The view, team, members shown and week are kept for this person, so they're still set after a reload or a visit to
+  // another page. Without anything kept: your team's board (All for someone on several teams, or none), this week.
+  const [teamId, setTeamId] = useStored('priorities.team', user.team_ids?.length === 1 ? user.team_ids[0] : 'all', { valid: (v) => v === 'all' || Number.isInteger(v) });
+  // A week picked is kept until the calendar week turns over; then the page opens on this week again.
+  const [weekDate, setWeekDate] = useStored('priorities.week', todayIso, { valid: (v) => /^\d{4}-\d{2}-\d{2}$/.test(v), until: thisMonday() });
   const [board, setBoard] = useState(null);
   const [lanes, setLanes] = useState({});
-  const [filter, setFilter] = useState([]);
-  const [mode, setModeState] = useState(() => readPref('kit.priorities.mode', 'weekly'));
-  const setMode = (m) => { setModeState(m); writePref('kit.priorities.mode', m); };
+  const [filter, setFilter] = useStored('priorities.members', [], { valid: (v) => Array.isArray(v) && v.every(Number.isInteger) });
+  const [mode, setMode] = useStored('priorities.mode', 'weekly', { valid: (v) => MODES.includes(v), legacy: 'kit.priorities.mode' });
   const strategic = mode === 'strategic';
   const tasks = mode === 'tasks';
   const weekly = !strategic && !tasks;
-  const [orientation, setOrientation] = useState(readPref('kit.priorities.orientation', 'rows'));
+  const [orientation, setOrientation] = useStored('priorities.orientation', 'rows', { valid: (v) => ['rows', 'columns'].includes(v), legacy: 'kit.priorities.orientation' });
   // The page opens on this week with the week strip tucked away; the calendar toggle brings it out for this visit.
   const [showWeeks, setShowWeeks] = useState(false);
   // Each person's lane view, as picked here; until then it's the one saved for them (a view that no longer exists,
   // like the old Support tab, falls back to priority order).
-  const [views, setViews] = useState({});
+  const [views, setViews] = useStored('priorities.views', {}, { valid: (v) => typeof v === 'object' && !Array.isArray(v) });
   const viewOf = (id) => {
-    const v = views[id] ?? readPref(`kit.priorities.view.${id}`, 'priorities');
+    const v = views[id] ?? 'priorities';
     return LANE_VIEWS.some((l) => l.key === v) ? v : 'priorities';
   };
-  const setViewsFor = (ids, v) => {
-    ids.forEach((id) => writePref(`kit.priorities.view.${id}`, v));
-    setViews((cur) => ({ ...cur, ...Object.fromEntries(ids.map((id) => [id, v])) }));
-  };
+  const setViewsFor = (ids, v) => setViews((cur) => ({ ...cur, ...Object.fromEntries(ids.map((id) => [id, v])) }));
   const [panel, setPanel] = useState(null); // { card } | { newFor: userId }
   const [thread, setThread] = useState(null); // { id } | { options } for a new question or comment
   const [activeId, setActiveId] = useState(null);
@@ -69,7 +70,10 @@ export default function WeeklyPriorities() {
 
   const load = () => api.get(`/priorities?team=${teamId}&week=${weekDate}`).then(setBoard);
   useEffect(() => { load(); }, [teamId, weekDate]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setFilter([]); }, [teamId]);
+  // A kept team that's been deleted goes back to All; kept members who've left the board drop out of the filter. (With
+  // Focus on the board is only you, so the kept members are left as they are for when Focus is off.)
+  usePrune(teamId, setTeamId, teams.data ? ['all', ...teams.data.teams.map((t) => t.id)] : null, 'all');
+  usePrune(filter, setFilter, board && !user.focus && String(board.team.id) === String(teamId) ? board.members.map((m) => m.id) : null);
 
   // Build each member's ordered lane from card assignments.
   useEffect(() => {
@@ -120,6 +124,7 @@ export default function WeeklyPriorities() {
       const offset = Math.round((Date.parse(board.weekStart) - Date.parse(board.currentWeekStart)) / (7 * 864e5));
       setWeekDate(addDays(todayIso(), offset * 7));
     }
+    setFilter([]); // the members shown belong to the team just left
     setTeamId(id);
   };
 
@@ -215,7 +220,7 @@ export default function WeeklyPriorities() {
           subtitle={strategic ? 'Priority accounts and priority tickets: the agencies, pipeline tickets and work tickets that matter most, for the team or each member.'
             : tasks ? 'How the team’s tasks stand. Choose a member for their full list, by this week, due date and strategic priority.' : "Set the week's priorities at check-in. Left-most (or top) card is the top priority. Unfinished priorities roll into the next week."}>
           {weekly && <>
-          <button className="btn" onClick={() => { const o = orientation === 'rows' ? 'columns' : 'rows'; setOrientation(o); writePref('kit.priorities.orientation', o); }}>
+          <button className="btn" onClick={() => setOrientation(orientation === 'rows' ? 'columns' : 'rows')}>
             <ArrowLeftRight size={15} /> {solo ? 'Views' : 'Members'} as {orientation === 'rows' ? 'columns' : 'rows'}
           </button>
           <button className="btn" onClick={() => navigate('/archive?tab=cards')} title="Archived priority cards"><Archive size={15} /> Archive</button>

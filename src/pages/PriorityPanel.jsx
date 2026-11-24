@@ -51,6 +51,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   const [pendingNotes, setPendingNotes] = useState([]);
   const [teamPick, setTeamPick] = useState(teamChoices?.length === 1 ? teamChoices[0].id : '');
   const picked = teamChoices?.find((t) => t.id === Number(teamPick));
+  const titleBox = useRef(null); // the Priority / next step box
   const notesDirty = useRef(false);
   const setNotesDirty = useCallback((v) => { notesDirty.current = v; }, []);
   // Support asked for on this priority. The handshake opens a request; one picked from the list opens over this panel.
@@ -84,9 +85,15 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
     if (isNew) setSubtaskId(null);
     if (!isNew || !ticketId) return;
     let live = true;
-    api.get(`/activities?ticket=${ticketId}`).then((d) => live && setOpenSteps(d.activities.filter((a) => !a.done))).catch(() => {});
+    // The ticket's own next step is the priority unless something else is typed or picked.
+    api.get(`/activities?ticket=${ticketId}`).then((d) => {
+      if (!live) return;
+      const list = d.activities.filter((a) => !a.done);
+      setOpenSteps(list);
+      if (list[0] && !titleBox.current?.value.trim()) pickStep(list[0]);
+    }).catch(() => {});
     return () => { live = false; };
-  }, [isNew, ticketId]);
+  }, [isNew, ticketId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Picking a next step fills the priority from it, to change as needed; going back to a new one clears it.
   // With a subtask `s` of that step, the priority is that subtask alone.
@@ -121,7 +128,6 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   // The priority's box grows with its text, so all of it shows however long it is; it re-fits when the panel is made wider or narrower.
-  const titleBox = useRef(null);
   const fitTitle = useCallback(() => {
     const el = titleBox.current;
     if (!el) return;
@@ -142,6 +148,7 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
     if (!form.assignees.length) return setError('Assign at least one person');
     if (isNew && teamChoices && !picked) return setError('Choose which team this is for');
     if (!ticket.opportunity_title.trim()) return setError(ticketMode === 'existing' && !ticketId ? 'Select an existing ticket' : ticket.ticket_type === 'work' ? 'Title is required' : 'Opportunity Title is required');
+    if (!form.title.trim()) return setError(subtaskId ? 'Enter the subtask' : 'Enter the priority / next step');
     if (notesDirty.current && !confirm('A note you\'re writing hasn\'t been saved and will be discarded. Continue?')) return;
     setSaving(true);
     try {

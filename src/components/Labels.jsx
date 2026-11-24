@@ -3,6 +3,7 @@ import { Tag, Plus, Check, X, Star } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useClickAway } from './UserCombobox.jsx';
 import MultiSelect from './MultiSelect.jsx';
+import { useStored, usePrune } from '../lib/stored.js';
 
 // Pipedrive's label colors: solid, with white text (dark text on yellow), as Pipedrive draws them.
 export const LABEL_COLORS = {
@@ -259,6 +260,14 @@ export function TicketLabels({ ticket, onChanged, readOnly = false }) {
 /** Whether a ticket carries any of the `selected` tags (all tickets when none are chosen). */
 export const byTags = (selected) => (t) => !selected.length
   || (t.labels || []).some((l) => selected.some((s) => s.toLowerCase() === String(l).toLowerCase()));
+
+/** A page's tag filter, kept for that page (see lib/stored.js); a tag that's been renamed or deleted drops out of it. */
+export function useStoredTags(page) {
+  const labels = useLabels();
+  const [tags, setTags] = useStored(`${page}.tags`, [], { valid: (v) => Array.isArray(v) && v.every((x) => typeof x === 'string') });
+  usePrune(tags, setTags, labels.length ? labels.map((l) => l.name) : null);
+  return [tags, setTags];
+}
 
 /** Pick any number of tags to narrow a list of tickets to those carrying at least one of them. */
 export function TagFilter({ value, onChange, className = '', hideChips = false }) {

@@ -392,9 +392,13 @@ r.post('/cards', (req, res) => {
     // It can be one open subtask of that activity rather than the whole of it.
     const subtaskId = activityId ? Number(b.subtask_id) || null : null;
     if (subtaskId && !db.prepare('SELECT 1 FROM activity_subtasks WHERE id = ? AND task_id = ?').get(subtaskId, activityId)) throw new Error('That subtask isn’t on this next step');
+    // With nothing typed and nothing picked, the priority is the ticket's own next step, not a new one named after the ticket.
+    const unnamed = !activityId && !b.title?.trim();
+    if (unnamed) activityId = openOrder(ticketId)[0] || null;
     const isNew = !activityId;
     if (isNew) {
-      const title = b.title?.trim() || db.prepare('SELECT opportunity_title FROM tickets WHERE id = ?').get(ticketId).opportunity_title;
+      const title = b.title?.trim();
+      if (!title) throw new Error('Enter the priority / next step');
       activityId = db.prepare(`INSERT INTO ticket_tasks (ticket_id, text, activity_type, assignee_id, position, created_by) VALUES (?, ?, 'Task', ?, ?, ?)`)
         .run(ticketId, title, Number(assignees[0]) || req.user.id, nextPosition(ticketId), req.user.id).lastInsertRowid;
     }
@@ -404,7 +408,7 @@ r.post('/cards', (req, res) => {
     const cardId = db.prepare(`INSERT INTO priority_cards (ticket_id, team_id, week_start, activity_id, subtask_id, is_planned, created_by)
       VALUES (?, ?, ?, ?, ?, ?, ?)`).run(ticketId, t.id, weekStart, activityId, subtaskId, isPlanned, req.user.id).lastInsertRowid;
     // An existing next step picked in the priority panel comes with its edits (title and all); placed from the ticket, as is.
-    if (isNew || 'title' in b) saveToActivity(activityId, b, req.user, subtaskId);
+    if (isNew || ('title' in b && !unnamed)) saveToActivity(activityId, b, req.user, subtaskId);
     else {
       if ('waiting_client' in b) setWaiting(activityId, b.waiting_client);
       mirrorCards(activityId);

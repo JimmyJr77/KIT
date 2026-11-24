@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Megaphone, Image as ImageIcon, FileText, Type, Download, Copy, Check, Pencil, Plus, Search, Upload, Ticket, Loader2, Trash2, Receipt, Sprout, Route } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { useStored, isText, oneOf } from '../lib/stored.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ago, fullName, fullStamp, shortDate, todayIso } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -34,13 +35,15 @@ const matches = (q, ...fields) => !q || fields.some((f) => f?.toLowerCase().incl
  */
 export default function Marketing() {
   const [params, setParams] = useSearchParams();
-  const tab = TABS.some((t) => t.key === params.get('tab')) ? params.get('tab') : 'brand';
-  const setTab = (key) => setParams({ tab: key }, { replace: true });
+  // A link's ?tab= wins; otherwise the tab last used here.
+  const [keptTab, setKeptTab] = useStored('marketing.tab', 'brand', { valid: (v) => TABS.some((t) => t.key === v) });
+  const tab = TABS.some((t) => t.key === params.get('tab')) ? params.get('tab') : keptTab;
+  const setTab = (key) => { setKeptTab(key); setParams({ tab: key }, { replace: true }); };
   const [meta, setMeta] = useState(null);
   const [assets, setAssets] = useState(null);
   const [copy, setCopy] = useState(null);
   const [requests, setRequests] = useState(null);
-  const [q, setQ] = useState('');
+  const [q, setQ] = useStored('marketing.q', '', { valid: isText });
   const [open, setOpen] = useState(null); // { type: 'asset' | 'copy' | 'request', item?, kind? }
   const [leadCount, setLeadCount] = useState(null);
 
@@ -300,7 +303,7 @@ const STATUS = {
 
 function Requests({ requests, meta, onChanged }) {
   const navigate = useNavigate();
-  const [filter, setFilter] = useState('open');
+  const [filter, setFilter] = useStored('marketing.requests', 'open', { valid: oneOf('open', 'mine', 'all') });
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState('');
   const me = useAuth().user.id;

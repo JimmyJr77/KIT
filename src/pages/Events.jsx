@@ -6,6 +6,7 @@ import { useAuth } from '../lib/auth.jsx';
 import { fullName, formatPhoneInput, shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import { useApi } from '../lib/data.js';
+import { useStored, isText, oneOf } from '../lib/stored.js';
 import MultiSelect from '../components/MultiSelect.jsx';
 import PageHeader from '../components/PageHeader.jsx';
 import Avatar from '../components/Avatar.jsx';
@@ -36,8 +37,8 @@ const asEvent = (c) => ({
 export default function Events() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [scope, setScope] = useState('upcoming');
-  const [q, setQ] = useState('');
+  const [scope, setScope] = useStored('events.scope', 'upcoming', { valid: oneOf('upcoming', 'past', 'all') });
+  const [q, setQ] = useStored('events.q', '', { valid: isText });
   const [events, setEvents] = useState(null);
   const [open, setOpen] = useState(null); // an event, or EMPTY_EVENT for a new one
   const [scout, setScout] = useState({ candidates: null, configured: true });

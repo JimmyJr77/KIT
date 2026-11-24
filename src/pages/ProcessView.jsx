@@ -7,7 +7,8 @@ import ProcessTimeline from '../components/ProcessTimeline.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel, { PIPELINE_CLOSED_HINT } from './NewTicketPanel.jsx';
 import { byTags } from '../components/Labels.jsx';
-import PipelineHeader, { AddButton, TicketSearch, useOwnerTerritoryFilter } from '../components/PipelineHeader.jsx';
+import PipelineHeader, { AddButton, TicketSearch, useOwnerTerritoryFilter, useStoredTags, useStoredScope } from '../components/PipelineHeader.jsx';
+import { useStored } from '../lib/stored.js';
 
 // The view toggle and ticket search live with the header every BD Pipeline page shares.
 export { PipelineViewToggle, TicketSearch } from '../components/PipelineHeader.jsx';
@@ -32,16 +33,27 @@ export default function ProcessView() {
   const [reloadKey, setReloadKey] = useState(0);
   const [creating, setCreating] = useState(false);
   const meta = useApi('/priorities/meta');
-  const choose = (t) => { setPicked(t); setParams(t ? { ticket: String(t.id) } : {}); };
+  // The ticket last looked at is kept for this person: coming back without one in the link opens on it again. A link
+  // that names a ticket wins, and a kept ticket that's since been deleted is let go.
+  const [keptTicket, setKeptTicket] = useStored('process.ticket', null, { valid: Number.isInteger });
+  const choose = (t) => { setPicked(t); setKeptTicket(t ? t.id : null); setParams(t ? { ticket: String(t.id) } : {}); };
   useEffect(() => {
-    if (ticketId && picked?.id !== ticketId) api.get(`/tickets?scope=all&kind=bid&ids=${ticketId}`).then((d) => setPicked(d.tickets[0] || null)).catch(() => {});
+    if (!ticketId && keptTicket) setParams({ ticket: String(keptTicket) }, { replace: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!ticketId || picked?.id === ticketId) return;
+    api.get(`/tickets?scope=all&kind=bid&ids=${ticketId}`).then((d) => {
+      setPicked(d.tickets[0] || null);
+      if (d.tickets[0]) setKeptTicket(ticketId);
+      else if (ticketId === keptTicket) { setKeptTicket(null); setParams({}, { replace: true }); }
+    }).catch(() => {});
   }, [ticketId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The search finds tickets the way the other pipeline pages list them: mine or all, by owner, territory and tag, in the order picked.
-  const [scope, setScope] = useState('all');
-  const filter = useOwnerTerritoryFilter();
-  const [tags, setTags] = useState([]);
-  const [sort, setSort] = useState({ key: 'activity', dir: 'desc' });
+  const [scope, setScope] = useStoredScope('process');
+  const filter = useOwnerTerritoryFilter('process');
+  const [tags, setTags] = useStoredTags('process');
+  const [sort, setSort] = useStored('process.sort', { key: 'activity', dir: 'desc' }, { valid: (v) => !!SORTS[v?.key] && ['asc', 'desc'].includes(v.dir) });
   const query = useMemo(() => {
     const p = new URLSearchParams({ scope });
     if (filter.owners.length) p.set('owners', filter.owners.join(','));

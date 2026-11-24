@@ -9,7 +9,8 @@ import NoteBox from '../components/NoteBox.jsx';
 import { nameOnLight } from '../lib/brand.js';
 import { byTags, LabelList } from '../components/Labels.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
-import PipelineHeader, { AddExistingButton, useOwnerTerritoryFilter } from '../components/PipelineHeader.jsx';
+import PipelineHeader, { AddExistingButton, useOwnerTerritoryFilter, useStoredTags, useStoredScope } from '../components/PipelineHeader.jsx';
+import { useStored } from '../lib/stored.js';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 // The standings someone sets while the deal is open. A deal that's paid or closed reads Closed instead.
@@ -71,13 +72,7 @@ const compareBy = ({ key, dir }) => (a, b) => {
   const c = typeof x === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { sensitivity: 'base', numeric: true });
   return (dir === 'asc' ? c : -c) || a.title.localeCompare(b.title);
 };
-const savedSort = () => {
-  try {
-    const v = JSON.parse(localStorage.getItem('kit.c2c.sort'));
-    if (SORTS[v?.key] && ['asc', 'desc'].includes(v.dir)) return v;
-  } catch { /* none saved */ }
-  return { key: 'close', dir: 'asc' };
-};
+const validSort = (v) => !!SORTS[v?.key] && ['asc', 'desc'].includes(v.dir);
 
 /**
  * Close to closing: every pipeline ticket in Under Evaluation, plus any added by hand, as a table to walk down. A ticket
@@ -97,21 +92,21 @@ export default function CloseToClosing() {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (call) => { setError(''); try { take(await call()); } catch (e) { setError(e.message); } };
 
-  const [scope, setScope] = useState('all'); // 'mine': tickets I own, direct or have a priority card on
-  const filter = useOwnerTerritoryFilter(); // account owners and territories, as on the board
-  const [q, setQ] = useState('');
-  const [tags, setTags] = useState([]);
-  const [sort, setSortState] = useState(savedSort);
-  const setSort = (v) => { setSortState(v); try { localStorage.setItem('kit.c2c.sort', JSON.stringify(v)); } catch { /* not kept */ } };
+  const [scope, setScope] = useStoredScope('c2c'); // 'mine': tickets I own, direct or have a priority card on
+  const filter = useOwnerTerritoryFilter('c2c'); // account owners and territories, as on the board
+  const [q, setQ] = useStored('c2c.q', '', { valid: (v) => typeof v === 'string' });
+  const [tags, setTags] = useStoredTags('c2c');
+  const [sort, setSort] = useStored('c2c.sort', { key: 'close', dir: 'asc' }, { valid: validSort, legacy: 'kit.c2c.sort' });
   // A column heading sorts by it; clicking the one already sorted on reverses it.
   const sortOn = (key) => setSort(sort.key === key ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: SORTS[key].dir });
 
-  const [quarter, setQuarter] = useState(''); // '' for every ticket, or the quarters its est. close date must fall in (joined with |)
   // The choices: this quarter, the next, the one after that, and this quarter and the next together.
   const quarters = useMemo(() => {
     const [now, next, after] = comingQuarters();
     return [[now, `${now} (current)`], [next, next], [after, after], [`${now}|${next}`, `${now} + ${next} (next 2)`]];
   }, []);
+  // '' for every ticket, or the quarters its est. close date must fall in (joined with |). A kept quarter that has passed is dropped.
+  const [quarter, setQuarter] = useStored('c2c.quarter', '', { valid: (v) => quarters.some(([k]) => k === v) });
   const quarterLabel = quarters.find(([k]) => k === quarter)?.[1] || quarter;
 
   const sorted = useMemo(() => {

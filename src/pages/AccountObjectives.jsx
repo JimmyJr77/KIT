@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Flag, MapPin, Plus, Trash2, CalendarDays } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
+import { useStored, usePrune, isText, oneOf } from '../lib/stored.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, shortDate, todayIso } from '../lib/format.js';
 import SidePanel from '../components/SidePanel.jsx';
@@ -21,10 +22,14 @@ const overdue = (o) => o.target_date && o.target_date < todayIso() && !['Achieve
 export default function AccountObjectives({ organization = '' }) {
   const { user } = useAuth();
   const users = useApi('/users');
-  const territories = useApi('/territories').data?.territories || [];
-  const [owner, setOwner] = useState('');
-  const [territory, setTerritory] = useState('');
-  const [status, setStatus] = useState('open');
+  const territoryList = useApi('/territories').data?.territories;
+  const territories = territoryList || [];
+  // The BD director, territory and status are kept for this person; a director or territory that's gone drops out.
+  const [owner, setOwner] = useStored('crm.objectives.owner', '', { valid: isText });
+  const [territory, setTerritory] = useStored('crm.objectives.territory', '', { valid: isText });
+  const [status, setStatus] = useStored('crm.objectives.status', 'open', { valid: oneOf('open', 'done', '') });
+  usePrune(owner, setOwner, users.data ? users.data.users.filter((u) => u.teams?.some((t) => t.name === 'BD')).map((u) => u.id) : null);
+  usePrune(territory, setTerritory, territoryList ? territoryList.map((t) => t.id) : null);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(null); // an objective, or { new: true }
 

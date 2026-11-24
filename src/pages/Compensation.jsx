@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, BadgeDollarSign, ChevronDown, ChevronUp, RotateCcw, Settings2, Trash2, TrendingUp, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
+import { useStored } from '../lib/stored.js';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, shortDate } from '../lib/format.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -29,7 +30,8 @@ const writeProjected = (on) => { try { localStorage.setItem(PROJECTED_KEY, on ? 
 export default function Compensation() {
   const { user } = useAuth();
   const thisYear = new Date().getFullYear();
-  const [year, setYear] = useState(thisYear);
+  // A plan year picked is kept until the year turns over.
+  const [year, setYear] = useStored('compensation.year', thisYear, { valid: (v) => Number.isInteger(v) && v >= thisYear - 1 && v <= thisYear + 2, until: thisYear });
   const { data, reload, error } = useApi(`/compensation?year=${year}`);
   const [showSettings, setShowSettings] = useState(false);
   const [projected, setProjected] = useState(readProjected);
