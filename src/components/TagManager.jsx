@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
-import { GripVertical, Lock, Pencil, Plus, Trash2 } from 'lucide-react';
+import { GripVertical, Lock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useLabels, setCatalog, LabelChip, TAG_CATEGORIES, LABEL_COLORS, LABEL_COLOR_NAMES } from './Labels.jsx';
 
+// Why a tag's color isn't offered when it's renamed, if it isn't.
+const fixedColor = (l) => [l.kind && 'KIT still puts this tag on tickets itself, under its new name. Its color is fixed.',
+  l.pipedrive_id && (l.kind ? 'The new name goes to Pipedrive with the next send.' : 'The new name goes to Pipedrive with the next send. Its color is set in Pipedrive.')].filter(Boolean).join(' ');
 const tickets = (n) => `${n} ticket${n === 1 ? '' : 's'}`;
-// Why a tag's name and color are fixed and it can't be deleted, if they are. Any tag can still change category.
-const lockReason = (l) => (l.kind ? 'One of KIT’s permanent tags: KIT puts it on tickets itself, so it can’t be renamed or deleted. You can still move it.' : '');
+// Why a tag can't be deleted or recolored, if it can't. It can still be renamed and moved.
+const lockReason = (l) => (l.kind ? `One of KIT’s permanent tags${l.key && l.key !== l.name ? ` (KIT’s name for it: ${l.key})` : ''}: KIT puts it on tickets itself, so it can’t be deleted. It works the same under any name.` : '');
 
 /**
  * The tag list, for admins (BD Pipeline › Settings › Tags › Manage tags): add a tag to a category, rename, recolor or
@@ -16,9 +19,10 @@ const lockReason = (l) => (l.kind ? 'One of KIT’s permanent tags: KIT puts it 
  */
 export default function TagManager({ onChanged }) {
   const labels = useLabels();
-  const [form, setForm] = useState(null); // { mode: 'add', category } or { mode: 'edit', id, pipedrive }, with name and color
+  const [form, setForm] = useState(null); // { mode: 'add', category } or { mode: 'edit', id, fixedColor: why its color can't be set }, with name and color
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [note, setNote] = useState('');
   const [dragId, setDragId] = useState(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
   const dragging = labels.find((l) => l.id === dragId);
@@ -27,6 +31,7 @@ export default function TagManager({ onChanged }) {
     if (busy) return false;
     setBusy(true);
     setError('');
+    setNote('');
     try {
       const d = await fn();
       setCatalog(d.labels);
@@ -39,13 +44,17 @@ export default function TagManager({ onChanged }) {
     if (!name) return;
     const done = form.mode === 'add'
       ? await run(() => api.post('/labels', { name, color: form.color, category: form.category }))
-      : await run(() => api.put(`/labels/${form.id}`, form.pipedrive ? { name } : { name, color: form.color }), true);
+      : await run(() => api.put(`/labels/${form.id}`, form.fixedColor ? { name } : { name, color: form.color }), true);
     if (done) setForm(null);
   };
   const remove = (l) => {
     const on = l.ticket_count ? ` It comes off ${tickets(l.ticket_count)}.` : '';
     const there = l.pipedrive_id ? ' It’s a Pipedrive label: with the next send it’s deleted in Pipedrive too, off every deal there.' : '';
     if (confirm(`Delete the “${l.name}” tag?${on}${there} This can’t be undone.`)) run(() => api.del(`/labels/${l.id}`), true);
+  };
+  // A label deleted in Pipedrive stays here as KIT's own tag; this asks for it to be made a label there again.
+  const resync = async (l) => {
+    if (await run(() => api.post(`/labels/${l.id}/resync`))) setNote(`“${l.name}” goes back to Pipedrive with the next send, along with the deals carrying it.`);
   };
   const move = (l, category) => {
     if (!l || !category || l.category === category) return;
@@ -60,10 +69,10 @@ export default function TagManager({ onChanged }) {
       <input className="input h-9 text-sm" placeholder="Name the tag…" aria-label="Tag name" value={form.name} autoFocus onFocus={(e) => e.target.select()} maxLength={40}
         onChange={(e) => setForm({ ...form, name: e.target.value })}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } if (e.key === 'Escape') { e.stopPropagation(); setForm(null); } }} />
-      {form.pipedrive ? (
+      {form.fixedColor ? (
         <p className="flex items-center gap-2 text-xs text-slate-500">
           {form.name.trim() && <LabelChip name={form.name.trim()} color={form.color} />}
-          The new name goes to Pipedrive with the next send. Its color is set in Pipedrive.
+          {form.fixedColor}
         </p>
       ) : (
         <div className="flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Tag color">
@@ -86,9 +95,10 @@ export default function TagManager({ onChanged }) {
       <p className="rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
         The tag list, for everyone. Drag a tag by its handle to move it to another category. Renaming a tag renames it on every
         ticket that carries it; deleting one takes it off them. A Pipedrive label renamed or deleted here is renamed or deleted
-        in Pipedrive with the next send. KIT’s own permanent tags keep their names, but can change category.
+        in Pipedrive with the next send. One deleted in Pipedrive stays here, marked Pipedrive deleted, until you re-sync it. KIT’s own permanent tags can be renamed and moved, and work the same under any name, but can’t be deleted.
       </p>
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {note && <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{note}</p>}
       <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={(e) => { setDragId(e.active.id); setForm(null); }}
         onDragCancel={() => setDragId(null)}
         onDragEnd={(e) => { setDragId(null); move(labels.find((l) => l.id === e.active.id), e.over?.id); }}>
@@ -97,7 +107,7 @@ export default function TagManager({ onChanged }) {
           return (
             <Category key={key} id={key} name={name} count={mine.length} from={dragging?.category}>
               {mine.map((l) => (form?.mode === 'edit' && form.id === l.id ? <FormSlot key={l.id}>{formRow()}</FormSlot> : (
-                <TagRow key={l.id} label={l} busy={busy} onEdit={() => setForm({ mode: 'edit', id: l.id, name: l.name, color: l.color, pipedrive: !!l.pipedrive_id })} onDelete={() => remove(l)} />
+                <TagRow key={l.id} label={l} busy={busy} onEdit={() => setForm({ mode: 'edit', id: l.id, name: l.name, color: l.color, fixedColor: fixedColor(l) })} onDelete={() => remove(l)} onResync={() => resync(l)} />
               )))}
               {!mine.length && !(form?.mode === 'add' && form.category === key) && <li className="px-3 py-2 text-xs text-slate-400">No tags here. Drag one in, or add one.</li>}
               {form?.mode === 'add' && form.category === key ? formRow() : (
@@ -142,7 +152,7 @@ function Category({ id, name, count, from, children }) {
 }
 
 /** A tag in its category: dragged by the handle, with rename and delete where the tag is KIT's own to change. */
-function TagRow({ label: l, busy, onEdit, onDelete }) {
+function TagRow({ label: l, busy, onEdit, onDelete, onResync }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: l.id });
   const locked = lockReason(l);
   return (
@@ -155,17 +165,23 @@ function TagRow({ label: l, busy, onEdit, onDelete }) {
           Pipedrive{l.pipedrive_name ? ' · rename waiting' : ''}
         </span>
       )}
-      <span className="ml-auto shrink-0 text-xs text-slate-400 tabular-nums">{tickets(l.ticket_count)}</span>
-      {locked ? (
-        <span className="inline-flex w-[3.75rem] shrink-0 items-center justify-end gap-1 text-[10px] text-slate-400" title={locked}>
-          <Lock size={11} /> KIT
-        </span>
-      ) : (
-        <span className="flex w-[3.75rem] shrink-0 justify-end gap-0.5">
-          <button type="button" className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" onClick={onEdit} disabled={busy} aria-label={`Rename the ${l.name} tag`} title="Rename or recolor"><Pencil size={14} /></button>
-          <button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={onDelete} disabled={busy} aria-label={`Delete the ${l.name} tag`} title="Delete"><Trash2 size={14} /></button>
+      {l.pipedrive_deleted && (
+        <span className="inline-flex shrink-0 items-center gap-1">
+          <span className="rounded bg-amber-100 px-1.5 py-px text-[10px] font-semibold text-amber-800"
+            title="This label was deleted in Pipedrive. It’s kept here as KIT’s own tag, on the tickets that carry it, and isn’t sent to Pipedrive.">Pipedrive deleted</span>
+          <button type="button" onClick={onResync} disabled={busy} title="Try to sync it again: with the next send it’s made a label in Pipedrive, and the deals carrying it get it back"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-px text-[10px] font-medium text-brand-700 ring-1 ring-brand-200 hover:bg-brand-50 disabled:opacity-50">
+            <RefreshCw size={10} /> Re-sync
+          </button>
         </span>
       )}
+      <span className="ml-auto shrink-0 text-xs text-slate-400 tabular-nums">{tickets(l.ticket_count)}</span>
+      <span className="flex w-[3.75rem] shrink-0 items-center justify-end gap-0.5">
+        <button type="button" className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" onClick={onEdit} disabled={busy} aria-label={`Rename the ${l.name} tag`} title={locked ? 'Rename' : 'Rename or recolor'}><Pencil size={14} /></button>
+        {locked
+          ? <span className="p-1 text-slate-300" title={locked} aria-label="Can’t be deleted"><Lock size={14} /></span>
+          : <button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={onDelete} disabled={busy} aria-label={`Delete the ${l.name} tag`} title="Delete"><Trash2 size={14} /></button>}
+      </span>
     </li>
   );
 }

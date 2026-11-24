@@ -9,7 +9,7 @@ import { usd } from '../lib/travelCalc.js';
 import Avatar from './Avatar.jsx';
 import SidePanel from './SidePanel.jsx';
 import MultiSelect from './MultiSelect.jsx';
-import { LabelChip } from './Labels.jsx';
+import { LabelChip, tagName } from './Labels.jsx';
 
 const longDate = (iso) => shortDate(iso, { month: 'short', day: 'numeric', year: 'numeric' });
 const stateOf = (l) => (l.ticket_id ? 'ticket' : l.closed_at ? 'closed' : l.claimed_by ? 'claimed' : 'open');
@@ -97,7 +97,7 @@ export default function MarketingLeads({ onCount }) {
                     <button type="button" className="btn-ghost p-1.5 text-slate-500" onClick={() => setEditing(l)} title="Edit lead" aria-label={`Edit ${l.title}`}><Pencil size={14} /></button>
                   )}
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1"><LabelChip name="Marketing Lead" />{l.event_id && <LabelChip name="Event Lead" />}</div>
+                <div className="mt-2 flex flex-wrap gap-1"><LabelChip name={tagName('Marketing Lead')} />{l.event_id && <LabelChip name={tagName('Event Lead')} />}</div>
                 {l.contact && <p className="mt-2 text-xs text-slate-600"><span className="font-medium text-slate-500">Contact:</span> {l.contact}</p>}
                 {l.details && <p className="mt-2 flex-1 text-sm whitespace-pre-wrap text-slate-700">{l.details}</p>}
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
@@ -135,7 +135,7 @@ export default function MarketingLeads({ onCount }) {
                   <div className="mt-2">
                     <MultiSelect options={(tickets || []).filter((t) => !t.archived).map((t) => ({ value: t.id, label: t.opportunity_title, sub: t.organization || undefined }))}
                       value={[]} onChange={(v) => makeTicket(l, v[0])} placeholder={tickets ? 'Search pipeline tickets…' : 'Loading…'} />
-                    <p className="mt-1 text-[11px] text-slate-400">The ticket is tagged Marketing Lead{l.event_id ? ' and Event Lead' : ''}.</p>
+                    <p className="mt-1 text-[11px] text-slate-400">The ticket is tagged {tagName('Marketing Lead')}{l.event_id ? ` and ${tagName('Event Lead')}` : ''}.</p>
                   </div>
                 )}
               </li>

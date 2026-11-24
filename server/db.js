@@ -1789,23 +1789,38 @@ CREATE TABLE IF NOT EXISTS comp_projections (
 // ---- Marketing tracking: lead source tags, what each marketing request is for, the dollars behind it, the opportunities
 // tied to an event, meetings, and the leads Marketing feeds the team.
 
-// Tags KIT keeps for good (they can't be renamed or deleted), in categories: Process (one per staffing event: RFI, Paper, SOW, ROM…), Source
-// (the four lead sources, which share one color) and Other, where Google Solution (we're integrating Google, but Google
+// Tags KIT keeps for good (they can't be deleted; an admin can rename them), in categories: Process (one per staffing event: RFI, Paper, SOW, ROM…), Source
+// (the four lead sources, which share one color) and Other, where GOOGLE DEAL (we're integrating Google, but Google
 // didn't bring the lead) sits with every ordinary tag. They're tags like any other, so a Pipedrive
 // label of the same name takes one over on the next pull and it then syncs both ways.
 addColumn('labels', 'kind', 'TEXT'); // lead | process | solution; null for ordinary tags
 // 1 once a tag's label was deleted in Pipedrive: it stays a KIT tag and is never sent back as a new label.
 addColumn('labels', 'pipedrive_gone', 'INTEGER NOT NULL DEFAULT 0');
-export const LEAD_TAGS = { event: 'Event Lead', google: 'Google Lead', marketing: 'Marketing Lead', bd: 'BD Lead' };
-export const GOOGLE_SOLUTION_TAG = 'Google Solution';
+// Each of these tags has a fixed key (the name KIT gave it), which is what the code knows it by. An admin can rename
+// one (BD Pipeline › Settings › Tags): the key stays, and tagName() gives the name it goes by now, which is what tickets carry.
+addColumn('labels', 'key', 'TEXT');
+/** The name a built-in tag goes by now, from its fixed key. */
+export const tagName = (key) => db.prepare('SELECT name FROM main.labels WHERE key = ?').get(key)?.name || key;
+/** The fixed key of the built-in tag that goes by this name, or null for any other tag. */
+export const tagKey = (name) => db.prepare('SELECT key FROM main.labels WHERE name = ? COLLATE NOCASE').get(String(name ?? ''))?.key || null;
+const LEAD_TAG_KEYS = { event: 'Event Lead', google: 'Google Lead', marketing: 'Marketing Lead', bd: 'BD Lead' };
+/** The lead source tags by source, each under the name it goes by now (read when used, so a rename is followed). */
+export const LEAD_TAGS = Object.defineProperties({}, Object.fromEntries(Object.entries(LEAD_TAG_KEYS).map(([k, key]) => [k, { enumerable: true, get: () => tagName(key) }])));
+/**
+ * The tag that marks a Google deal, kept in step with the deal's Google Solution field (leads.js): Pipedrive's GOOGLE
+ * DEAL label. This is its fixed key; googleDealTag() is the name it goes by now. It took over from a tag of KIT's own
+ * called Google Solution, which was removed (off every ticket and out of the tag list) when GOOGLE DEAL took over.
+ */
+export const GOOGLE_DEAL_TAG = 'GOOGLE DEAL';
+export const googleDealTag = () => tagName(GOOGLE_DEAL_TAG);
 export const LEAD_TAG_COLOR = 'purple';
 // Process tags say which staffing event a pursuit is in (RFI, Paper, Initial Gate, Final Gate, SOO, SOW, ROM, Proposal), one per
-// event (src/lib/process.js). RFI is Pipedrive's label where it has one; the rest are KIT's.
+// event (src/lib/process.js). RFI is Pipedrive's label where it has one; the rest are KIT's. These are their keys.
 export const PROCESS_TAGS = PROCESS_TAG_NAMES;
 /** The category a tag is shown under: Process, Source (where the lead came from), or Other. */
 export const tagCategory = (kind) => ({ process: 'process', lead: 'source' }[kind] || 'other');
 // Where an admin has put a tag (BD Pipeline › Settings › Tags); null leaves it under the category its kind gives it.
-addColumn('labels', 'category', 'TEXT'); // process | source | other
+addColumn('labels', 'category', 'TEXT'); // process | source | measurable (Top Measurables) | other
 // A Pipedrive label renamed or deleted in KIT (admins, same place) is renamed or deleted in Pipedrive with the next send.
 // pipedrive_name is the name Pipedrive has: a different name here is a rename waiting to go. A deleted label waits in
 // label_deletes, which also keeps pulls from bringing it back.
@@ -1819,13 +1834,33 @@ CREATE TABLE IF NOT EXISTS main.label_deletes (
 );
 `);
 {
-  const keep = db.prepare(`INSERT INTO main.labels (name, color, position, kind) VALUES (@name, @color, (SELECT COALESCE(MAX(position) + 1, 0) FROM main.labels), @kind)
-    ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, color = CASE WHEN pipedrive_id IS NULL AND excluded.kind != 'process' THEN excluded.color ELSE color END`);
-  PROCESS_TAGS.forEach((name) => keep.run({ name, color: 'gray', kind: 'process' }));
+  // Each built-in tag is found by its key, whatever it's called now; one from before keys, by the name KIT gave it.
+  const insert = db.prepare(`INSERT INTO main.labels (name, color, position, kind, key) VALUES (@name, @color, (SELECT COALESCE(MAX(position) + 1, 0) FROM main.labels), @kind, @name)`);
+  const update = db.prepare(`UPDATE main.labels SET kind = @kind, key = @name, color = CASE WHEN pipedrive_id IS NULL AND @kind != 'process' THEN @color ELSE color END WHERE id = @id`);
+  const keep = (t) => {
+    const row = db.prepare('SELECT id FROM main.labels WHERE key = ?').get(t.name) || db.prepare('SELECT id FROM main.labels WHERE name = ? COLLATE NOCASE AND key IS NULL').get(t.name);
+    if (row) update.run({ ...t, id: row.id }); else insert.run(t);
+  };
+  PROCESS_TAGS.forEach((name) => keep({ name, color: 'gray', kind: 'process' }));
   // Process tags from before staffing events (White Paper, RFP) become ordinary tags: tickets keep them, and they can be deleted.
-  db.prepare(`UPDATE main.labels SET kind = NULL WHERE kind = 'process' AND name NOT IN (${PROCESS_TAGS.map(() => '?').join(', ')})`).run(...PROCESS_TAGS);
-  Object.values(LEAD_TAGS).forEach((name) => keep.run({ name, color: LEAD_TAG_COLOR, kind: 'lead' }));
-  keep.run({ name: GOOGLE_SOLUTION_TAG, color: 'yellow', kind: 'solution' });
+  db.prepare(`UPDATE main.labels SET kind = NULL, key = NULL WHERE kind = 'process' AND (key IS NULL OR key NOT IN (${PROCESS_TAGS.map(() => '?').join(', ')}))`).run(...PROCESS_TAGS);
+  Object.values(LEAD_TAG_KEYS).forEach((name) => keep({ name, color: LEAD_TAG_COLOR, kind: 'lead' }));
+  // The tag GOOGLE DEAL took over from, KIT's own Google Solution, goes: off every ticket and out of the tag list, once.
+  // If Pipedrive had been sent it as a label, that label is deleted there with the next send, like any tag deleted in KIT.
+  if (!getSetting('google_solution_tag_removed')) {
+    const old = db.prepare("SELECT * FROM main.labels WHERE key = 'Google Solution'").get()
+      || db.prepare("SELECT * FROM main.labels WHERE name = 'Google Solution' COLLATE NOCASE AND key IS NULL").get();
+    if (old) {
+      db.transaction(() => {
+        db.prepare(`UPDATE main.tickets SET labels = (SELECT json_group_array(j.value) FROM json_each(tickets.labels) j WHERE j.value != ? COLLATE NOCASE)
+          WHERE json_valid(labels) AND EXISTS (SELECT 1 FROM json_each(tickets.labels) j WHERE j.value = ? COLLATE NOCASE)`).run(old.name, old.name);
+        if (old.pipedrive_id) db.prepare('INSERT OR REPLACE INTO main.label_deletes (pipedrive_id, name) VALUES (?, ?)').run(old.pipedrive_id, old.pipedrive_name || old.name);
+        db.prepare('DELETE FROM main.labels WHERE id = ?').run(old.id);
+      })();
+    }
+    setSetting('google_solution_tag_removed', '1');
+  }
+  keep({ name: GOOGLE_DEAL_TAG, color: 'yellow', kind: 'solution' });
 }
 // Nothing already on a ticket is retagged: these are new options, and people choose which tickets get them.
 

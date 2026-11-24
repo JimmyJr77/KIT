@@ -8,7 +8,7 @@ import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { fullName, stamp } from '../lib/format.js';
-import { LabelList, byTags } from '../components/Labels.jsx';
+import { LabelList, byTags, tagName, useTagName } from '../components/Labels.jsx';
 import { PROCESS_TYPES, CRITICALITY, SA_FIELD, REQUEST_FIELD, milestoneOf } from '../lib/process.js';
 import { DueDate, CriticalityPill, GateTag } from './TicketPlanning.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
@@ -66,6 +66,7 @@ export default function SolutionArchitectCoordination() {
   const [tags, setTags] = useState([]);
   const [q, setQ] = useState('');
   const [type, setType] = useState('');
+  const nameOf = useTagName();
   const [sort, setSortState] = useState(() => saved('kit.sac.sort', (v) => !!SORTS[v], 'priority'));
   const setSort = (v) => { setSortState(v); keep('kit.sac.sort', v); };
 
@@ -109,7 +110,7 @@ export default function SolutionArchitectCoordination() {
         extra={<>
           <select className="input h-[38px] w-48 py-0" aria-label="Show one staffing event" value={type} onChange={(e) => setType(e.target.value)}>
             <option value="">Every staffing event</option>
-            {PROCESS_TYPES.map((t) => <option key={t} value={t}>{t} ({milestoneOf(t).tag})</option>)}
+            {PROCESS_TYPES.map((t) => <option key={t} value={t}>{t} ({nameOf(milestoneOf(t).tag)})</option>)}
           </select>
           <label className="flex items-center gap-1.5 text-sm text-slate-600">
             <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Show done instead
@@ -207,7 +208,7 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
       </td>
       <td className="px-3 py-3">
         <div className="font-medium text-slate-800">{r.step_type}</div>
-        <div className="mt-0.5 text-[11px] text-slate-400">{def.phase}{def.tag ? ` · ${def.tag}` : ''}</div>
+        <div className="mt-0.5 text-[11px] text-slate-400">{def.phase}{def.tag ? ` · ${tagName(def.tag)}` : ''}</div>
         {r.decision && !def.qualifies && <div className="mt-1 text-[11px] font-semibold text-slate-600">{r.decision}</div>}
         <GateTag gate={r.gate} className="mt-1" />
       </td>
@@ -273,7 +274,7 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
  * process tag comes off the ticket; documents and notes stay on the ticket. The ticket's owner or an admin can do it.
  */
 const remove = (r, run) => {
-  const tag = milestoneOf(r.step_type).tag;
+  const tag = tagName(milestoneOf(r.step_type).tag);
   if (!confirm(`Remove ${r.step_type} from “${r.title}”?\n\nThe staffing event is deleted with its written work and architects, and the ${tag} tag comes off the ticket. Its documents and notes stay on the ticket. This can’t be undone.`)) return;
   run(() => api.del(`/tickets/process/${r.id}`));
 };

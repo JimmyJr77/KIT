@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { tagName } from '../components/Labels.jsx';
 import { useNavigate } from 'react-router-dom';
 import { Megaphone, Ticket, Loader2, Plus, Pencil, Trash2, Clock, MapPin, Handshake, Target, X, CalendarPlus, Paperclip } from 'lucide-react';
 import { api } from '../lib/api.js';
@@ -225,7 +226,7 @@ export function OpportunitiesSection({ event, onUpdated }) {
                 <span className="text-xs text-slate-500">{[t.organization, t.director, t.value != null && money(t.value)].filter(Boolean).join(' · ')}</span>
                 {t.deal_status !== 'open' && <span className={`rounded px-1.5 text-[11px] font-semibold capitalize ${STATUS_CHIP[t.deal_status]}`}>{t.deal_status === 'won' ? 'paid' : t.deal_status}</span>}
                 <label className={`ml-auto flex items-center gap-1 text-[11px] ${mayMark ? 'text-slate-600' : 'text-slate-400'}`}
-                  title={mayMark ? 'The lead began at this event: tags the ticket Event Lead' : 'Only the ticket’s owner, Marketing or an admin can say where a lead came from'}>
+                  title={mayMark ? `The lead began at this event: tags the ticket ${tagName('Event Lead')}` : 'Only the ticket’s owner, Marketing or an admin can say where a lead came from'}>
                   <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={t.sourced} disabled={busy || !mayMark}
                     onChange={(e) => run(() => api.put(`/events/${event.id}/tickets/${t.id}`, { sourced: e.target.checked }))} />
                   Came out of this event

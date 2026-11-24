@@ -7,7 +7,7 @@ import { fullName, stamp, fullStamp, shortDate, ticketKind } from '../lib/format
 import { usd } from '../lib/travelCalc.js';
 import Avatar from '../components/Avatar.jsx';
 import SidePanel from '../components/SidePanel.jsx';
-import { TicketLabels } from '../components/Labels.jsx';
+import { TicketLabels, tagName } from '../components/Labels.jsx';
 import MentionTextarea, { MentionText } from '../components/MentionTextarea.jsx';
 import { ReplyBox } from './CommentPanel.jsx';
 import { PlanRail, PlanDrawer, TicketAccess, ViewOnlyNote } from './TicketPlanning.jsx';
@@ -183,7 +183,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
                   <button type="button" disabled={gateBusy} onClick={() => openGate(gate.type, canEdit)}
                     className="inline-flex items-center gap-1.5 rounded-md bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900 ring-1 ring-amber-400 transition hover:bg-amber-200 disabled:opacity-60"
                     title={`The next review gate for a ticket in ${t.report_stage || t.pipeline_status}: opens the ${gate.type}, starting one if there isn’t one yet (no due date needed)`}>
-                    <Flag size={13} /> {gate.tag}
+                    <Flag size={13} /> {tagName(gate.tag)}
                   </button>
                 )}
                 <button type="button" className="btn-primary px-2.5 py-1 text-xs" onClick={() => setProcessOpen(true)}>Process view</button>

@@ -146,7 +146,7 @@ scheduleRollover();
 // Conflicts on which both sides hold the same value have nothing to settle (a send once recorded them when a field had no baseline yet).
 try { const n = dropAgreed(); if (n) console.log(`Pipedrive: dropped ${n} conflicts on which KIT and Pipedrive agree`); } catch (e) { console.error('Pipedrive conflicts:', e.message); }
 
-// The Google Solution tag and the deal's Google Solution field are kept in step (see linkGoogleSolution).
+// The GOOGLE DEAL tag and the deal's Google Solution field are kept in step (see linkGoogleSolution).
 try { const n = linkGoogleSolution(); if (n) console.log(`Google Solution: brought ${n} tickets' tag and field in step`); } catch (e) { console.error('Google Solution:', e.message); }
 
 const port = Number(process.env.PORT) || 3001;

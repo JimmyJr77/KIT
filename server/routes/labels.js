@@ -1,9 +1,10 @@
 // Tags: Pipedrive's deal labels, plus any made in KIT, each with a color. Anyone can tag a ticket or make a tag;
 // admins manage the list (BD Pipeline › Settings › Tags): rename, recolor and delete tags, and move any tag from one
-// category (Process, Source or Other) to another. A Pipedrive label renamed or deleted here is renamed or deleted in
+// category (Process, Source, Top Measurables or Other) to another. A Pipedrive label renamed or deleted here is renamed or deleted in
 // Pipedrive with the next send (pipedriveSend.js), and until then pulls leave KIT's change alone (pipedrive.js); its
 // color is Pipedrive's, which its API doesn't let KIT set. KIT's own process and lead source tags and Google Solution
-// (labels.kind) are permanent: KIT puts them on tickets by name, so they can't be renamed, recolored or deleted.
+// (labels.kind) are permanent: KIT puts them on tickets itself, so they can't be recolored or deleted. They can be
+// renamed: KIT knows each by its fixed key (labels.key, see tagName in db.js), so it works the same under any name.
 import { Router } from 'express';
 import { db, tagCategory, PROCESS_TAGS } from '../db.js';
 import { requireAdmin } from '../auth.js';
@@ -12,14 +13,14 @@ const r = Router();
 export const LABEL_COLORS = ['green', 'blue', 'red', 'yellow', 'purple', 'gray', 'orange', 'brown', 'pink', 'dark-gray'];
 
 // Process tags in their own order (RFI, Paper, Initial Gate … Proposal), then the lead sources, then everything else.
-const ORDER = { process: 0, source: 1, other: 2 };
+const ORDER = { process: 0, source: 1, measurable: 2, other: 3 };
 const CATEGORIES = Object.keys(ORDER);
-const processOrder = (l) => { const i = PROCESS_TAGS.indexOf(l.name); return i < 0 ? PROCESS_TAGS.length : i; };
-const list = () => db.prepare(`SELECT l.id, l.name, l.color, l.pipedrive_id, l.pipedrive_name, l.kind, l.category AS placed,
+const processOrder = (l) => { const i = PROCESS_TAGS.indexOf(l.key); return i < 0 ? PROCESS_TAGS.length : i; };
+const list = () => db.prepare(`SELECT l.id, l.name, l.color, l.pipedrive_id, l.pipedrive_name, l.pipedrive_gone, l.kind, l.key, l.category AS placed,
     (SELECT COUNT(*) FROM tickets t, json_each(CASE WHEN json_valid(t.labels) THEN t.labels ELSE '[]' END) j WHERE j.value = l.name COLLATE NOCASE) AS ticket_count
   FROM labels l ORDER BY l.pipedrive_id IS NULL, l.position, l.name COLLATE NOCASE`).all()
   // pipedrive_name: what Pipedrive still calls a label renamed here, until the rename is sent.
-  .map(({ placed, pipedrive_name: theirs, ...l }) => ({ ...l, category: CATEGORIES.includes(placed) ? placed : tagCategory(l.kind),
+  .map(({ placed, pipedrive_name: theirs, pipedrive_gone: gone, ...l }) => ({ ...l, pipedrive_deleted: !!gone && !l.pipedrive_id, category: CATEGORIES.includes(placed) ? placed : tagCategory(l.kind),
     pipedrive_name: l.pipedrive_id && theirs != null && theirs !== l.name ? theirs : null }))
   .sort((a, b) => ORDER[a.category] - ORDER[b.category] || (a.category === 'process' ? processOrder(a) - processOrder(b) : 0));
 
@@ -37,18 +38,18 @@ r.post('/', (req, res) => {
 });
 
 /**
- * Admins. Body: any of { name, color, category }. Any tag can move to another category. The permanent ones can't be
- * renamed or recolored. Tickets carrying a tag follow its rename; a Pipedrive label's rename goes to Pipedrive with the
+ * Admins. Body: any of { name, color, category }. Any tag can move to another category. The permanent ones can be
+ * renamed (their key stays, so KIT still knows them) but not recolored. Tickets carrying a tag follow its rename; a Pipedrive label's rename goes to Pipedrive with the
  * next send, and its color stays Pipedrive's.
  */
 r.put('/:id', requireAdmin, (req, res) => {
   const l = db.prepare('SELECT * FROM labels WHERE id = ?').get(req.params.id);
   if (!l) return res.status(404).json({ error: 'Tag not found' });
   const b = req.body || {};
-  if ('category' in b && !CATEGORIES.includes(b.category)) return res.status(400).json({ error: 'Pick Process, Source or Other' });
+  if ('category' in b && !CATEGORIES.includes(b.category)) return res.status(400).json({ error: 'Pick Process, Source, Top Measurables or Other' });
   const name = 'name' in b ? String(b.name || '').trim().slice(0, 40) : l.name;
   const color = LABEL_COLORS.includes(b.color) ? b.color : l.color;
-  if ((name !== l.name || color !== l.color) && l.kind) return res.status(400).json({ error: 'This is one of KIT’s permanent tags; it can’t be renamed or recolored' });
+  if (color !== l.color && l.kind) return res.status(400).json({ error: 'This is one of KIT’s permanent tags; its color can’t be changed' });
   if (color !== l.color && l.pipedrive_id) return res.status(400).json({ error: 'This label’s color is set in Pipedrive' });
   if (!name) return res.status(400).json({ error: 'Name the tag' });
   if (name.toLowerCase() !== l.name.toLowerCase() && db.prepare('SELECT 1 FROM labels WHERE name = ? COLLATE NOCASE').get(name)) {
@@ -60,6 +61,23 @@ r.put('/:id', requireAdmin, (req, res) => {
       db.prepare(`UPDATE tickets SET labels = (SELECT json_group_array(CASE WHEN j.value = ? COLLATE NOCASE THEN ? ELSE j.value END) FROM json_each(tickets.labels) j)
         WHERE json_valid(labels) AND EXISTS (SELECT 1 FROM json_each(tickets.labels) j WHERE j.value = ? COLLATE NOCASE)`).run(l.name, name, l.name);
     }
+  })();
+  res.json({ labels: list() });
+});
+
+/**
+ * Admins. A label deleted in Pipedrive stays in KIT as a tag of KIT's own, marked so it isn't sent back (pipedrive.js).
+ * This takes the mark off: with the next send it's made a label in Pipedrive again (or linked to one there with its
+ * name), and the Pipedrive deals of the tickets carrying it get it back.
+ */
+r.post('/:id/resync', requireAdmin, (req, res) => {
+  const l = db.prepare('SELECT * FROM labels WHERE id = ?').get(req.params.id);
+  if (!l) return res.status(404).json({ error: 'Tag not found' });
+  if (l.pipedrive_id || !l.pipedrive_gone) return res.status(400).json({ error: 'This tag isn’t one that was deleted in Pipedrive' });
+  db.transaction(() => {
+    db.prepare('UPDATE labels SET pipedrive_gone = 0 WHERE id = ?').run(l.id);
+    db.prepare(`UPDATE tickets SET labels_pending = 1 WHERE pipedrive_id IS NOT NULL AND json_valid(labels)
+      AND EXISTS (SELECT 1 FROM json_each(tickets.labels) j WHERE j.value = ? COLLATE NOCASE)`).run(l.name);
   })();
   res.json({ labels: list() });
 });

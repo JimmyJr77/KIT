@@ -30,8 +30,18 @@ export function useLabels() {
   return labels || [];
 }
 
+// KIT's built-in tags (process, lead source, Google Solution) each have a fixed `key`, the name KIT gave it, which is
+// what the code knows it by (src/lib/process.js's `tag`, for one). An admin can rename them, so show tagName(key).
+/** The name a built-in tag goes by now, from its key (the key itself until the tag list has loaded). */
+export const tagName = (key) => catalog?.find((l) => l.key === key)?.name || key;
+/** tagName for a component, which then follows the tag list as it loads and changes. */
+export function useTagName() {
+  const labels = useLabels();
+  return (key) => labels.find((l) => l.key === key)?.name || key;
+}
+
 /** The categories tags are shown under, in order. Tags KIT doesn't know a category for are Other. */
-export const TAG_CATEGORIES = [['process', 'Process'], ['source', 'Source'], ['other', 'Other']];
+export const TAG_CATEGORIES = [['process', 'Process'], ['source', 'Source'], ['measurable', 'Top Measurables'], ['other', 'Other']];
 const categoryName = (key) => TAG_CATEGORIES.find(([k]) => k === key)?.[1] || 'Other';
 /** `labels` in category order, as [{ key, name, labels }], leaving out empty categories. */
 export const byCategory = (labels) => TAG_CATEGORIES.map(([key, name]) => ({ key, name, labels: labels.filter((l) => (l.category || 'other') === key) })).filter((g) => g.labels.length);

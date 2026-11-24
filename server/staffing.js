@@ -4,12 +4,15 @@
 // (Solution Architect Coordination). Making one tags the ticket; tagging a ticket with a process tag makes one. Its tag
 // comes off the ticket when the event is marked done or deleted, unless another open event of that type still needs it; and
 // taking the tag off the ticket takes its open events off the list.
-import { db, json, getSetting, setSetting } from './db.js';
+import { db, json, getSetting, setSetting, tagName, tagKey } from './db.js';
 import { reportStager, QUALIFIED_STAGES } from './pipelines.js';
 import { recordWork } from './worklog.js';
 import { milestoneOf, eventForTag, cleanReviews, cleanQualification, gatePassed, gateDecision, canOverrideGate, cleanGateRule, QUALIFICATION, STAFFING_EVENTS, CRITICALITY, defaultCriticality, PROCESS_TAG_NAMES } from '../src/lib/process.js';
 
 export const isCriticality = (k) => CRITICALITY.some((c) => c.key === k);
+
+/** The staffing event a tag on a ticket stands for: a process tag under whatever name it goes by now, and nothing else. */
+const eventOfLabel = (label) => { const key = tagKey(label); return key ? eventForTag(key) : undefined; };
 
 /** Put `tag` on the ticket if it isn't there. A ticket from Pipedrive waits for an admin to send the change. */
 export function tagTicket(ticketId, tag) {
@@ -37,8 +40,9 @@ function untagTicket(ticketId, tag) {
  * type's process tag while it has an open event of that type, and not otherwise.
  */
 export function settleTag(ticketId, type) {
-  const tag = milestoneOf(type)?.tag;
-  if (!tag) return; // an earlier milestone, which has no tag
+  const key = milestoneOf(type)?.tag;
+  if (!key) return; // an earlier milestone, which has no tag
+  const tag = tagName(key); // the name the process tag goes by now
   if (openOf(ticketId, type)) tagTicket(ticketId, tag);
   else untagTicket(ticketId, tag);
 }
@@ -63,7 +67,7 @@ export function addStaffingEvent(user, ticketId, type, { dueDate = null, critica
     if (draft) { // asked for the form, not for staffing: whatever is there already will do
       if (existing || drafted) return { id: (existing || drafted).id, created: false };
     } else {
-      tagTicket(ticketId, def.tag);
+      tagTicket(ticketId, tagName(def.tag));
       if (existing) return { id: existing.id, created: false };
       if (drafted) { // staffed while its form was being filled in: that form is the event
         db.prepare('UPDATE ticket_process_steps SET draft = 0 WHERE id = ?').run(drafted.id);
@@ -102,9 +106,9 @@ export function queueFromTags(user, ticketId, before, after) {
   const lower = (labels) => new Set(json.parse(labels, []).map((l) => String(l).toLowerCase()));
   const had = lower(before);
   const has = lower(after);
-  json.parse(after, []).filter((l) => !had.has(String(l).toLowerCase())).map(eventForTag).filter(Boolean)
+  json.parse(after, []).filter((l) => !had.has(String(l).toLowerCase())).map(eventOfLabel).filter(Boolean)
     .forEach((def) => addStaffingEvent(user, ticketId, def.type, { reuse: true }));
-  [...had].filter((l) => !has.has(l)).map(eventForTag).filter(Boolean).forEach((def) => db.transaction(() => {
+  [...had].filter((l) => !has.has(l)).map(eventOfLabel).filter(Boolean).forEach((def) => db.transaction(() => {
     db.prepare('SELECT * FROM ticket_process_steps WHERE ticket_id = ? AND step_type = ? AND completed_at IS NULL AND draft = 0').all(ticketId, def.type).forEach((p) => {
       if (hasWork(p)) {
         db.prepare("UPDATE ticket_process_steps SET completed_at = datetime('now'), completed_by = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?").run(user?.id ?? null, user?.id ?? null, p.id);
@@ -125,8 +129,8 @@ export function staffFromTags(ticketId = null) {
   const tagged = db.prepare(`SELECT t.id, t.labels, t.created_by FROM tickets t
     WHERE t.ticket_type = 'bid' AND t.archive_set_id IS NULL AND t.archived_at IS NULL AND t.deal_status = 'open'
       AND (${PROCESS_TAG_NAMES.map(() => 'lower(t.labels) LIKE ?').join(' OR ')})${ticketId ? ' AND t.id = ?' : ''}`)
-    .all(...PROCESS_TAG_NAMES.map((n) => `%"${n.toLowerCase()}"%`), ...(ticketId ? [ticketId] : []));
-  tagged.forEach((t) => json.parse(t.labels, []).map(eventForTag).filter(Boolean)
+    .all(...PROCESS_TAG_NAMES.map((n) => `%"${tagName(n).toLowerCase()}"%`), ...(ticketId ? [ticketId] : []));
+  tagged.forEach((t) => json.parse(t.labels, []).map(eventOfLabel).filter(Boolean)
     .forEach((def) => addStaffingEvent(t.created_by ? { id: t.created_by } : null, t.id, def.type, { reuse: true, quiet: true })));
 }
 

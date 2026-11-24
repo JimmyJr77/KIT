@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
 // With the board in priority order a ticket is dropped on another ticket (to go just above it) as well as on a column.
@@ -17,7 +17,7 @@ import Avatar from '../components/Avatar.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import NewTicketPanel, { PIPELINE_CLOSED_HINT } from './NewTicketPanel.jsx';
 import PwinSettings from './PwinSettings.jsx';
-import { LabelList, byTags, usePriorityTagHidden } from '../components/Labels.jsx';
+import { LabelList, byTags, usePriorityTagHidden, useTagName } from '../components/Labels.jsx';
 import NextStepBadge from '../components/NextStepBadge.jsx';
 import NextStepQuick from '../components/NextStepQuick.jsx';
 import { bucketsFor } from '../lib/process.js';
@@ -28,7 +28,12 @@ const NO_ALIASES = [];
 // How wide the board's columns (and so its tickets) are: each person's own choice, in the board's settings, kept in this
 // browser. Narrow, medium and wide are fixed widths, and the board scrolls sideways for what doesn't fit; "fit" shares the
 // window among the columns instead, however thin that makes them.
-const COLUMN_CLASS = { narrow: 'w-52 shrink-0', medium: 'w-60 shrink-0', wide: 'w-[17rem] shrink-0', fit: 'min-w-0 flex-1 basis-0' };
+const COLUMN_CLASS = { narrow: 'w-52 shrink-0', medium: 'w-[17rem] shrink-0', wide: 'w-[34rem] shrink-0', fit: 'min-w-0 flex-1 basis-0' };
+// The size of the text on the board's tickets, also each person's own choice in the board's settings: standard, or
+// small, which draws each ticket a step smaller (text, tags and spacing together) so more of them fit on screen.
+const TEXT_ZOOM = { standard: 1, small: 0.86 };
+const savedTextSize = () => { try { const v = localStorage.getItem('kit.pipeline.textSize'); return TEXT_ZOOM[v] ? v : 'standard'; } catch { return 'standard'; } };
+const CardTextSize = createContext('standard');
 const savedWidth = () => { try { const v = localStorage.getItem('kit.pipeline.cardWidth'); return COLUMN_CLASS[v] ? v : 'wide'; } catch { return 'wide'; } };
 // Stages each person has minimized (a thin lane with its name written down it), by pipeline, kept in this browser.
 const savedMinimized = () => { try { const v = JSON.parse(localStorage.getItem('kit.pipeline.minimized')); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
@@ -90,6 +95,8 @@ export default function Pipeline() {
   const setSettingsOpen = (v) => { setSettingsOpenState(v); if (!v && searchParams.has('settings')) setSearchParams({}, { replace: true }); };
   const [cardWidth, setCardWidthState] = useState(savedWidth);
   const setCardWidth = (v) => { setCardWidthState(v); try { localStorage.setItem('kit.pipeline.cardWidth', v); } catch { /* not kept */ } };
+  const [textSize, setTextSizeState] = useState(savedTextSize);
+  const setTextSize = (v) => { setTextSizeState(v); try { localStorage.setItem('kit.pipeline.textSize', v); } catch { /* not kept */ } };
   const [minimized, setMinimized] = useState(savedMinimized);
   const toggleMinimized = (key) => setMinimized((xs) => {
     const next = xs.includes(key) ? xs.filter((k) => k !== key) : [...xs, key];
@@ -224,6 +231,7 @@ export default function Pipeline() {
 
   return (
     <div className="flex h-full flex-col">
+      <CardTextSize.Provider value={textSize}>
       <DndContext sensors={sensors} collisionDetection={ranking ? cardFirst : pointerWithin}
         onDragStart={({ active }) => { setDragId(active.id); setStaffed(''); }} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
       <div className="relative">
@@ -267,8 +275,9 @@ export default function Pipeline() {
       </div>
       <DragOverlay>{dragging && <TicketCard ticket={dragging} now={now} overlay />}</DragOverlay>
       </DndContext>
+      </CardTextSize.Provider>
 
-      {settingsOpen && <PwinSettings onClose={() => setSettingsOpen(false)} onSaved={load} pipeline={pipeline} cardWidth={cardWidth} onCardWidth={setCardWidth}
+      {settingsOpen && <PwinSettings onClose={() => setSettingsOpen(false)} onSaved={load} pipeline={pipeline} cardWidth={cardWidth} onCardWidth={setCardWidth} textSize={textSize} onTextSize={setTextSize}
         onStagesChanged={() => { meta.reload({ quiet: true }); stageInfo.reload({ quiet: true }); load(); }} />}
 
       {creating && (
@@ -302,12 +311,13 @@ function BucketBar({ ticket, stage }) {
 }
 
 function Bucket({ event }) {
+  const nameOf = useTagName();
   const { setNodeRef, isOver } = useDroppable({ id: `${BUCKET}${event.type}` });
   return (
     <div ref={setNodeRef} className={`flex min-w-0 flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed px-2 text-center transition ${
       isOver ? 'scale-[1.03] border-brand-500 bg-brand-50 text-brand-800 shadow-md' : 'border-slate-300 bg-slate-50 text-slate-700'}`}>
       <span className="text-sm leading-tight font-semibold">{event.type}</span>
-      <span className={`mt-1 rounded-full px-2 py-px text-[11px] font-medium ${isOver ? 'bg-brand-600 text-white' : 'bg-white text-slate-500 ring-1 ring-slate-200'}`}>{event.tag}</span>
+      <span className={`mt-1 rounded-full px-2 py-px text-[11px] font-medium ${isOver ? 'bg-brand-600 text-white' : 'bg-white text-slate-500 ring-1 ring-slate-200'}`}>{nameOf(event.tag)}</span>
     </div>
   );
 }
@@ -408,8 +418,9 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
   const { bar, counter } = activityTimer(days);
   const priorityOff = usePriorityTagHidden(); // the viewer's own choice, in the board's settings
   const idle = `${Math.floor(days)} day${Math.floor(days) === 1 ? '' : 's'} since last activity (${fullStamp(t.last_activity)})`;
+  const zoom = TEXT_ZOOM[useContext(CardTextSize)] || 1; // the board's text size; 1 anywhere else the card is used
   return (
-    <div className={`relative cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pr-10 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${overlay ? 'w-60 rotate-2 shadow-xl' : ''} ${className}`}>
+    <div style={zoom === 1 ? undefined : { zoom }} className={`relative cursor-grab overflow-hidden rounded-lg border border-slate-200 bg-white p-3 pr-10 text-sm shadow-sm transition hover:border-brand-500 hover:shadow-md active:cursor-grabbing ${overlay ? 'w-60 rotate-2 shadow-xl' : ''} ${className}`}>
       <NextStepBadge step={t.next_step} onOpen={() => onOpenStep?.(t)} className="absolute top-1/2 right-2 -translate-y-1/2" />
       <div className="line-clamp-2 font-semibold leading-snug text-slate-900" title={t.opportunity_title}>{t.opportunity_title}</div>
       <div className="mt-0.5 h-4 truncate text-xs text-slate-500">{[t.organization, t.account_type].filter(Boolean).join(' · ')}</div>
@@ -420,8 +431,9 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
           <LabelList labels={t.labels} unq={t.unq} qualified={t.qualified} card />
         </div>
       )}
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-1">
+      {/* On a narrow ticket the counts drop to a line of their own, and the ticket grows, instead of running into the value and PWIN. */}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <span className="flex shrink-0 items-center gap-1">
           {t.ticket_type !== 'work' && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 tabular-nums">{t.value != null ? money(t.value) : '—'}</span>}
           {t.pwin && (
             <span className="rounded bg-brand-50 px-1.5 py-0.5 text-xs font-semibold whitespace-nowrap text-brand-700 tabular-nums" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>
@@ -429,7 +441,7 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
             </span>
           )}
         </span>
-        <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-slate-400">
           <span className="flex items-center gap-0.5" title="Priorities"><ListOrdered size={11} /> {t.card_count}</span>
           {owner && <Avatar user={owner} size="xs" />}
           {counter && <span className="flex items-center gap-0.5 font-medium text-slate-500 tabular-nums" title={idle}><Clock size={11} /> {counter}</span>}

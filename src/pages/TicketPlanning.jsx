@@ -1,4 +1,5 @@
 import { createContext, Fragment, useContext, useEffect, useRef, useState } from 'react';
+import { tagName, useTagName } from '../components/Labels.jsx';
 import { Link } from 'react-router-dom';
 import { X, Plus, Trash2, Loader2, Check, Eye, ChessPawn, Scale, Sparkles, PenLine, ContactRound, ArrowLeft, Search, Link2, Unlink, Flag, Workflow, Upload, FileText, Download, ChevronDown, ChevronRight, Users, ClipboardList, Star, CalendarCheck, Ticket, Megaphone, RotateCcw } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
@@ -300,7 +301,7 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpe
   const byId = (id) => users.find((u) => u.id === id);
   const { readOnly } = useContext(TicketAccess);
   const sorted = steps && [...steps].sort(byDue);
-  const tag = milestoneOf(type).tag;
+  const tag = useTagName()(milestoneOf(type).tag);
 
   return (
     <DrawerShell title="Staffing events" onClose={onClose}
@@ -648,7 +649,7 @@ function ProcessStepEditor({ step: s, user, userOptions, users, gateRule, onDirt
             </select>
           </div>
         </div>
-        {def.about && <p className="text-[11px] text-slate-500">{def.phase} · {def.about}{def.tag ? ` · tagged ${def.tag}` : ''}</p>}
+        {def.about && <p className="text-[11px] text-slate-500">{def.phase} · {def.about}{def.tag ? ` · tagged ${tagName(def.tag)}` : ''}</p>}
         {def.gate && !def.qualifies && (
           <div>
             <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-decision-${s.id}`}>Gate decision</label>
@@ -769,7 +770,7 @@ function ProcessStepEditor({ step: s, user, userOptions, users, gateRule, onDirt
           </button>
           {def.qualifies && !s.draft && !s.done && (
             <button type="button" className="btn px-2.5 py-1.5 text-xs" onClick={() => save({ recall: true })} disabled={busy}
-              title="Take it back off the SAC list to work on it. The Initial Gate tag comes off the ticket until it’s submitted again.">
+              title={`Take it back off the SAC list to work on it. The ${tagName('Initial Gate')} tag comes off the ticket until it’s submitted again.`}>
               <RotateCcw size={12} /> Recall from SAC
             </button>
           )}

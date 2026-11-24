@@ -16,13 +16,13 @@ const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k))
 const everyArea = (rating, override = {}) => Object.fromEntries(CRITERIA.map((c) => [c.key, { score: override[c.key] ?? rating }]));
 
 const TABS = [['pwin', 'PWIN'], ['gate', 'Qualified lead'], ['tags', 'Tags'], ['layout', 'Layout'], ['stages', 'Stages']];
-const SUBTITLES = { pwin: 'PWIN weights and must-have areas', gate: 'What makes a qualified lead at the Initial Gate', tags: 'The tags you see on the board’s cards, and the tag list', layout: 'How wide the board’s tickets are', stages: 'The board’s columns' };
+const SUBTITLES = { pwin: 'PWIN weights and must-have areas', gate: 'What makes a qualified lead at the Initial Gate', tags: 'The tags you see on the board’s cards, and the tag list', layout: 'How wide the board’s tickets are, and their text size', stages: 'The board’s columns' };
 
 /**
  * BD Pipeline settings, in tabs: PWIN weights and must-have areas for the bid and win assessment, with a way back to the
  * defaults; what makes a qualified lead at the Initial Gate (admins and BD team leads); which tags each person sees on the board's cards, with the tag list itself for admins to manage; and the stages of the board's current `pipeline`.
  */
-export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChanged, cardWidth, onCardWidth }) {
+export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChanged, cardWidth, onCardWidth, textSize, onTextSize }) {
   const [saved, setSaved] = useState(null); // what the server has
   const [draft, setDraft] = useState(null); // { weights, gates }
   const [busy, setBusy] = useState(false);
@@ -92,7 +92,7 @@ export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChang
           </button>
         ))}
       </nav>
-      {tab === 'gate' ? <GateRuleSettings onSaved={onSaved} /> : tab === 'tags' ? <TagSettings onChanged={onSaved} /> : tab === 'layout' ? <LayoutSettings value={cardWidth} onChange={onCardWidth} /> : tab === 'stages' ? <StageSettings pipeline={pipeline} onChanged={onStagesChanged} /> : !draft ? <p className="text-sm text-slate-400">Loading…</p> : (
+      {tab === 'gate' ? <GateRuleSettings onSaved={onSaved} /> : tab === 'tags' ? <TagSettings onChanged={onSaved} /> : tab === 'layout' ? <LayoutSettings value={cardWidth} onChange={onCardWidth} textSize={textSize} onTextSize={onTextSize} /> : tab === 'stages' ? <StageSettings pipeline={pipeline} onChanged={onStagesChanged} /> : !draft ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className="space-y-4">
           <section className="space-y-2 rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
             <p>
@@ -214,7 +214,10 @@ const WIDTH_HINTS = {
 };
 
 /** The viewer's own choice of how wide the board's tickets are, kept in this browser and applied as it's picked. */
-function LayoutSettings({ value, onChange }) {
+// The board's ticket text sizes (Pipeline.jsx draws its tickets by these keys).
+const TEXT_SIZES = [['standard', 'Standard', 'The size tickets have always been.'], ['small', 'Small', 'Each ticket is drawn a step smaller, text and tags together, so more fit on screen.']];
+
+function LayoutSettings({ value, onChange, textSize, onTextSize }) {
   return (
     <div className="space-y-4">
       <p className="rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
@@ -222,13 +225,25 @@ function LayoutSettings({ value, onChange }) {
         To tuck a stage away, use the arrows at the top of its column: it becomes a thin lane you can still drop tickets on, and opens again when you click it.
       </p>
       <fieldset className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-        <legend className="sr-only">Ticket width</legend>
+        <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">Ticket width</legend>
         {CARD_WIDTHS.map(([key, label]) => (
           <label key={key} className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5 hover:bg-slate-50">
             <input type="radio" name="card-width" className="mt-0.5 h-4 w-4 accent-brand-600" checked={value === key} onChange={() => onChange(key)} />
             <span>
               <span className="text-sm font-medium text-slate-800">{label}</span>
               <span className="block text-xs text-slate-500">{WIDTH_HINTS[key]}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <fieldset className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+        <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">Text size</legend>
+        {TEXT_SIZES.map(([key, label, hint]) => (
+          <label key={key} className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5 hover:bg-slate-50">
+            <input type="radio" name="card-text-size" className="mt-0.5 h-4 w-4 accent-brand-600" checked={textSize === key} onChange={() => onTextSize(key)} />
+            <span>
+              <span className="text-sm font-medium text-slate-800">{label}</span>
+              <span className="block text-xs text-slate-500">{hint}</span>
             </span>
           </label>
         ))}

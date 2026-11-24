@@ -8,7 +8,7 @@
 //     recorded against it, or it's tied to an event that has marketing requests or dollars.
 // The dollars behind a ticket: what's recorded against it directly, plus an even share of each of its events' dollars
 // (the event's spend that isn't for one ticket, split between the tickets tied to that event).
-import { db, json, LEAD_TAGS, GOOGLE_SOLUTION_TAG } from './db.js';
+import { db, json, LEAD_TAGS, googleDealTag } from './db.js';
 import { inBooks } from './financials.js';
 import { spendEntries } from './marketingSpend.js';
 import { hasTag } from './leads.js';
@@ -81,8 +81,8 @@ export function marketingImpact(requests) {
   const all = tally();
   tickets.forEach((t) => add(all, t));
 
-  // By lead source tag (a ticket with two sources counts under both), plus Google Solution and tickets with no source yet.
-  const sourceTags = [...Object.values(LEAD_TAGS), GOOGLE_SOLUTION_TAG];
+  // By lead source tag (a ticket with two sources counts under both), plus GOOGLE DEAL and tickets with no source yet.
+  const sourceTags = [...Object.values(LEAD_TAGS), googleDealTag()];
   const bySource = sourceTags.map((tag) => {
     const b = tally();
     tickets.filter((t) => hasTag(t.labels, tag)).forEach((t) => add(b, t));

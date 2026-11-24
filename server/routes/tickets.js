@@ -1228,7 +1228,7 @@ r.put('/:id/labels', ownerOnly(), (req, res) => {
   const labels = cleanLabels(req.body?.labels);
   db.prepare('UPDATE tickets SET labels = ?, labels_pending = ? WHERE id = ?').run(labels, t.pipedrive_id ? 1 : 0, t.id);
   queueFromTags(req.user, t.id, t.labels, labels); // a process tag queues its staffing event, and so the SAC list
-  linkGoogleSolution(t.id, 'tag'); // the Google Solution tag and the deal's Google Solution field say the same thing
+  linkGoogleSolution(t.id, 'tag'); // the GOOGLE DEAL tag and the deal's Google Solution field say the same thing
   touch(t.id);
   recordTicketUpdate(req.user, t, 'Labels');
   res.json({ labels: json.parse(ticketRow(t.id).labels, []) });
