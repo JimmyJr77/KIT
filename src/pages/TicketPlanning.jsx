@@ -65,12 +65,12 @@ export const TicketAccess = createContext({ readOnly: false, ownerName: null });
 
 /** "View only" note for someone who doesn't own the ticket. */
 export function ViewOnlyNote({ className = '' }) {
-  const { readOnly, ownerName } = useContext(TicketAccess);
+  const { readOnly, ownerName, note } = useContext(TicketAccess);
   if (!readOnly) return null;
   return (
     <p className={`flex items-start gap-1.5 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200 ${className}`}>
       <Eye size={13} className="mt-px shrink-0" />
-      <span>View only. {ownerName ? `${ownerName} owns this ticket, so only they` : 'Only the ticket’s owner'} (or an admin) can change it. You can still comment.</span>
+      <span>{note || <>View only. {ownerName ? `${ownerName} owns this ticket, so only they` : 'Only the ticket’s owner'} (or an admin) can change it. You can still comment.</>}</span>
     </p>
   );
 }
@@ -830,11 +830,13 @@ function SaveBar({ dirty, busy, savedAt, savedBy, error, onSave }) {
  * the top opens two boxes, Obstacle and Strategy, which together start a new one; more strategies can be added to any
  * obstacle. An obstacle that's overcome is crossed off, with what came of it (Outcome), and kept underneath for context.
  * The strategies of the obstacles still open are what Close to closing shows as the ticket's status note, with the notes
- * picked for it. Each change is saved as it's made; only the ticket's owner or an admin makes them.
+ * picked for it. Each change is saved as it's made, by the ticket's owner, its BD director, a BD director on its territory, a BD lead or an admin.
  */
 function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
   const [plan, setPlan] = usePlan(ticket.id);
-  const { readOnly } = useContext(TicketAccess);
+  // The strategy has its own rule: the ticket's BD director, or one on its territory, changes it without owning the ticket.
+  const access = useContext(TicketAccess);
+  const readOnly = plan ? !plan.can_edit_strategy : access.readOnly;
   const [draft, setDraft] = useState(null); // the Add a new strategy boxes, when open: { obstacle, strategy }
   const [editing, setEditing] = useState(null); // the one text being written elsewhere: 'o12' (an obstacle), 's4' (a strategy), 'add12' (a new strategy for obstacle 12), 'x12' (crossing 12 off), 'out12' (its outcome)
   const [busy, setBusy] = useState(false);
@@ -890,6 +892,7 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
   );
 
   return (
+    <TicketAccess.Provider value={{ ...access, readOnly, note: 'View only. The ticket’s owner, its BD director, a BD director on its territory, a BD lead or an admin can change the strategy. You can still comment.' }}>
     <DrawerShell title="Strategy" subtitle="What stands in the way, and how we get past it" onClose={onClose} lockable
       footer={plan && (
         <p className={`text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>
@@ -1005,6 +1008,7 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
         </div>
       ) : <p className="text-sm text-slate-400">Loading…</p>}
     </DrawerShell>
+    </TicketAccess.Provider>
   );
 }
 

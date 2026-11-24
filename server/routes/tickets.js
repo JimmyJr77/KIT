@@ -5,7 +5,7 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { db, json, getSetting, setSetting, withTeams, defaultAssignment, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED } from '../db.js';
+import { db, json, getSetting, setSetting, withTeams, defaultAssignment, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED, BD_DIRECTOR_IDS } from '../db.js';
 import { requireAdmin } from '../auth.js';
 import { CRITERIA, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin } from '../../src/lib/assessment.js';
 import { LANES, laneFor, isArchived } from '../../src/lib/lanes.js';
@@ -83,6 +83,23 @@ const ownerOnly = (ticketIdOf = (req) => req.params.id) => (req, res, next) => {
   if (!t) return res.status(404).json({ error: 'Not found' });
   const denied = ticketEditDenied(req.user, t);
   if (denied) return res.status(403).json({ error: denied });
+  next();
+};
+/**
+ * Whether `user` may change a ticket's strategy (its obstacles and strategies): whoever may change the ticket (its owner,
+ * an admin), a BD lead, the ticket's BD director, and a BD director who has the ticket's territory. It doesn't matter who wrote the obstacle or strategy.
+ */
+export function canEditStrategy(user, t) {
+  if (!user || !t) return false;
+  if (canEditTicket(user, t)) return true;
+  if (db.prepare("SELECT 1 FROM user_teams ut JOIN teams tm ON tm.id = ut.team_id WHERE ut.user_id = ? AND tm.name = 'BD' AND ut.role = 'lead'").get(user.id)) return true;
+  if (t.bd_director_id != null && Number(t.bd_director_id) === Number(user.id)) return true;
+  return !!t.territory_id && !!db.prepare(`SELECT 1 FROM user_territories WHERE user_id = ? AND territory_id = ? AND user_id IN (${BD_DIRECTOR_IDS})`).get(user.id, t.territory_id);
+}
+const strategyOnly = (ticketIdOf = (req) => req.params.id) => (req, res, next) => {
+  const t = ticketRow(ticketIdOf(req));
+  if (!t) return res.status(404).json({ error: 'Not found' });
+  if (!canEditStrategy(req.user, t)) return res.status(403).json({ error: 'Only the ticket’s owner, its BD director, a BD director on its territory, a BD lead or an admin can change its strategy. You can still comment on it.' });
   next();
 };
 const ticketOf = (table, param) => (req) => db.prepare(`SELECT ticket_id FROM ${table} WHERE id = ?`).get(req.params[param])?.ticket_id;
@@ -431,11 +448,13 @@ r.get('/:id/plan', (req, res) => {
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   res.json({
     obstacles: listObstacles(t.id), strategy_updated_at: t.strategy_updated_at, strategy_updated_by: nameOf(t.strategy_updated_by),
+    can_edit_strategy: canEditStrategy(req.user, t),
     assessment: json.parse(t.assessment, {}), assessment_updated_at: t.assessment_updated_at, assessment_updated_by: nameOf(t.assessment_updated_by),
   });
 });
 
-// ---- Strategy: obstacles, each with its strategies (server/strategy.js). The ticket's owner or an admin changes them.
+// ---- Strategy: obstacles, each with its strategies (server/strategy.js). The ticket's owner, its BD director,
+// a BD director on its territory, a BD lead or an admin changes them (canEditStrategy).
 const ofObstacle = ticketOf('ticket_obstacles', 'oid');
 const ofStrategy = (req) => db.prepare('SELECT o.ticket_id FROM ticket_strategies s JOIN ticket_obstacles o ON o.id = s.obstacle_id WHERE s.id = ?').get(req.params.sid)?.ticket_id;
 const text = (v, max = 4000) => String(v ?? '').trim().slice(0, max);
@@ -448,7 +467,7 @@ const strategySaved = (req, res, ticketId, what = 'Win strategy') => {
 };
 
 /** Body: { obstacle, strategy }. A new obstacle with its first strategy; either may be left blank, not both. */
-r.post('/:id/obstacles', ownerOnly(), (req, res) => {
+r.post('/:id/obstacles', strategyOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets have a strategy' });
   const obstacle = text(req.body?.obstacle);
@@ -466,7 +485,7 @@ r.post('/:id/obstacles', ownerOnly(), (req, res) => {
  * Body: any of { body, resolved, outcome }. `resolved` true crosses the obstacle off (it's kept, with `outcome`: what came
  * of it), false opens it again. `outcome` on its own changes what a crossed-off one says.
  */
-r.put('/obstacles/:oid', ownerOnly(ofObstacle), (req, res) => {
+r.put('/obstacles/:oid', strategyOnly(ofObstacle), (req, res) => {
   const o = db.prepare('SELECT * FROM ticket_obstacles WHERE id = ?').get(req.params.oid);
   const b = req.body || {};
   const body = 'body' in b ? text(b.body) : o.body;
@@ -480,14 +499,14 @@ r.put('/obstacles/:oid', ownerOnly(ofObstacle), (req, res) => {
 });
 
 /** Removes an obstacle and its strategies outright (crossing it off keeps it). */
-r.delete('/obstacles/:oid', ownerOnly(ofObstacle), (req, res) => {
+r.delete('/obstacles/:oid', strategyOnly(ofObstacle), (req, res) => {
   const o = db.prepare('SELECT * FROM ticket_obstacles WHERE id = ?').get(req.params.oid);
   db.prepare('DELETE FROM ticket_obstacles WHERE id = ?').run(o.id);
   strategySaved(req, res, o.ticket_id, 'Win strategy: obstacle removed');
 });
 
 /** Body: { body }. Another strategy for an obstacle. */
-r.post('/obstacles/:oid/strategies', ownerOnly(ofObstacle), (req, res) => {
+r.post('/obstacles/:oid/strategies', strategyOnly(ofObstacle), (req, res) => {
   const o = db.prepare('SELECT * FROM ticket_obstacles WHERE id = ?').get(req.params.oid);
   const body = text(req.body?.body);
   if (!body) return res.status(400).json({ error: 'Write the strategy' });
@@ -496,14 +515,14 @@ r.post('/obstacles/:oid/strategies', ownerOnly(ofObstacle), (req, res) => {
 });
 
 /** Body: { body }. */
-r.put('/strategies/:sid', ownerOnly(ofStrategy), (req, res) => {
+r.put('/strategies/:sid', strategyOnly(ofStrategy), (req, res) => {
   const body = text(req.body?.body);
   if (!body) return res.status(400).json({ error: 'Write the strategy' });
   db.prepare("UPDATE ticket_strategies SET body = ?, updated_at = datetime('now') WHERE id = ?").run(body, req.params.sid);
   strategySaved(req, res, ofStrategy(req));
 });
 
-r.delete('/strategies/:sid', ownerOnly(ofStrategy), (req, res) => {
+r.delete('/strategies/:sid', strategyOnly(ofStrategy), (req, res) => {
   const ticketId = ofStrategy(req);
   db.prepare('DELETE FROM ticket_strategies WHERE id = ?').run(req.params.sid);
   strategySaved(req, res, ticketId, 'Win strategy: strategy removed');
