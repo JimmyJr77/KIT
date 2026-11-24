@@ -456,8 +456,8 @@ function Notes({ row: r, run }) {
       {editing === 'new' && <NoteBox onSave={add} onCancel={() => setEditing(null)} label={`New status note on ${r.title}`} />}
       {strategies.map((o) => (
         <div key={o.id} className={text}>
-          {o.obstacle && <div className="font-semibold text-slate-800" title="An obstacle still open in the ticket’s Strategy section">{o.obstacle}</div>}
-          {o.strategies.map((s, i) => <div key={i} className="flex gap-1.5"><span className="text-brand-600" aria-hidden="true">›</span><span className="min-w-0 line-clamp-4 print:line-clamp-6">{s}</span></div>)}
+          {o.obstacle && <div title="An obstacle still open in the ticket’s Strategy section">{o.obstacle}</div>}
+          {o.strategies.map((s, i) => <div key={i} className="line-clamp-4 print:line-clamp-6"><span className="mr-1 text-brand-600" aria-hidden="true">›</span>{s}</div>)}
           {!o.strategies.length && <div className="text-slate-400">No strategy yet</div>}
         </div>
       ))}

@@ -156,8 +156,8 @@ r.get('/requests', (req, res) => res.json({ requests: requestList() }));
 /**
  * Ask Marketing for support. Body: { title, category, due_date, details, justification, purpose, event_id, for_ticket_id,
  * activity_id, ticket_ids, meeting_ids }. A request has to be for an event or a ticket (or both), say what's needed and
- * why, and name at least one opportunity or meeting; a pipeline ticket it's for counts as one, and so do the meetings
- * on its event's schedule, which come with the request on their own.
+ * why. A pipeline ticket it's for is recorded as its opportunity, and the meetings on its event's schedule come with
+ * the request on their own.
  */
 r.post('/requests', (req, res) => {
   const b = req.body || {};
@@ -174,8 +174,6 @@ r.post('/requests', (req, res) => {
   if (!event && !ticket) return res.status(400).json({ error: 'Say what this is for: an event, a pipeline ticket or a work ticket' });
   if (!details) return res.status(400).json({ error: 'Describe what you need from Marketing' });
   if (!justification) return res.status(400).json({ error: 'Add the justification: why this is worth doing' });
-  const onSchedule = event && db.prepare('SELECT 1 FROM meetings WHERE event_id = ?').get(event.id); // the event's meetings come with it
-  if (!ticketIds.length && !meetingIds.length && !onSchedule) return res.status(400).json({ error: 'Name at least one lead, opportunity or meeting this is for' });
   res.json(createRequest(req.user, {
     title, details, justification, purpose: s(b.purpose) || event?.goal || null,
     category: REQUEST_CATEGORIES.includes(b.category) ? b.category : null, due_date: DATE.test(s(b.due_date)) ? s(b.due_date) : null,

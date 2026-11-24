@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Megaphone, CalendarDays, Ticket, CalendarCheck, CalendarPlus, X, Clock, MapPin, Paperclip, Pencil, ChevronDown } from 'lucide-react';
+import { Megaphone, CalendarDays, Ticket, CalendarCheck, CalendarPlus, X, ChevronDown } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName, shortDate, ticketKind, todayIso } from '../lib/format.js';
 import SidePanel from './SidePanel.jsx';
 import MultiSelect from './MultiSelect.jsx';
 import { useClickAway } from './UserCombobox.jsx';
-import MeetingPanel, { meetingWhen } from './MeetingPanel.jsx';
+import MeetingPanel from './MeetingPanel.jsx';
 
 const longDate = (iso) => shortDate(iso, { month: 'short', day: 'numeric', year: 'numeric' });
 
 /**
  * Ask Marketing for support: the one form used on the Marketing page and from every event, pipeline ticket, work ticket
- * and activity. A request has to say what it's for (an event, a ticket, or both), what's needed, why, and which leads,
- * opportunities or meetings it's about, so the marketing dollars that follow can be traced to them.
+ * and activity. A request has to say what it's for (an event, a ticket, or both), what's needed and why. The pipeline
+ * ticket it's for and its event's meetings come with it, so the marketing dollars that follow can be traced to them.
  * `eventId`, `ticket` ({ id, opportunity_title, ticket_type }) and `activity` ({ id, subject }) start it off tied to where it was opened.
  * It opens as its own side panel; `embedded` (a pipeline ticket's Marketing pane) draws it inside the pane it's in
  * instead, where the meeting scheduler takes the pane over and hands it back with what's typed still there.
@@ -21,9 +21,8 @@ export default function MarketingRequestForm({ eventId = null, ticket = null, ac
   const [meta, setMeta] = useState(null);
   const [events, setEvents] = useState([]);
   const [tickets, setTickets] = useState([]);
-  const [meetings, setMeetings] = useState([]);
   const [form, setForm] = useState({
-    title: '', category: eventId ? 'Event support' : '', due_date: '', details: '', justification: '', purpose: '',
+    title: '', due_date: '', details: '', justification: '', purpose: '',
     event_id: eventId || '', for_ticket_id: ticket?.id || '', activity_id: activity?.id || '',
     ticket_ids: ticket?.ticket_type === 'bid' ? [ticket.id] : [], meeting_ids: [],
   });
@@ -37,7 +36,6 @@ export default function MarketingRequestForm({ eventId = null, ticket = null, ac
     api.get('/marketing/meta').then(setMeta);
     api.get('/events?scope=all').then((d) => setEvents(d.events));
     api.get('/tickets?scope=all').then((d) => setTickets(d.tickets));
-    api.get('/meetings').then((d) => setMeetings(d.meetings));
   }, []);
 
   const event = events.find((e) => e.id === Number(form.event_id));
@@ -49,7 +47,7 @@ export default function MarketingRequestForm({ eventId = null, ticket = null, ac
   const forTicket = tickets.find((t) => t.id === Number(form.for_ticket_id)) || (ticket && ticket.id === Number(form.for_ticket_id) ? ticket : null);
   const chooseTicket = (id) => setForm((f) => {
     const t = tickets.find((x) => x.id === Number(id));
-    const ids = t && t.ticket_type === 'bid' && !f.ticket_ids.includes(t.id) ? [...f.ticket_ids, t.id] : f.ticket_ids;
+    const ids = t && t.ticket_type === 'bid' ? [t.id] : []; // a pipeline ticket it's for is its opportunity
     return { ...f, for_ticket_id: id, activity_id: Number(id) === ticket?.id ? activity?.id || '' : '', ticket_ids: ids };
   });
 
@@ -57,24 +55,16 @@ export default function MarketingRequestForm({ eventId = null, ticket = null, ac
   const ticketOptions = useMemo(() => tickets.filter(open).map((t) => ({ value: t.id, label: t.opportunity_title, sub: t.organization || undefined, group: ticketKind(t) })), [tickets]); // eslint-disable-line react-hooks/exhaustive-deps
   const oppOptions = useMemo(() => tickets.filter((t) => t.ticket_type === 'bid' && (open(t) || form.ticket_ids.includes(t.id)))
     .map((t) => ({ value: t.id, label: t.opportunity_title, sub: [t.organization, t.deal_status !== 'open' && t.deal_status].filter(Boolean).join(' · ') || undefined })), [tickets, form.ticket_ids]); // eslint-disable-line react-hooks/exhaustive-deps
-  // The event's schedule carries over on its own, and stays in step with the event after the request is sent. Other
-  // meetings (the ticket's, or ones already ticked) are chosen by hand.
-  const fromEvent = (m) => !!event && m.event_id === event.id;
-  const listed = meetings.filter((m) => fromEvent(m) || (forTicket && m.ticket_id === forTicket.id) || form.meeting_ids.includes(m.id));
-  const eventMeetings = listed.filter(fromEvent).length;
-  const toggleMeeting = (id) => set('meeting_ids', form.meeting_ids.includes(id) ? form.meeting_ids.filter((x) => x !== id) : [...form.meeting_ids, id]);
-  // A meeting saved in the scheduler joins the list, ticked.
+  // The event's schedule comes with the request on its own, and stays in step with the event after it's sent.
+  // A meeting set up in the scheduler comes with the request.
   const meetingSaved = (m) => {
-    setMeetings((xs) => (xs.some((x) => x.id === m.id) ? xs.map((x) => (x.id === m.id ? m : x)) : [...xs, m]).sort((x, y) => `${x.meeting_date}${x.meeting_time || '99'}`.localeCompare(`${y.meeting_date}${y.meeting_time || '99'}`)));
     setForm((f) => (f.meeting_ids.includes(m.id) || (f.event_id && m.event_id === Number(f.event_id)) ? f : { ...f, meeting_ids: [...f.meeting_ids, m.id] }));
     setScheduling(null);
   };
 
   const tied = !!form.event_id || !!form.for_ticket_id;
-  const tiedTo = event?.name || forTicket?.opportunity_title || '';
-  const named = form.ticket_ids.length + form.meeting_ids.length + eventMeetings > 0;
   const missing = !form.title.trim() ? 'Add a title' : !tied ? 'Choose the event or ticket this is for' : !form.details.trim() ? 'Say what you need'
-    : !form.justification.trim() ? 'Add the justification' : !named ? 'Name a lead, opportunity or meeting' : '';
+    : !form.justification.trim() ? 'Add the justification' : '';
 
   const submit = async () => {
     setBusy(true);
@@ -129,15 +119,7 @@ export default function MarketingRequestForm({ eventId = null, ticket = null, ac
         </fieldset>
 
         <Field label="Title *"><input className="input" autoFocus value={form.title} onChange={(e) => set('title', e.target.value)} placeholder="e.g. Booth graphics and one-pager for AUSA" /></Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Type of help">
-            <select className="input" value={form.category} onChange={(e) => set('category', e.target.value)}>
-              <option value="">Choose…</option>
-              {(meta?.requestCategories || []).map((c) => <option key={c}>{c}</option>)}
-            </select>
-          </Field>
-          <Field label="Needed by"><input type="date" className="input" min={todayIso()} value={form.due_date} onChange={(e) => set('due_date', e.target.value)} /></Field>
-        </div>
+        <Field label="Needed by"><input type="date" className="input" min={todayIso()} value={form.due_date} onChange={(e) => set('due_date', e.target.value)} /></Field>
         <Field label="What you need from Marketing *">
           <textarea className="input min-h-28" value={form.details} onChange={(e) => set('details', e.target.value)}
             placeholder="What do you need, who’s it for, and where will it be used? Link any drafts or examples." />
@@ -152,52 +134,6 @@ export default function MarketingRequestForm({ eventId = null, ticket = null, ac
               placeholder="This event has no goal yet. Say why we’re going." />
           </Field>
         )}
-
-        <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
-          <legend className="px-1 text-xs font-medium text-slate-500">The leads, opportunities or meetings it’s for (at least one) *</legend>
-          <Field label="Leads and opportunities (pipeline tickets)">
-            <MultiSelect options={oppOptions} value={form.ticket_ids} onChange={(v) => set('ticket_ids', v)} placeholder="Search pipeline tickets…" />
-          </Field>
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="label mb-0">Meetings</span>
-              <button type="button" className="btn px-2 py-1 text-xs" onClick={() => setScheduling('new')} title="Schedule a meeting: who, when, where, objectives and files">
-                <CalendarPlus size={14} /> Schedule a meeting
-              </button>
-            </div>
-            {eventMeetings > 0 && (
-              <p className="mt-1 text-[11px] text-slate-500">{event.name}’s schedule comes with the request and stays in step with the event: meetings added, changed or removed there show up here.</p>
-            )}
-            {listed.length ? (
-              <ul className="mt-1.5 space-y-1.5">
-                {listed.map((m) => {
-                  const auto = fromEvent(m);
-                  const on = auto || form.meeting_ids.includes(m.id);
-                  return (
-                    <li key={m.id} className={`flex items-start gap-2 rounded-md border px-2.5 py-2 text-sm ${on ? 'border-brand-300 bg-brand-50/50' : 'border-slate-200 bg-white'}`}>
-                      <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600" checked={on} disabled={auto} onChange={() => toggleMeeting(m.id)}
-                        title={auto ? 'On the event’s schedule, so it comes with the request' : undefined} aria-label={`This request is for the meeting ${m.title}`} />
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium text-slate-900">{m.title}</div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-600">
-                          <span className="flex items-center gap-1"><Clock size={11} className="text-slate-400" /> {meetingWhen(m)}</span>
-                          {m.place && <span className="flex items-center gap-1"><MapPin size={11} className="text-slate-400" /> {m.place}</span>}
-                          {m.files?.length > 0 && <span className="flex items-center gap-1"><Paperclip size={11} className="text-slate-400" /> {m.files.length}</span>}
-                        </div>
-                        <div className="mt-0.5 truncate text-xs text-slate-500">With {m.people.map((p) => `${p.first_name} ${p.last_name || ''}`.trim()).join(', ')}</div>
-                      </div>
-                      <button type="button" className="btn-ghost shrink-0 p-1 text-slate-500" onClick={() => setScheduling(m)} title="Open in the scheduler" aria-label={`Edit ${m.title}`}><Pencil size={13} /></button>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <p className="mt-1.5 text-xs text-slate-400">
-                {tiedTo ? `No meetings scheduled for ${tiedTo} yet.` : 'Choose an event or ticket to see its meetings.'} Use Schedule a meeting to set one up.
-              </p>
-            )}
-          </div>
-        </fieldset>
       </div>
   );
 

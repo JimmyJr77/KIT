@@ -872,19 +872,20 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
       {o.strategies.map((s) => (editing === `s${s.id}` ? (
         <li key={s.id}><InlineText initial={s.body} label="Strategy" busy={busy} onCancel={() => setEditing(null)} onSave={(body) => run(() => api.put(`/tickets/strategies/${s.id}`, { body }))} /></li>
       ) : (
-        <li key={s.id} className="group flex items-start gap-2">
-          <ChessPawn size={13} className={`mt-0.5 shrink-0 ${muted ? 'text-slate-300' : 'text-brand-600'}`} />
-          <div className="min-w-0 flex-1">
-            <p className={`text-sm break-words whitespace-pre-wrap ${muted ? 'text-slate-500' : 'text-slate-800'}`}>{s.body}</p>
+        <li key={s.id} className="group">
+          <p className={`text-sm break-words whitespace-pre-wrap ${muted ? 'text-slate-500' : 'text-slate-800'}`}>
+            <ChessPawn size={13} className={`mr-1.5 -mt-0.5 inline ${muted ? 'text-slate-300' : 'text-brand-600'}`} />{s.body}
+          </p>
+          <div className="flex min-h-6 items-center justify-between gap-2">
             <p className="text-[11px] text-slate-400">{[s.by, stamp(s.created_at), s.updated_at && 'edited'].filter(Boolean).join(' · ')}</p>
+            {!readOnly && (
+              <span className="flex shrink-0 gap-0.5 opacity-0 transition group-focus-within:opacity-100 group-hover:opacity-100">
+                <button type="button" className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" onClick={() => setEditing(`s${s.id}`)} aria-label="Edit this strategy" title="Edit"><PenLine size={13} /></button>
+                <button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" disabled={busy} aria-label="Delete this strategy" title="Delete"
+                  onClick={() => confirm('Delete this strategy?') && run(() => api.del(`/tickets/strategies/${s.id}`))}><Trash2 size={13} /></button>
+              </span>
+            )}
           </div>
-          {!readOnly && (
-            <span className="flex shrink-0 gap-0.5 opacity-0 transition group-focus-within:opacity-100 group-hover:opacity-100">
-              <button type="button" className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" onClick={() => setEditing(`s${s.id}`)} aria-label="Edit this strategy" title="Edit"><PenLine size={13} /></button>
-              <button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" disabled={busy} aria-label="Delete this strategy" title="Delete"
-                onClick={() => confirm('Delete this strategy?') && run(() => api.del(`/tickets/strategies/${s.id}`))}><Trash2 size={13} /></button>
-            </span>
-          )}
         </li>
       )))}
       {!o.strategies.length && <li className="text-xs text-slate-400">No strategy for this yet.</li>}
@@ -931,22 +932,22 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
             {!open.length && <p className="rounded-lg border border-dashed border-slate-200 p-3 text-sm text-slate-400">{done.length ? 'Every obstacle is crossed off.' : readOnly ? 'No strategy yet.' : 'No strategy yet. Add the first obstacle and how we get past it.'}</p>}
             {open.map((o) => (
               <article key={o.id} className="rounded-lg border border-slate-200 bg-white">
-                <header className="group flex items-start gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
-                  <div className="min-w-0 flex-1">
+                <header className="border-b border-slate-100 bg-slate-50 px-3 py-2">
+                  <div className="flex min-h-7 items-center justify-between gap-2">
                     <div className="text-[10px] font-semibold tracking-wide text-slate-400 uppercase">Obstacle</div>
-                    {editing === `o${o.id}`
-                      ? <InlineText initial={o.body} label="Obstacle" busy={busy} onCancel={() => setEditing(null)} onSave={(body) => run(() => api.put(`/tickets/obstacles/${o.id}`, { body }))} />
-                      : o.body ? <p className="text-sm font-medium break-words whitespace-pre-wrap text-slate-900">{o.body}</p>
-                        : <p className="text-sm text-slate-400 italic">No obstacle named</p>}
+                    {!readOnly && editing !== `o${o.id}` && (
+                      <span className="flex shrink-0 items-center gap-0.5">
+                        <button type="button" className="rounded p-1 text-slate-400 hover:bg-white hover:text-slate-700" onClick={() => setEditing(`o${o.id}`)} aria-label="Edit this obstacle" title={o.body ? 'Edit' : 'Name the obstacle'}><PenLine size={13} /></button>
+                        <button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" disabled={busy} onClick={() => removeObstacle(o)} aria-label="Delete this obstacle" title="Delete"><Trash2 size={13} /></button>
+                        <button type="button" className="ml-1 inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100" onClick={() => setEditing(`x${o.id}`)}
+                          title="Overcome: cross it off. It’s kept underneath for context."><Check size={12} /> Cross off</button>
+                      </span>
+                    )}
                   </div>
-                  {!readOnly && editing !== `o${o.id}` && (
-                    <span className="flex shrink-0 items-center gap-0.5">
-                      <button type="button" className="rounded p-1 text-slate-400 hover:bg-white hover:text-slate-700" onClick={() => setEditing(`o${o.id}`)} aria-label="Edit this obstacle" title={o.body ? 'Edit' : 'Name the obstacle'}><PenLine size={13} /></button>
-                      <button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" disabled={busy} onClick={() => removeObstacle(o)} aria-label="Delete this obstacle" title="Delete"><Trash2 size={13} /></button>
-                      <button type="button" className="ml-1 inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100" onClick={() => setEditing(`x${o.id}`)}
-                        title="Overcome: cross it off. It’s kept underneath for context."><Check size={12} /> Cross off</button>
-                    </span>
-                  )}
+                  {editing === `o${o.id}`
+                    ? <InlineText initial={o.body} label="Obstacle" busy={busy} onCancel={() => setEditing(null)} onSave={(body) => run(() => api.put(`/tickets/obstacles/${o.id}`, { body }))} />
+                    : o.body ? <p className="text-sm break-words whitespace-pre-wrap text-slate-800">{o.body}</p>
+                      : <p className="text-sm text-slate-400 italic">No obstacle named</p>}
                 </header>
                 <div className="space-y-2.5 px-3 py-2.5">
                   {strategyList(o, false)}
