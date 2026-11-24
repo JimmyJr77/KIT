@@ -465,13 +465,12 @@ function Variance({ actual, estimated, className = '' }) {
 }
 
 /**
- * A quarter's travel spend, actual / estimated: each month's actual spend beside what its trips are estimated at, with
- * the running actual total so far, and the quarter in all. Arrows move to other quarters. Clicking a card shows its
+ * A quarter's travel spend, actual / estimated: each month's actual spend beside what its trips are estimated at,
+ * and the quarter in all. Arrows move to other quarters. Clicking a card shows its
  * actual costs in the list below (onShow(quarter, month)); picked(quarter, month) says whether a card is showing.
  */
 function ActualSpend({ summary, who, thisQuarter, onAdd, onShow, picked, onShift, onReset }) {
   const thisMonth = new Date().toLocaleDateString('en-CA').slice(0, 7);
-  let running = 0;
   const pair = (actual, estimated, tone = 'text-slate-900') => (
     <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 tabular-nums">
       <span className={`text-2xl font-bold ${tone}`}>{noCents(actual)}</span>
@@ -492,7 +491,6 @@ function ActualSpend({ summary, who, thisQuarter, onAdd, onShow, picked, onShift
       </div>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {summary.months.map((m) => {
-          running += m.total;
           return (
             <button key={m.month} type="button" onClick={() => onShow(summary.quarter, m.month)}
               title={picked(summary.quarter, m.month) ? 'Show all actual costs' : `Show only ${monthName(m.month)} actual costs`}
@@ -505,7 +503,6 @@ function ActualSpend({ summary, who, thisQuarter, onAdd, onShow, picked, onShift
               <div className="mt-0.5 text-[11px] text-slate-400">
                 <Variance actual={m.total} estimated={m.estimated} /> · {m.entries} entr{m.entries === 1 ? 'y' : 'ies'}, {m.trips} trip{m.trips === 1 ? '' : 's'}
               </div>
-              <div className="text-[11px] text-slate-400">{noCents(running)} actual so far this quarter</div>
             </button>
           );
         })}

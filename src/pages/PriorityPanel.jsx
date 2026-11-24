@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { X, Plus, Trash2, Search, Ticket, ArrowLeft, Archive, Hourglass, Handshake } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -120,6 +120,21 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
   };
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  // The priority's box grows with its text, so all of it shows however long it is; it re-fits when the panel is made wider or narrower.
+  const titleBox = useRef(null);
+  const fitTitle = useCallback(() => {
+    const el = titleBox.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, []);
+  useLayoutEffect(fitTitle, [fitTitle, form.title]);
+  useEffect(() => {
+    if (!titleBox.current) return undefined;
+    const seen = new ResizeObserver(fitTitle);
+    seen.observe(titleBox.current.parentElement);
+    return () => seen.disconnect();
+  });
   const setT = (k, v) => setTicket((t) => ({ ...t, [k]: v }));
 
   const save = async () => {
@@ -331,7 +346,9 @@ export default function PriorityPanel({ card, defaultAssignee, users, statuses, 
 
           {/* Card */}
           <Field label={subtaskId ? 'Priority / subtask' : 'Priority / next step'}>
-            <input className="input" placeholder="e.g. Schedule meeting with contracting officer" value={form.title} onChange={(e) => set('title', e.target.value)} disabled={ro} />
+            <textarea ref={titleBox} rows={1} className="input block resize-none overflow-hidden" placeholder="e.g. Schedule meeting with contracting officer"
+              value={form.title} onChange={(e) => set('title', e.target.value.replace(/\s*\n\s*/g, ' '))}
+              onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()} disabled={ro} />
             {subtaskId && (card?.step_title || openSteps.find((a) => a.id === activityId)) && (
               <p className="mt-1 text-xs text-slate-500">A subtask of “{card?.step_title || openSteps.find((a) => a.id === activityId).subject}”.</p>
             )}
