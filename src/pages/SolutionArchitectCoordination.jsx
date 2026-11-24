@@ -144,8 +144,9 @@ export default function SolutionArchitectCoordination() {
                   <th className="w-36 px-3 py-2.5">Category</th>
                   <th className="w-44 px-3 py-2.5">How critical</th>
                   <th className="w-32 px-3 py-2.5">Architects</th>
+                  {/* Request and SA Notes have no set width, so they share what the other columns leave, equally. */}
                   <th className="px-3 py-2.5">Request</th>
-                  <th className="w-72 px-3 py-2.5">SA Notes</th>
+                  <th className="px-3 py-2.5">SA Notes</th>
                   <th className="w-40 px-3 py-2.5">SA Response</th>
                   <th className="w-24 px-3 py-2.5" />
                 </tr>

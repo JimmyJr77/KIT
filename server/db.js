@@ -311,6 +311,32 @@ addColumn('tickets', 'ticket_type', "TEXT NOT NULL DEFAULT 'bid'");
 addColumn('tickets', 'strategy', 'TEXT');
 addColumn('tickets', 'strategy_updated_at', 'TEXT');
 addColumn('tickets', 'strategy_updated_by', 'INTEGER');
+db.exec(`
+-- A pipeline ticket's strategy is a list of obstacles, each with the strategies for getting past it (server/strategy.js).
+-- One that's overcome is crossed off: resolved_at is set, with what came of it in outcome, and it's kept for context.
+CREATE TABLE IF NOT EXISTS ticket_obstacles (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  body TEXT NOT NULL DEFAULT '',
+  position INTEGER NOT NULL DEFAULT 0,
+  resolved_at TEXT,
+  resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  outcome TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ticket_obstacles_ticket ON ticket_obstacles(ticket_id);
+CREATE TABLE IF NOT EXISTS ticket_strategies (
+  id INTEGER PRIMARY KEY,
+  obstacle_id INTEGER NOT NULL REFERENCES ticket_obstacles(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ticket_strategies_obstacle ON ticket_strategies(obstacle_id);
+`);
 addColumn('tickets', 'assessment', 'TEXT');
 addColumn('tickets', 'assessment_updated_at', 'TEXT');
 addColumn('tickets', 'assessment_updated_by', 'INTEGER');
@@ -1739,6 +1765,19 @@ export function getSetting(key) {
 
 export function setSetting(key, value) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, String(value));
+}
+
+// A ticket's strategy from before obstacles (one block of text) becomes its first entry: a strategy with no obstacle named. Once.
+if (!getSetting('ticket_strategy_entries')) {
+  db.transaction(() => {
+    db.prepare("SELECT id, strategy, strategy_updated_by, strategy_updated_at FROM main.tickets t WHERE TRIM(COALESCE(strategy, '')) != '' AND NOT EXISTS (SELECT 1 FROM main.ticket_obstacles o WHERE o.ticket_id = t.id)").all()
+      .forEach((t) => {
+        const at = t.strategy_updated_at || new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const oid = db.prepare("INSERT INTO main.ticket_obstacles (ticket_id, body, created_by, created_at) VALUES (?, '', ?, ?)").run(t.id, t.strategy_updated_by ?? null, at).lastInsertRowid;
+        db.prepare('INSERT INTO main.ticket_strategies (obstacle_id, body, created_by, created_at) VALUES (?, ?, ?, ?)').run(oid, t.strategy.trim(), t.strategy_updated_by ?? null, at);
+      });
+  })();
+  setSetting('ticket_strategy_entries', '1');
 }
 
 db.exec(`

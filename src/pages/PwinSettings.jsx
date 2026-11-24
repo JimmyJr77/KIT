@@ -19,7 +19,7 @@ const TABS = [['pwin', 'PWIN'], ['gate', 'Qualified lead'], ['tags', 'Tags'], ['
 const SUBTITLES = { pwin: 'PWIN weights and must-have areas', gate: 'What makes a qualified lead at the Initial Gate', tags: 'The tags you see on the board’s cards, and the tag list', layout: 'How wide the board’s tickets are, and their text size', stages: 'The board’s columns' };
 
 /**
- * BD Pipeline settings, in tabs: PWIN weights and must-have areas for the bid and win assessment, with a way back to the
+ * BD Pipeline settings, in tabs: PWIN weights and must-have areas for the PWIN Assessment, with a way back to the
  * defaults; what makes a qualified lead at the Initial Gate (admins and BD team leads); which tags each person sees on the board's cards, with the tag list itself for admins to manage; and the stages of the board's current `pipeline`.
  */
 export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChanged, cardWidth, onCardWidth, textSize, onTextSize }) {
@@ -96,7 +96,7 @@ export default function PwinSettings({ onClose, onSaved, pipeline, onStagesChang
         <div className="space-y-4">
           <section className="space-y-2 rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
             <p>
-              <b className="text-slate-800">PWIN</b> turns each pipeline ticket’s Bid and win assessment into a probability of win from 0 to{' '}
+              <b className="text-slate-800">PWIN</b> turns each pipeline ticket’s PWIN Assessment into a probability of win from 0 to{' '}
               {Math.round(MAX_PWIN * 100)}%. Even a ticket rated 5 everywhere tops out at {Math.round(MAX_PWIN * 100)}%, because no pursuit is a sure win.
             </p>
             <div>

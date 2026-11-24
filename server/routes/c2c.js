@@ -13,6 +13,7 @@ import { recordTicketUpdate } from '../worklog.js';
 import { canEditTicket } from '../../src/lib/ticketAccess.js';
 import { ticketEditDenied } from './tickets.js';
 import { gateFlagger } from '../staffing.js';
+import { openStrategies } from '../strategy.js';
 
 const r = Router();
 
@@ -79,6 +80,7 @@ function list(user) {
     });
   }
   const gateFlags = gateFlagger();
+  const strategies = openStrategies(); // each ticket's open obstacles with their strategies: part of its status note
   return rows.map((t) => {
     const term = termFromFields(t.custom_fields);
     const mine = notes.get(t.id) || [];
@@ -94,6 +96,7 @@ function list(user) {
       owner: t.owner_first_name ? { id: t.created_by, first_name: t.owner_first_name, last_name: t.owner_last_name } : null,
       can_edit: canEditTicket(user, t), territory_id: t.territory_id,
       mine: t.created_by === user.id || t.bd_director_id === user.id || carded.has(t.id),
+      strategies: strategies.get(t.id) || [],
       notes: mine, note_ids: pickedIds(t).filter((id) => mine.some((n) => n.id === id)),
     };
   });

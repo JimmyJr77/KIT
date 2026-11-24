@@ -18,6 +18,7 @@ import '../sample/registry.js'; // sample_rows, so sample tickets aren't moved o
 import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields, fieldValue } from '../services/pipedriveFields.js';
 import { PROCESS_TYPES, DECISIONS, SA_RESPONSES, SHARED_FIELDS, cleanReviews, cleanFields, cleanQualification, GATE_OVERRIDES, gateDecision, gateRuleText, QUALIFICATION, milestoneOf } from '../../src/lib/process.js';
+import { listObstacles, strategyText } from '../strategy.js';
 import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTags, gateFlagger, gateOut, mayOverrideGate, ensureGateDraft, gateRule, saveGateRule, mayEditGateRule } from '../staffing.js';
 import { NEXT_STEP_SQL } from '../activities.js';
 import { canEditTicket, ownerOnlyMessage } from '../../src/lib/ticketAccess.js';
@@ -429,18 +430,83 @@ r.get('/:id/plan', (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
   res.json({
-    strategy: t.strategy || '', strategy_updated_at: t.strategy_updated_at, strategy_updated_by: nameOf(t.strategy_updated_by),
+    obstacles: listObstacles(t.id), strategy_updated_at: t.strategy_updated_at, strategy_updated_by: nameOf(t.strategy_updated_by),
     assessment: json.parse(t.assessment, {}), assessment_updated_at: t.assessment_updated_at, assessment_updated_by: nameOf(t.assessment_updated_by),
   });
 });
 
-r.put('/:id/strategy', ownerOnly(), (req, res) => {
+// ---- Strategy: obstacles, each with its strategies (server/strategy.js). The ticket's owner or an admin changes them.
+const ofObstacle = ticketOf('ticket_obstacles', 'oid');
+const ofStrategy = (req) => db.prepare('SELECT o.ticket_id FROM ticket_strategies s JOIN ticket_obstacles o ON o.id = s.obstacle_id WHERE s.id = ?').get(req.params.sid)?.ticket_id;
+const text = (v, max = 4000) => String(v ?? '').trim().slice(0, max);
+/** After a change to a ticket's strategy: who and when, the ticket's history, and the list as it now stands. */
+const strategySaved = (req, res, ticketId, what = 'Win strategy') => {
+  db.prepare("UPDATE tickets SET strategy_updated_at = datetime('now'), strategy_updated_by = ?, updated_at = datetime('now') WHERE id = ?").run(req.user.id, ticketId);
+  const t = ticketRow(ticketId);
+  recordTicketUpdate(req.user, t, what);
+  res.json({ obstacles: listObstacles(ticketId), strategy_updated_at: t.strategy_updated_at, strategy_updated_by: nameOf(req.user.id) });
+};
+
+/** Body: { obstacle, strategy }. A new obstacle with its first strategy; either may be left blank, not both. */
+r.post('/:id/obstacles', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
-  if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  db.prepare("UPDATE tickets SET strategy = ?, strategy_updated_at = datetime('now'), strategy_updated_by = ?, updated_at = datetime('now') WHERE id = ?")
-    .run(String(req.body?.strategy ?? ''), req.user.id, t.id);
-  recordTicketUpdate(req.user, t, 'Win strategy');
-  res.json({ ok: true, strategy_updated_at: ticketRow(t.id).strategy_updated_at, strategy_updated_by: nameOf(req.user.id) });
+  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets have a strategy' });
+  const obstacle = text(req.body?.obstacle);
+  const strategy = text(req.body?.strategy);
+  if (!obstacle && !strategy) return res.status(400).json({ error: 'Write the obstacle, the strategy, or both' });
+  db.transaction(() => {
+    const oid = db.prepare('INSERT INTO ticket_obstacles (ticket_id, body, position, created_by) VALUES (?, ?, (SELECT COALESCE(MAX(position) + 1, 0) FROM ticket_obstacles WHERE ticket_id = ?), ?)')
+      .run(t.id, obstacle, t.id, req.user.id).lastInsertRowid;
+    if (strategy) db.prepare('INSERT INTO ticket_strategies (obstacle_id, body, created_by) VALUES (?, ?, ?)').run(oid, strategy, req.user.id);
+  })();
+  strategySaved(req, res, t.id, 'Win strategy: obstacle added');
+});
+
+/**
+ * Body: any of { body, resolved, outcome }. `resolved` true crosses the obstacle off (it's kept, with `outcome`: what came
+ * of it), false opens it again. `outcome` on its own changes what a crossed-off one says.
+ */
+r.put('/obstacles/:oid', ownerOnly(ofObstacle), (req, res) => {
+  const o = db.prepare('SELECT * FROM ticket_obstacles WHERE id = ?').get(req.params.oid);
+  const b = req.body || {};
+  const body = 'body' in b ? text(b.body) : o.body;
+  if (!body && !db.prepare('SELECT 1 FROM ticket_strategies WHERE obstacle_id = ?').get(o.id)) return res.status(400).json({ error: 'Write the obstacle' });
+  const resolved = 'resolved' in b ? !!b.resolved : !!o.resolved_at;
+  const outcome = resolved ? ('outcome' in b ? text(b.outcome) : o.outcome || '') : null;
+  db.prepare(`UPDATE ticket_obstacles SET body = ?, outcome = ?, updated_at = datetime('now'),
+      resolved_at = CASE WHEN ? THEN COALESCE(resolved_at, datetime('now')) ELSE NULL END, resolved_by = CASE WHEN ? THEN COALESCE(resolved_by, ?) ELSE NULL END WHERE id = ?`)
+    .run(body, outcome || null, resolved ? 1 : 0, resolved ? 1 : 0, req.user.id, o.id);
+  strategySaved(req, res, o.ticket_id, resolved && !o.resolved_at ? 'Win strategy: obstacle crossed off' : !resolved && o.resolved_at ? 'Win strategy: obstacle reopened' : 'Win strategy');
+});
+
+/** Removes an obstacle and its strategies outright (crossing it off keeps it). */
+r.delete('/obstacles/:oid', ownerOnly(ofObstacle), (req, res) => {
+  const o = db.prepare('SELECT * FROM ticket_obstacles WHERE id = ?').get(req.params.oid);
+  db.prepare('DELETE FROM ticket_obstacles WHERE id = ?').run(o.id);
+  strategySaved(req, res, o.ticket_id, 'Win strategy: obstacle removed');
+});
+
+/** Body: { body }. Another strategy for an obstacle. */
+r.post('/obstacles/:oid/strategies', ownerOnly(ofObstacle), (req, res) => {
+  const o = db.prepare('SELECT * FROM ticket_obstacles WHERE id = ?').get(req.params.oid);
+  const body = text(req.body?.body);
+  if (!body) return res.status(400).json({ error: 'Write the strategy' });
+  db.prepare('INSERT INTO ticket_strategies (obstacle_id, body, created_by) VALUES (?, ?, ?)').run(o.id, body, req.user.id);
+  strategySaved(req, res, o.ticket_id, 'Win strategy: strategy added');
+});
+
+/** Body: { body }. */
+r.put('/strategies/:sid', ownerOnly(ofStrategy), (req, res) => {
+  const body = text(req.body?.body);
+  if (!body) return res.status(400).json({ error: 'Write the strategy' });
+  db.prepare("UPDATE ticket_strategies SET body = ?, updated_at = datetime('now') WHERE id = ?").run(body, req.params.sid);
+  strategySaved(req, res, ofStrategy(req));
+});
+
+r.delete('/strategies/:sid', ownerOnly(ofStrategy), (req, res) => {
+  const ticketId = ofStrategy(req);
+  db.prepare('DELETE FROM ticket_strategies WHERE id = ?').run(req.params.sid);
+  strategySaved(req, res, ticketId, 'Win strategy: strategy removed');
 });
 
 /** Body: { assessment: { [criterion]: { score: 1–5 | null, answers: { [prompt]: string } } } }. */
@@ -1034,7 +1100,7 @@ r.get('/:id/process-view', (req, res) => {
     .map((x) => ({ user: userRow(x.user_id), position: x.position + 1, total: x.total }));
   const strategy = {
     tiers, lists,
-    text: t.strategy || '', updated_at: t.strategy_updated_at ?? null, updated_by: nameOf(t.strategy_updated_by),
+    text: strategyText(t.id), updated_at: t.strategy_updated_at ?? null, updated_by: nameOf(t.strategy_updated_by),
     assessment: json.parse(t.assessment, {}), assessment_updated_at: t.assessment_updated_at ?? null, assessment_updated_by: nameOf(t.assessment_updated_by),
     pwin: ticketPwin(t), model: pwinModel(),
   };

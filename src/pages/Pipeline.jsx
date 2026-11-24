@@ -6,7 +6,7 @@ const CARD = 'card:';
 // While a ticket is dragged, the header becomes buckets: dropping on one staffs the ticket for that event (see BucketBar).
 const BUCKET = 'bucket:';
 const cardFirst = (args) => { const hits = pointerWithin(args); const cards = hits.filter((h) => String(h.id).startsWith(CARD)); return cards.length ? cards : hits; };
-import { ListOrdered, Clock, Star, Trophy, ChevronsLeft, ChevronsRight, UserPlus, X } from 'lucide-react';
+import { ListOrdered, Clock, Star, ChevronsLeft, ChevronsRight, UserPlus, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/data.js';
 import { fullStamp, ticketKind } from '../lib/format.js';
@@ -151,11 +151,6 @@ export default function Pipeline() {
   const stageInfo = useApi(pipeline ? `/stages?pipeline_id=${pipeline.id ?? 'kit'}` : null);
   const aliases = stageInfo.data?.aliases || NO_ALIASES;
 
-  const markWon = async (t) => {
-    if (!confirm(`Mark “${t.opportunity_title}” won? It moves into Delivery as a contract.${t.pipedrive_id ? ' Pipedrive follows.' : ''}`)) return;
-    setError('');
-    try { await api.put(`/tickets/${t.id}/outcome`, { deal_status: 'won' }); load(); } catch (e) { setError(`Couldn’t mark “${t.opportunity_title}” paid: ${e.message}`); }
-  };
   const columns = useMemo(() => {
     const onBoard = shown.filter((t) => keyOf(t.pipeline_id) === pipeline?.key);
     const aliasOf = (t) => aliases.find((a) => a.id === t.alias_id && a.stage === t.pipeline_status);
@@ -269,7 +264,7 @@ export default function Pipeline() {
           <div className={`flex h-full min-h-96 items-stretch gap-3 ${cardWidth === 'fit' ? '' : 'w-max min-w-full'}`}>
             {columns.map((c) => <Column key={c.key} column={c} onOpen={(id) => { setOpenStep(undefined); setOpenId(id); }}
               onOpenStep={setQuick} dragId={dragId} now={now}
-              onWon={(c.alias?.stage ?? c.key) === lastStage ? markWon : null} width={cardWidth} ranking={ranking}
+              last={(c.alias?.stage ?? c.key) === lastStage} width={cardWidth} ranking={ranking}
               minimized={minimized.includes(`${pipeline?.key}|${c.key}`)} onMinimize={() => toggleMinimized(`${pipeline?.key}|${c.key}`)} />)}
           </div>
       </div>
@@ -322,10 +317,10 @@ function Bucket({ event }) {
   );
 }
 
-function Column({ column, onOpen, onOpenStep, dragId, now, onWon, width = 'wide', minimized, onMinimize, ranking }) {
+function Column({ column, onOpen, onOpenStep, dragId, now, last = false, width = 'wide', minimized, onMinimize, ranking }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.key });
   const total = column.tickets.reduce((s, t) => s + (t.value || 0), 0);
-  const closed = !!onWon; // the last stage: a deal here is marked won from its card
+  const closed = last; // the last stage is drawn apart; a deal there is marked paid on the ticket itself
   // Minimized: a thin lane with the stage's name written down it and no cards. It still takes a drop, and opens only when clicked.
   if (minimized) {
     return (
@@ -360,7 +355,7 @@ function Column({ column, onOpen, onOpenStep, dragId, now, onWon, width = 'wide'
         </span>
       </header>
       <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-2">
-        {column.tickets.map((t) => <DraggableTicket key={t.id} ticket={t} onOpen={onOpen} onOpenStep={onOpenStep} hidden={dragId === t.id} now={now} onWon={onWon} ranking={ranking} />)}
+        {column.tickets.map((t) => <DraggableTicket key={t.id} ticket={t} onOpen={onOpen} onOpenStep={onOpenStep} hidden={dragId === t.id} now={now} ranking={ranking} />)}
         {!column.tickets.length && (
           <p className={`rounded-lg border-2 border-dashed px-3 py-6 text-center text-xs ${isOver ? 'border-brand-500 text-brand-600' : 'border-slate-200 text-slate-400'}`}>
             {isOver ? 'Drop here' : 'No tickets'}
@@ -371,11 +366,10 @@ function Column({ column, onOpen, onOpenStep, dragId, now, onWon, width = 'wide'
   );
 }
 
-/** A pipeline ticket on the board. Its owner (or an admin) drags it to another stage or marks it won; others just open it. */
-function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now, onWon: won, ranking }) {
+/** A pipeline ticket on the board. Its owner (or an admin) drags it to another stage; others just open it. */
+function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now, ranking }) {
   const { user } = useAuth();
   const canEdit = canEditTicket(user, ticket);
-  const onWon = canEdit ? won : null;
   const { attributes, listeners, setNodeRef } = useDraggable({ id: ticket.id, disabled: !canEdit });
   // In priority order, another ticket dropped on this one goes just above it: a line shows where.
   const drop = useDroppable({ id: `${CARD}${ticket.id}`, disabled: !ranking });
@@ -384,13 +378,6 @@ function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now, onWon: won, 
     <div ref={(el) => { setNodeRef(el); drop.setNodeRef(el); }} {...attributes} {...listeners} onClick={() => onOpen(ticket.id)}
       className={`${hidden ? 'opacity-30' : ''} ${above ? 'relative before:absolute before:inset-x-0 before:-top-1.5 before:h-1 before:rounded-full before:bg-brand-500' : ''}`}>
       <TicketCard ticket={ticket} now={now} onOpenStep={onOpenStep} />
-      {onWon && (
-        <button type="button" onClick={(e) => { e.stopPropagation(); onWon(ticket); }} onPointerDown={(e) => e.stopPropagation()}
-          className="mt-1 flex w-full items-center justify-center gap-1 rounded-md bg-emerald-50 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
-          title="Mark paid: the deal is won and becomes a contract in Delivery">
-          <Trophy size={12} /> Mark paid
-        </button>
-      )}
     </div>
   );
 }
@@ -436,7 +423,7 @@ export function TicketCard({ ticket: t, now = Date.now(), overlay, onOpenStep, c
         <span className="flex shrink-0 items-center gap-1">
           {t.ticket_type !== 'work' && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 tabular-nums">{t.value != null ? money(t.value) : '—'}</span>}
           {t.pwin && (
-            <span className="rounded bg-brand-50 px-1.5 py-0.5 text-xs font-semibold whitespace-nowrap text-brand-700 tabular-nums" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>
+            <span className="rounded bg-brand-50 px-1.5 py-0.5 text-xs font-semibold whitespace-nowrap text-brand-700 tabular-nums" title={`PWIN: weighted PWIN Assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>
               {t.pwin.score}%
             </span>
           )}

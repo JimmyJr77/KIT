@@ -1,6 +1,7 @@
 // The win assessment on a pipeline ticket: six criteria, each with a 1–5 score and prompts to fill in (Pursuit momentum
 // shows the ticket's latest activities and comments instead).
 // Stored on the ticket as { [criterion key]: { score, answers: { [prompt key]: text } } }.
+// Each criterion carries a `scale`: what a 1, 2, 3, 4 or 5 means for it, from knowing nothing (1) to the ideal position (5).
 // Each criterion also carries its default PWIN weight, the reason for it, and whether it's a must-have;
 // teams can change weights and must-haves in BD Pipeline › Settings.
 
@@ -15,6 +16,14 @@ export const SCORE_LABELS = {
 export const CRITERIA = [
   {
     key: 'need', title: 'Customer need', weight: 15, mustHave: true,
+    // What each rating means here, shown in place of the blurb while a number is pointed at.
+    scale: {
+      1: 'We don’t know the customer’s problem, or whether there is one.',
+      2: 'We’ve heard of a general need secondhand. Nothing specific, nothing confirmed.',
+      3: 'The customer has described the problem to us, but the outcome they want or how much it matters is unclear.',
+      4: 'The mission owner has confirmed the problem and the outcome they want, with signs it’s a priority.',
+      5: 'A documented, top-priority requirement: the customer has stated the problem, the outcome and the urgency, and is acting on it.',
+    },
     why: 'A real, prioritized problem the customer is actively trying to solve is the strongest sign an award will happen.',
     blurb: 'Specific mission problem, desired outcome, and evidence of customer prioritization.',
     prompts: [
@@ -25,6 +34,14 @@ export const CRITERIA = [
   },
   {
     key: 'access', title: 'Customer access', weight: 30, mustHave: true,
+    // What each rating means here, shown in place of the blurb while a number is pointed at.
+    scale: {
+      1: 'No contacts and no relationships. We don’t know who owns the mission or the decision.',
+      2: 'We know names, but have no working relationship: cold outreach at best.',
+      3: 'A working contact on the customer’s team, but not the mission owner or the people who decide.',
+      4: 'Regular access to the mission owner and at least one decision influencer; acquisition contacts identified.',
+      5: 'Trusted relationships with the mission owner, the decision influencers and acquisition. They call us, and we’re helping shape the requirement.',
+    },
     why: 'Customers buy from people they know and trust. Access to the mission owner lets us shape the requirement.',
     blurb: 'Named mission owner, decision influencers, and acquisition stakeholders.',
     prompts: [
@@ -35,6 +52,14 @@ export const CRITERIA = [
   },
   {
     key: 'funding', title: 'Funding confidence', weight: 20, mustHave: true,
+    // What each rating means here, shown in place of the blurb while a number is pointed at.
+    scale: {
+      1: 'No knowledge of any funding, or of where it would come from.',
+      2: 'Funding is hoped for or rumored. No source or amount identified.',
+      3: 'A likely source and a rough budget are identified, but the money is planned or speculative.',
+      4: 'Funding is in the budget or firmly planned, with a source and amount; the customer confirms the intent to spend.',
+      5: 'Funding is confirmed and available: source, amount and timing verified by the customer or in budget documents.',
+    },
     why: 'No money, no award. Confirmed funding is what turns customer interest into a contract.',
     blurb: 'Funding source, estimated budget, and status: confirmed, planned, or speculative with evidence.',
     prompts: [
@@ -46,6 +71,14 @@ export const CRITERIA = [
   },
   {
     key: 'solution', title: 'Solution & delivery fit', weight: 5,
+    // What each rating means here, shown in place of the blurb while a number is pointed at.
+    scale: {
+      1: 'We don’t know what’s required, or have no relevant capability or past performance.',
+      2: 'A partial fit, with major gaps in staff, clearances or technology and no plan to close them.',
+      3: 'We can do the core work. The gaps are known, with a plan to close them by hiring or teaming.',
+      4: 'A strong match to our capabilities and past performance; only minor gaps, already being closed.',
+      5: 'A perfect fit: proven past performance, key staff, clearances and technology in hand. Nothing to close.',
+    },
     why: 'Capability gaps can usually be closed by hiring or teaming, so fit matters far less than customer pull.',
     blurb: 'Match to capabilities and past performance; staffing, clearance, technology, and gaps.',
     prompts: [
@@ -58,6 +91,14 @@ export const CRITERIA = [
   },
   {
     key: 'competition', title: 'Competitive position', weight: 20,
+    // What each rating means here, shown in place of the blurb while a number is pointed at.
+    scale: {
+      1: 'We don’t know who the incumbent or the competitors are, or how the customer sees us.',
+      2: 'An entrenched, well-liked incumbent or stronger competitors, and no discriminator the customer values.',
+      3: 'We know the field and are a credible bidder, but nothing sets us clearly apart.',
+      4: 'We have discriminators the customer values and evidence they favor our approach; the incumbent is vulnerable or absent.',
+      5: 'We’re the customer’s preferred choice: the incumbent with strong performance, or clear discriminators and no serious competitor.',
+    },
     why: 'An entrenched incumbent or weak discriminators can sink an otherwise strong pursuit.',
     blurb: 'Incumbent and likely competitors, customer-valued discriminators, and evidence.',
     prompts: [
@@ -69,6 +110,14 @@ export const CRITERIA = [
   },
   {
     key: 'momentum', title: 'Pursuit momentum', weight: 10,
+    // What each rating means here, shown in place of the blurb while a number is pointed at.
+    scale: {
+      1: 'No activity. Nothing has happened on this pursuit and nobody is driving it.',
+      2: 'Stalled: occasional activity, no clear owner and no next step.',
+      3: 'Moving slowly: an owner and some recent activity, but next steps slip.',
+      4: 'Steady progress: regular customer contact, next steps set and met.',
+      5: 'Full momentum: frequent engagement, every next step on time, and the customer is moving with us.',
+    },
     why: 'Steady progress with a clear owner shows the pursuit is real and moving.',
     blurb: 'Is the pursuit moving? Rate it from what has happened on the ticket lately.',
     // Nothing to fill in: the ticket's own latest activities and comments are the evidence, shown in place of prompts.
@@ -83,7 +132,7 @@ export const DEFAULT_PWIN_WEIGHTS = Object.fromEntries(CRITERIA.map((c) => [c.ke
 export const DEFAULT_PWIN_GATES = CRITERIA.filter((c) => c.mustHave).map((c) => c.key);
 
 /** The best possible PWIN, for a ticket rated 5 in every area. Even a perfect pursuit isn't a sure win. */
-export const MAX_PWIN = 0.7;
+export const MAX_PWIN = 0.5;
 
 /** Share of an area's weight earned at each rating. Each step further from 5 costs more than a straight line would. */
 export const RATING_CREDIT = { 5: 1, 4: 0.7, 3: 0.4, 2: 0.15, 1: 0 };
@@ -98,7 +147,7 @@ const WEIGHTED_PENALTY_STRENGTH = 3;
  *   1. Base: each area earns RATING_CREDIT of its weight, so falling short of 5 costs more and more.
  *   2. Below 3, the base is multiplied down: hard for must-have areas, in proportion to weight for the rest.
  *      A weak must-have (say, no evidence the customer needs this) sinks the score however strong the rest is.
- *   3. The result is scaled to MAX_PWIN, so all 5s gives 70%, not 100%.
+ *   3. The result is scaled to MAX_PWIN, so all 5s gives 50%, not 100%.
  * Areas not yet rated count as 1, since 1 means "no information". Returns null until an area that counts is rated.
  * Also returns the base before penalties and each penalty applied, so the score can be explained.
  */

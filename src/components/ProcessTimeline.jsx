@@ -358,7 +358,7 @@ function strategyParts(s, onOpenTool) {
           {s.updated_at && <div className="mt-1 text-[10px] text-slate-400">Saved {stamp(s.updated_at)}{s.updated_by ? ` by ${s.updated_by}` : ''}</div>}
         </div>
         <div>
-          <Heading icon={Scale} action={<Open onOpenTool={onOpenTool} tool="assessment"><Pencil size={11} className="inline" /> Edit</Open>}>Bid and win assessment</Heading>
+          <Heading icon={Scale} action={<Open onOpenTool={onOpenTool} tool="assessment"><Pencil size={11} className="inline" /> Edit</Open>}>PWIN Assessment</Heading>
           <div className="mt-1"><Assessment strategy={s} /></div>
         </div>
       </>
@@ -457,7 +457,7 @@ function milestoneParts(m, data, onOpenTool, onChanged) {
         )}
         {def.gate && fullAssessment && (
           <div>
-            <Heading icon={Scale}>Bid and win assessment</Heading>
+            <Heading icon={Scale}>PWIN Assessment</Heading>
             <div className="mt-1"><Assessment strategy={data.strategy} compact /></div>
             <p className="mt-1 text-[10px] text-slate-400">As rated now; the assessment isn't kept per staffing event.</p>
           </div>

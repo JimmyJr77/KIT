@@ -25,7 +25,7 @@ export const PLAN_TOOLS = [
   { key: 'strategy', label: 'Strategy', icon: ChessPawn, bidOnly: true, account: true },
   { key: 'activities', label: 'Activity', icon: CalendarCheck, account: true },
   { key: 'tickets', label: 'Priority tickets', icon: Ticket, account: true, accountOnly: true },
-  { key: 'assessment', label: 'Bid and win assessment', icon: Scale, bidOnly: true },
+  { key: 'assessment', label: 'PWIN Assessment', icon: Scale, bidOnly: true },
   { key: 'people', label: 'People', accountLabel: 'CRM', icon: ContactRound, account: true },
   { key: 'process', label: 'Staffing events', icon: Workflow, bidOnly: true },
   { key: 'details', label: 'Deal details', icon: ClipboardList, bidOnly: true },
@@ -825,47 +825,203 @@ function SaveBar({ dirty, busy, savedAt, savedBy, error, onSave }) {
 
 // ---- Strategy
 
+/**
+ * A pipeline ticket's strategy: a list of obstacles, each with the strategies for getting past it. "Add a new strategy" at
+ * the top opens two boxes, Obstacle and Strategy, which together start a new one; more strategies can be added to any
+ * obstacle. An obstacle that's overcome is crossed off, with what came of it (Outcome), and kept underneath for context.
+ * The strategies of the obstacles still open are what Close to closing shows as the ticket's status note, with the notes
+ * picked for it. Each change is saved as it's made; only the ticket's owner or an admin makes them.
+ */
 function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
   const [plan, setPlan] = usePlan(ticket.id);
-  const [text, setText] = useState(null);
+  const { readOnly } = useContext(TicketAccess);
+  const [draft, setDraft] = useState(null); // the Add a new strategy boxes, when open: { obstacle, strategy }
+  const [editing, setEditing] = useState(null); // the one text being written elsewhere: 'o12' (an obstacle), 's4' (a strategy), 'add12' (a new strategy for obstacle 12), 'x12' (crossing 12 off), 'out12' (its outcome)
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const value = text ?? plan?.strategy ?? '';
-  const dirty = text !== null && text !== (plan?.strategy ?? '');
-  useEffect(() => { onDirty?.(dirty); }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dirty = !!draft && !!(draft.obstacle.trim() || draft.strategy.trim());
+  useEffect(() => { onDirty?.(dirty || !!editing); }, [dirty, editing]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const save = async () => {
+  // Every change answers with the list as it now stands.
+  const run = async (fn) => {
+    if (busy) return false;
     setBusy(true);
     setError('');
     try {
-      const r = await api.put(`/tickets/${ticket.id}/strategy`, { strategy: value });
-      setPlan((p) => ({ ...p, strategy: value, strategy_updated_at: r.strategy_updated_at, strategy_updated_by: r.strategy_updated_by }));
-      setText(null);
+      const r = await fn();
+      setPlan((p) => ({ ...p, ...r }));
+      setEditing(null);
       onChanged();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+      return true;
+    } catch (e) { setError(e.message); return false; } finally { setBusy(false); }
   };
+  const add = async () => { if (await run(() => api.post(`/tickets/${ticket.id}/obstacles`, draft))) setDraft(null); };
+  const removeObstacle = (o) => {
+    const n = o.strategies.length;
+    if (confirm(`Delete this obstacle${n ? ` and its ${n === 1 ? 'strategy' : `${n} strategies`}` : ''}? To keep it for context, cross it off instead.`)) run(() => api.del(`/tickets/obstacles/${o.id}`));
+  };
+  const obstacles = plan?.obstacles || [];
+  const open = obstacles.filter((o) => !o.resolved_at);
+  const done = obstacles.filter((o) => o.resolved_at);
+  const box = 'input resize-y text-sm leading-relaxed';
+
+  const strategyList = (o, muted) => (
+    <ul className="space-y-1.5">
+      {o.strategies.map((s) => (editing === `s${s.id}` ? (
+        <li key={s.id}><InlineText initial={s.body} label="Strategy" busy={busy} onCancel={() => setEditing(null)} onSave={(body) => run(() => api.put(`/tickets/strategies/${s.id}`, { body }))} /></li>
+      ) : (
+        <li key={s.id} className="group flex items-start gap-2">
+          <ChessPawn size={13} className={`mt-0.5 shrink-0 ${muted ? 'text-slate-300' : 'text-brand-600'}`} />
+          <div className="min-w-0 flex-1">
+            <p className={`text-sm break-words whitespace-pre-wrap ${muted ? 'text-slate-500' : 'text-slate-800'}`}>{s.body}</p>
+            <p className="text-[11px] text-slate-400">{[s.by, stamp(s.created_at), s.updated_at && 'edited'].filter(Boolean).join(' · ')}</p>
+          </div>
+          {!readOnly && (
+            <span className="flex shrink-0 gap-0.5 opacity-0 transition group-focus-within:opacity-100 group-hover:opacity-100">
+              <button type="button" className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" onClick={() => setEditing(`s${s.id}`)} aria-label="Edit this strategy" title="Edit"><PenLine size={13} /></button>
+              <button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" disabled={busy} aria-label="Delete this strategy" title="Delete"
+                onClick={() => confirm('Delete this strategy?') && run(() => api.del(`/tickets/strategies/${s.id}`))}><Trash2 size={13} /></button>
+            </span>
+          )}
+        </li>
+      )))}
+      {!o.strategies.length && <li className="text-xs text-slate-400">No strategy for this yet.</li>}
+    </ul>
+  );
 
   return (
-    <DrawerShell title="Strategy" subtitle="How we win this account" onClose={onClose} lockable
-      footer={plan && <SaveBar dirty={dirty} busy={busy} error={error} savedAt={plan.strategy_updated_at} savedBy={plan.strategy_updated_by} onSave={save} />}>
+    <DrawerShell title="Strategy" subtitle="What stands in the way, and how we get past it" onClose={onClose} lockable
+      footer={plan && (
+        <p className={`text-[11px] ${error ? 'text-red-600' : 'text-slate-400'}`}>
+          {error || (plan.strategy_updated_at ? <><Check size={11} className="mr-0.5 inline" />Saved {stamp(plan.strategy_updated_at)}{plan.strategy_updated_by ? ` by ${plan.strategy_updated_by}` : ''}</> : 'Each change is saved as you make it.')}
+        </p>
+      )}>
       {plan ? (
         <div className="space-y-5">
-          <section className="space-y-1.5">
-            <h4 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><PenLine size={13} /> Your strategy</h4>
-            <textarea className="input min-h-[38vh] resize-y text-sm leading-relaxed" value={value} onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.preventDefault(), dirty && save())}
-              aria-label="Your strategy"
-              placeholder={'Win themes, customer hot buttons, discriminators, teaming approach, price-to-win, and the actions that get us there…'} />
+          {!readOnly && !draft && (
+            <button type="button" className="btn-primary w-full justify-center" onClick={() => { setDraft({ obstacle: '', strategy: '' }); setEditing(null); }}>
+              <Plus size={15} /> Add a new strategy
+            </button>
+          )}
+          {draft && (
+            <section className="space-y-3 rounded-lg border border-brand-500 bg-white p-3 ring-2 ring-brand-100">
+              <div>
+                <label className="label" htmlFor="st-obstacle">Obstacle</label>
+                <textarea id="st-obstacle" className={`${box} min-h-20`} value={draft.obstacle} autoFocus maxLength={4000} onChange={(e) => setDraft({ ...draft, obstacle: e.target.value })}
+                  placeholder="What stands between us and the win: an incumbent, a budget gap, a missing relationship, a competing vehicle…" />
+              </div>
+              <div>
+                <label className="label" htmlFor="st-strategy">Strategy</label>
+                <textarea id="st-strategy" className={`${box} min-h-24`} value={draft.strategy} maxLength={4000} onChange={(e) => setDraft({ ...draft, strategy: e.target.value })}
+                  onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.preventDefault(), dirty && add())}
+                  placeholder="How we get past it: the win theme, who we bring in, what we do next…" />
+              </div>
+              <div className="flex justify-end gap-2">
+                <button type="button" className="btn-ghost h-8 py-0 text-sm" onClick={() => (!dirty || confirm('Discard this strategy?')) && setDraft(null)}>Cancel</button>
+                <button type="button" className="btn-primary h-8 py-0 text-sm" onClick={add} disabled={!dirty || busy}>{busy ? 'Saving…' : 'Save'}</button>
+              </div>
+            </section>
+          )}
+
+          <section className="space-y-2">
+            <h4 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><ChessPawn size={13} /> Open strategies <span className="font-normal text-slate-400 normal-case">· shown in the Close to closing status note</span></h4>
+            {!open.length && <p className="rounded-lg border border-dashed border-slate-200 p-3 text-sm text-slate-400">{done.length ? 'Every obstacle is crossed off.' : readOnly ? 'No strategy yet.' : 'No strategy yet. Add the first obstacle and how we get past it.'}</p>}
+            {open.map((o) => (
+              <article key={o.id} className="rounded-lg border border-slate-200 bg-white">
+                <header className="group flex items-start gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[10px] font-semibold tracking-wide text-slate-400 uppercase">Obstacle</div>
+                    {editing === `o${o.id}`
+                      ? <InlineText initial={o.body} label="Obstacle" busy={busy} onCancel={() => setEditing(null)} onSave={(body) => run(() => api.put(`/tickets/obstacles/${o.id}`, { body }))} />
+                      : o.body ? <p className="text-sm font-medium break-words whitespace-pre-wrap text-slate-900">{o.body}</p>
+                        : <p className="text-sm text-slate-400 italic">No obstacle named</p>}
+                  </div>
+                  {!readOnly && editing !== `o${o.id}` && (
+                    <span className="flex shrink-0 items-center gap-0.5">
+                      <button type="button" className="rounded p-1 text-slate-400 hover:bg-white hover:text-slate-700" onClick={() => setEditing(`o${o.id}`)} aria-label="Edit this obstacle" title={o.body ? 'Edit' : 'Name the obstacle'}><PenLine size={13} /></button>
+                      <button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" disabled={busy} onClick={() => removeObstacle(o)} aria-label="Delete this obstacle" title="Delete"><Trash2 size={13} /></button>
+                      <button type="button" className="ml-1 inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100" onClick={() => setEditing(`x${o.id}`)}
+                        title="Overcome: cross it off. It’s kept underneath for context."><Check size={12} /> Cross off</button>
+                    </span>
+                  )}
+                </header>
+                <div className="space-y-2.5 px-3 py-2.5">
+                  {strategyList(o, false)}
+                  {editing === `add${o.id}` && <InlineText initial="" label="New strategy" placeholder="Another way past this obstacle…" busy={busy} onCancel={() => setEditing(null)} onSave={(body) => run(() => api.post(`/tickets/obstacles/${o.id}/strategies`, { body }))} />}
+                  {!readOnly && editing !== `add${o.id}` && editing !== `x${o.id}` && (
+                    <button type="button" className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline" onClick={() => setEditing(`add${o.id}`)}><Plus size={12} /> Add a strategy</button>
+                  )}
+                  {editing === `x${o.id}` && (
+                    <div className="space-y-1 rounded-md bg-emerald-50/60 p-2">
+                      <div className="text-[11px] font-semibold text-emerald-900">Outcome <span className="font-normal text-emerald-800/70">· what came of it (you can leave this blank)</span></div>
+                      <InlineText initial="" label="Outcome" placeholder="How it was overcome, and what we learned…" allowEmpty saveLabel="Cross off" busy={busy} onCancel={() => setEditing(null)}
+                        onSave={(outcome) => run(() => api.put(`/tickets/obstacles/${o.id}`, { resolved: true, outcome }))} />
+                    </div>
+                  )}
+                </div>
+              </article>
+            ))}
           </section>
+
+          {done.length > 0 && (
+            <section className="space-y-2">
+              <h4 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase"><Check size={13} /> Overcome <span className="font-normal text-slate-400 normal-case">· kept for context</span></h4>
+              {done.map((o) => (
+                <article key={o.id} className="rounded-lg border border-slate-200 bg-slate-50/70">
+                  <header className="flex items-start gap-2 px-3 pt-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm break-words whitespace-pre-wrap text-slate-500 line-through decoration-slate-400">{o.body || 'No obstacle named'}</p>
+                      <p className="text-[11px] text-slate-400">Crossed off {[stamp(o.resolved_at), o.resolved_by && `by ${o.resolved_by}`].filter(Boolean).join(' ')}</p>
+                    </div>
+                    {!readOnly && (
+                      <span className="flex shrink-0 items-center gap-0.5">
+                        <button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" disabled={busy} onClick={() => removeObstacle(o)} aria-label="Delete this obstacle" title="Delete"><Trash2 size={13} /></button>
+                        <button type="button" className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200 hover:bg-white" disabled={busy}
+                          onClick={() => run(() => api.put(`/tickets/obstacles/${o.id}`, { resolved: false }))} title="It’s in the way again: open it, with its strategies"><RotateCcw size={12} /> Reopen</button>
+                      </span>
+                    )}
+                  </header>
+                  <div className="space-y-2 px-3 py-2">
+                    {o.strategies.length > 0 && strategyList(o, true)}
+                    {editing === `out${o.id}` ? (
+                      <InlineText initial={o.outcome} label="Outcome" placeholder="How it was overcome, and what we learned…" allowEmpty busy={busy} onCancel={() => setEditing(null)}
+                        onSave={(outcome) => run(() => api.put(`/tickets/obstacles/${o.id}`, { outcome }))} />
+                    ) : (
+                      <div className="group flex items-start gap-2 rounded-md bg-emerald-50/70 px-2 py-1.5">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] font-semibold tracking-wide text-emerald-800 uppercase">Outcome</div>
+                          {o.outcome ? <p className="text-sm break-words whitespace-pre-wrap text-slate-800">{o.outcome}</p> : <p className="text-sm text-slate-400 italic">None written</p>}
+                        </div>
+                        {!readOnly && <button type="button" className="rounded p-1 text-slate-400 hover:bg-white hover:text-slate-700" onClick={() => setEditing(`out${o.id}`)} aria-label="Edit the outcome" title={o.outcome ? 'Edit' : 'Add the outcome'}><PenLine size={13} /></button>}
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </section>
+          )}
           <CrmSection organization={ticket.organization} ticketId={ticket.id} />
           <SuggestedStrategy />
         </div>
       ) : <p className="text-sm text-slate-400">Loading…</p>}
     </DrawerShell>
+  );
+}
+
+/** A text being written in place: ⌘/Ctrl+Enter or the button saves it, Escape or Cancel drops it. `allowEmpty` lets it be saved blank. */
+function InlineText({ initial = '', label, placeholder, onSave, onCancel, busy, allowEmpty = false, saveLabel = 'Save' }) {
+  const [text, setText] = useState(initial);
+  const ok = allowEmpty || !!text.trim();
+  const save = () => { if (ok && !busy) onSave(text.trim()); };
+  return (
+    <div className="space-y-1.5">
+      <textarea className="input min-h-16 resize-y text-sm leading-relaxed" value={text} autoFocus aria-label={label} placeholder={placeholder} maxLength={4000} onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); } if (e.key === 'Escape') { e.stopPropagation(); onCancel(); } }} />
+      <div className="flex justify-end gap-2">
+        <button type="button" className="btn-ghost h-7 py-0 text-xs" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn-primary h-7 py-0 text-xs" onClick={save} disabled={!ok || busy}>{busy ? 'Saving…' : saveLabel}</button>
+      </div>
+    </div>
   );
 }
 
@@ -1050,7 +1206,7 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
   const rated = CRITERIA.filter((c) => draft?.[c.key]?.score).length;
 
   return (
-    <DrawerShell title="Bid and win assessment" subtitle="Do we have a real shot at winning?" onClose={onClose} lockable
+    <DrawerShell title="PWIN Assessment" subtitle="Do we have a real shot at winning?" onClose={onClose} lockable
       footer={plan && <SaveBar dirty={dirty} busy={busy} error={error} savedAt={plan.assessment_updated_at} savedBy={plan.assessment_updated_by} onSave={save} />}>
       {!draft ? <p className="text-sm text-slate-400">Loading…</p> : (
         <div className="space-y-4">
@@ -1079,8 +1235,8 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
               </div>
             )}
             <p className="mt-2 text-[11px] leading-snug text-slate-500">
-              A weighted probability of win. Rate each area 1–5: <b>1</b> no information or evidence · <b>3</b> some information and evidence ·{' '}
-              <b>5</b> strong or full information and evidence. Ratings below 5 cost more the further they fall, and any area below 3 cuts the
+              A weighted probability of win. Rate each area 1–5: <b>1</b> we know nothing and have no access or relationships · <b>5</b> the ideal
+              position. Point at a number to see what it means for that area. Ratings below 5 cost more the further they fall, and any area below 3 cuts the
               whole score (a must-have cuts it hard). Areas not yet rated count as 1. Weights and must-haves are set in BD Pipeline › Settings.
             </p>
           </section>
@@ -1088,24 +1244,9 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
           {CRITERIA.map((c, n) => {
             const entry = draft[c.key] || {};
             return (
-              <section key={c.key} className="rounded-lg border border-slate-200 bg-white p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h4 className="text-sm font-semibold text-slate-800">
-                      {n + 1}. {c.title}
-                      <span className="ml-1.5 rounded bg-slate-100 px-1 py-0.5 align-middle text-[10px] font-medium whitespace-nowrap text-slate-500" title="Share of the PWIN score">
-                        {Math.round(shares[c.key])}%
-                      </span>
-                      {gates.includes(c.key) && (
-                        <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 align-middle text-[10px] font-semibold whitespace-nowrap text-amber-800" title="Rated below 3, this area cuts PWIN hard, whatever its weight">
-                          Must-have
-                        </span>
-                      )}
-                    </h4>
-                    <p className="text-[11px] leading-snug text-slate-500">{c.blurb}</p>
-                  </div>
-                  <ScorePicker value={entry.score} onChange={(s) => setScore(c.key, s)} />
-                </div>
+              <section key={c.key} className="@container rounded-lg border border-slate-200 bg-white p-3">
+                <PwinAreaHead n={n + 1} area={c} share={shares[c.key]} value={entry.score} onChange={(v) => setScore(c.key, v)} />
+                <PwinAreaDetails area={c} answers={entry.answers}>
                 {c.recent && <RecentActivity events={recent} count={c.recent} />}
                 <div className={c.prompts.length ? 'mt-3 space-y-2.5' : 'hidden'}>
                   {c.prompts.map((p) => (
@@ -1125,6 +1266,7 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
                     </div>
                   ))}
                 </div>
+                </PwinAreaDetails>
               </section>
             );
           })}
@@ -1163,11 +1305,56 @@ function RecentActivity({ events, count }) {
 const parseDay = (at) => new Date(`${String(at).replace(' ', 'T')}Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
 /** Five buttons, 1–5. Clicking the selected score clears it. */
-function ScorePicker({ value, onChange }) {
+/**
+ * The top of one PWIN area: its title with its share of the score, then the line that says what it covers, then the 1 to 5
+ * rating. Pointing at a rating (or tabbing to it) swaps that line for what the rating means for this area, in blue, as the
+ * Initial Gate Review's checklist does.
+ */
+function PwinAreaHead({ n, area: c, share, value, onChange }) {
+  const [pointed, setPointed] = useState(null);
+  const meaning = c.scale?.[pointed];
+  // In a pane wide enough (its section is the container), the rating sits to the right of the title and its line.
   return (
-    <div className="flex shrink-0 gap-1" role="radiogroup" aria-label="Score">
+    <div className="flex flex-col gap-1.5 @md:flex-row @md:items-start @md:justify-between @md:gap-4">
+      <div className="min-w-0">
+        <h4 className="text-sm font-semibold text-slate-800">
+          {n}. {c.title} <span className="font-medium text-slate-500 tabular-nums" title="This area’s share of the PWIN score">· {Math.round(share)}%</span>
+        </h4>
+        {meaning
+          ? <p className="mt-0.5 min-h-8 text-[11px] leading-snug font-medium text-blue-600" aria-live="polite"><span className="font-bold">{pointed}:</span> {meaning}</p>
+          : <p className="mt-0.5 min-h-8 text-[11px] leading-snug text-slate-500">{c.blurb}</p>}
+      </div>
+      <ScorePicker value={value} onChange={onChange} onPoint={setPointed} label={`${c.title}: rating from 1 to 5`} titles={c.scale} />
+    </div>
+  );
+}
+
+/**
+ * What's written under a PWIN area's rating (its prompts, or the recent activity for Pursuit momentum), behind a line that
+ * opens and closes it. It starts closed, unless something is already written there.
+ */
+function PwinAreaDetails({ area: c, answers, children }) {
+  const filled = c.prompts.filter((p) => String(answers?.[p.key] ?? '').trim()).length;
+  const [open, setOpen] = useState(filled > 0);
+  const what = c.prompts.length ? 'Notes and evidence' : 'Recent activity';
+  return (
+    <div className="mt-2 border-t border-slate-100 pt-1.5">
+      <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1 text-left text-[11px] font-medium text-slate-500 hover:text-slate-800">
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} {what}
+        {c.prompts.length > 0 && <span className="font-normal text-slate-400">· {filled} of {c.prompts.length} filled in</span>}
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
+/** A 1 to 5 rating. `onPoint(n | null)` says which number the pointer or keyboard focus is on. */
+function ScorePicker({ value, onChange, onPoint, label = 'Score', titles = SCORE_LABELS }) {
+  return (
+    <div className="flex shrink-0 gap-1" role="radiogroup" aria-label={label} onMouseLeave={() => onPoint?.(null)}>
       {[1, 2, 3, 4, 5].map((s) => (
-        <button key={s} type="button" role="radio" aria-checked={value === s} onClick={() => onChange(s)} title={`${s} — ${SCORE_LABELS[s]}`}
+        <button key={s} type="button" role="radio" aria-checked={value === s} onClick={() => onChange(s)} title={`${s}: ${titles?.[s] || SCORE_LABELS[s]}`}
+          onMouseEnter={() => onPoint?.(s)} onFocus={() => onPoint?.(s)} onBlur={() => onPoint?.(null)}
           className={`grid h-7 w-7 place-items-center rounded-md text-xs font-semibold tabular-nums transition ${
             value === s ? 'bg-brand-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-brand-50 hover:text-brand-700'}`}>
           {s}

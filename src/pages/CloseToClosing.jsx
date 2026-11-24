@@ -37,6 +37,11 @@ const OUTCOMES = {
 const UNSET = 'bg-white text-slate-500 ring-slate-300';
 /** "18 mo", "5 yr", or the deal's own wording when it can't be read as months. */
 const duration = (r) => (r.term_months ? (r.term_months % 12 === 0 ? `${r.term_months / 12} yr` : `${r.term_months} mo`) : r.term_text || '—');
+/** A row's open strategies as status notes for the download: each obstacle with the strategies for getting past it. */
+const strategyNotes = (r) => (r.strategies || []).map((o) => ({
+  body: [o.obstacle && `Obstacle: ${o.obstacle}`, ...o.strategies.map((s) => `Strategy: ${s}`)].filter(Boolean).join('\n'), by: 'Open strategy',
+})).filter((n) => n.body);
+
 /** The notes a row shows, newest first: the ones picked for it, else its latest. */
 const shownNotes = (r) => { const picked = r.notes.filter((n) => r.note_ids.includes(n.id)); return picked.length ? picked : r.notes.slice(0, 1); };
 const noteBy = (n) => [n.author && fullName(n.author), stamp(n.created_at)].filter(Boolean).join(' · ');
@@ -153,7 +158,7 @@ export default function CloseToClosing() {
             value: money(r.value), duration: duration(r), category: OUTCOMES[r.outcome]?.label || r.stage || '—', closeDate: closeDate(r.close_date),
             status: r.closed ? CLOSED.label : STATUS[r.status]?.label || 'Not set',
             expectation: EXPECTATION[r.expectation]?.label || 'Not set',
-            notes: shownNotes(r).map((n) => ({ body: n.body, by: noteBy(n) })),
+            notes: [...strategyNotes(r), ...shownNotes(r).map((n) => ({ body: n.body, by: noteBy(n) }))],
           };
         }),
       });
@@ -254,9 +259,10 @@ export default function CloseToClosing() {
 
       {importing && <ImportDialog onClose={() => setImporting(false)} onDone={(d) => { take(d); setImporting(false); }} />}
 
-      {/* In the pane, a click on a comment or note makes it the row's status note (shift-click for several); those showing are outlined. */}
+      {/* A row opens on the ticket's Strategy section alone (its open strategies are the status note); the chevrons bring the ticket's own pane out.
+          In that pane, a click on a comment or note makes it the row's status note (shift-click for several); those showing are outlined. */}
       <div className="print:hidden">
-      {openId && <TicketTimeline key={openId} ticketId={openId} onClose={() => { setOpenId(null); load(); }} onChanged={load}
+      {openId && <TicketTimeline key={openId} ticketId={openId} initialTool="strategy" drawerOnly onClose={() => { setOpenId(null); load(); }} onChanged={load}
         notePick={openRow && { shownIds: shownNotes(openRow).map((n) => n.id), pickedIds: openRow.note_ids,
           onPick: (ids) => run(() => api.put(`/c2c/${openId}`, { note_ids: ids })) }} />}
       </div>
@@ -433,13 +439,15 @@ function Row({ row: r, selected, onOpen, run }) {
 }
 
 /**
- * A row's status note: its latest note, unless one or more are picked in the ticket's pane. Notes are the ticket's own, and
+ * A row's status note: the ticket's open strategies (each obstacle still in the way, with the strategies for getting past it,
+ * from the ticket's Strategy section), then its latest note, unless one or more are picked in the ticket's pane. Notes are the ticket's own, and
  * are written right here: Add note opens a box and sending it adds a note to the ticket, which becomes the row's status note
  * (it joins the picked ones when some are picked). A click on a note you wrote edits it.
  */
 function Notes({ row: r, run }) {
   const [editing, setEditing] = useState(null); // null, 'new', or the id of the note being edited
   const shown = shownNotes(r);
+  const strategies = r.strategies || [];
   // A note that doesn't save stays in its box with the reason; one that does closes it and the list reloads.
   const add = async (body) => {
     const { comment } = await api.post(`/tickets/${r.ticket_id}/comments`, { kind: 'note', body });
@@ -451,7 +459,14 @@ function Notes({ row: r, run }) {
   return (
     <div className="space-y-2.5 print:space-y-1.5">
       {editing === 'new' && <NoteBox onSave={add} onCancel={() => setEditing(null)} label={`New status note on ${r.title}`} />}
-      {!shown.length && editing !== 'new' && <div className="hidden text-sm text-slate-400 print:block print:text-[9px]">No notes yet</div>}
+      {strategies.map((o) => (
+        <div key={o.id} className={text}>
+          {o.obstacle && <div className="font-semibold text-slate-800" title="An obstacle still open in the ticket’s Strategy section">{o.obstacle}</div>}
+          {o.strategies.map((s, i) => <div key={i} className="flex gap-1.5"><span className="text-brand-600" aria-hidden="true">›</span><span className="min-w-0 line-clamp-4 print:line-clamp-6">{s}</span></div>)}
+          {!o.strategies.length && <div className="text-slate-400">No strategy yet</div>}
+        </div>
+      ))}
+      {!shown.length && !strategies.length && editing !== 'new' && <div className="hidden text-sm text-slate-400 print:block print:text-[9px]">No notes yet</div>}
       {shown.map((n) => (editing === n.id
         ? <NoteBox key={n.id} initial={n.body} onSave={(body) => edit(n.id, body)} onCancel={() => setEditing(null)} label="Edit your note" />
         : (

@@ -33,7 +33,7 @@ const eventKey = (e) => `${e.type}-${e.activity?.id ?? e.comment?.id ?? e.file?.
  * `initialTool` opens the pane on one of its tools (strategy, process…). A pipeline ticket's Process view opens over the pane
  * and closing it returns here. `notePick` ({ shownIds, pickedIds, onPick }), from the Close to closing list, lets a comment or
  * note be picked as the one the ticket's row shows there, and outlines the one showing. `stepId` opens the Staffing events
- * pane on that event (from the SAC list). `drawerOnly` (the SAC list) opens with just that pane and the menu bar: the
+ * pane on that event (from the SAC list). `drawerOnly` (the SAC list, and Close to closing with `initialTool`) opens with just that pane and the menu bar: the
  * ticket's own pane is tucked away until the chevrons at the foot of the menu bar bring it out, and they tuck it back.
  */
 export default function TicketTimeline({ ticketId, focus, activityId, initialTool = null, stepId = null, startStaffing = false, drawerOnly = false, onClose, onChanged, notePick = null }) {
@@ -43,7 +43,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   const [openStep, setOpenStep] = useState(stepId); // the staffing event the Staffing events pane opens on
   const [staffing, setStaffing] = useState(startStaffing); // opened from Staff Ticket: the new-event form is put forward
   const [openActivity, setOpenActivity] = useState(activityId ?? null); // the activity the Activity pane opens on
-  const [mainHidden, setMainHidden] = useState(drawerOnly && !!(stepId || startStaffing)); // only the tool's pane is showing
+  const [mainHidden, setMainHidden] = useState(drawerOnly && !!(stepId || startStaffing || initialTool)); // only the tool's pane is showing
   const [processOpen, setProcessOpen] = useState(false);
   const [processKey, setProcessKey] = useState(0);
   const [detailsOpen, setDetailsOpen] = useState(false); // the Details box in a pipeline ticket's header
@@ -137,7 +137,7 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
           {t.organization && <> · {t.organization}</>}
           {t.pipeline_status && <> · {t.pipeline_status}</>}
           {t.value != null && <> · <span className="text-emerald-700">{usd(t.value).replace('.00', '')}</span></>}
-          {t.pwin && <> · <span className="text-brand-700" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>PWIN {t.pwin.score}%</span></>}
+          {t.pwin && <> · <span className="text-brand-700" title={`PWIN: weighted PWIN Assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>PWIN {t.pwin.score}%</span></>}
         </span>
         <span className="mt-1 flex flex-wrap items-center gap-1.5">
           {!isBid && t.team_name && <span className="rounded bg-slate-100 px-1.5 text-slate-600">{t.team_name}</span>}
