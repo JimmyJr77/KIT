@@ -33,7 +33,7 @@ export function personColumns() {
   return [
     { key: 'qualified', label: 'Qualified pipeline', value: (p) => compact(p.qualified) },
     { key: 'qualifiedChange', label: 'This week', value: (p) => (toneOf(p.qualifiedChange) ? signed(p.qualifiedChange) : '—'), tone: (p) => toneOf(p.qualifiedChange) },
-    { key: 'won', label: 'Qualified → Won', value: (p) => p.won },
+    { key: 'won', label: 'Qualified → Paid', value: (p) => p.won },
     { key: 'down', label: 'Downgraded or removed', value: (p) => p.downgradedOrRemoved },
     { key: 'steps', label: 'Next steps completed', value: (p) => p.steps },
     { key: 'forward', label: 'Moved left to right', value: (p) => p.forward },
@@ -58,14 +58,14 @@ export function tacticalSections(r, team) {
   });
   const tiles = [
     { key: 'qualified', label: 'Qualified pipeline', value: compact(r.qualified.total.now), note: `${signed(r.qualified.total.change)} this week`, tone: toneOf(r.qualified.total.change) },
-    { key: 'won', label: 'Qualified → Won', value: c.won, note: c.won ? `${compact(c.wonValue)} won${c.wonBeforeQualified ? ` · ${c.wonBeforeQualified} from before Qualified` : ''}` : 'None won' },
+    { key: 'won', label: 'Qualified → Paid', value: c.won, note: c.won ? `${compact(c.wonValue)} paid${c.wonBeforeQualified ? ` · ${c.wonBeforeQualified} from before Qualified` : ''}` : 'None paid' },
     { key: 'down', label: 'Downgraded or removed', value: c.downgradedOrRemoved, note: `${c.back} moved back · ${c.removed} off the board` },
     { key: 'steps', label: 'Next steps completed', value: c.steps, note: c.steps ? `On ${plural(c.stepTickets, 'ticket')}` : 'None completed' },
     { key: 'forward', label: 'Moved left to right', value: c.forward, note: 'Forward a stage or more' },
-    { key: 'closed', label: 'Closed', value: c.closed, note: `${c.won} won · ${c.lost} lost` },
+    { key: 'closed', label: 'Closed', value: c.closed, note: `${c.won} paid · ${c.lost} lost` },
   ];
   const sections = [
-    { key: 'won', title: 'Won · into Delivery', items: l.won.map((x) => ({ key: x.id, id: x.id, title: x.title, detail: line(x, x.from && `from ${x.from}`, x.value ? compact(x.value) : null) })) },
+    { key: 'won', title: 'Paid · into Delivery', items: l.won.map((x) => ({ key: x.id, id: x.id, title: x.title, detail: line(x, x.from && `from ${x.from}`, x.value ? compact(x.value) : null) })) },
     { key: 'lost', title: 'Lost', items: l.lost.map((x) => ({ key: x.id, id: x.id, title: x.title, detail: line(x, x.from && `from ${x.from}`, x.lostReason) })) },
     { key: 'forward', title: 'Moved left to right', items: l.forward.map((x) => ({ key: x.id, id: x.id, title: x.title, detail: line(x, `${x.from} → ${x.to}`) })) },
     { key: 'back', title: 'Downgraded', items: l.back.map((x) => ({ key: x.id, id: x.id, title: x.title, detail: line(x, `${x.from} → ${x.to}`) })) },

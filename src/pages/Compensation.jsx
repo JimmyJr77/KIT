@@ -14,7 +14,7 @@ const TIERS = [['y1', 'Year 1'], ['y2', 'Year 2'], ['y3', 'Year 3']];
 const WON_COLOR = SERIES[0];
 const PROJECTED_COLOR = SERIES[3];
 const TERM_SOURCE = { set: 'set here', deal: 'from the deal', contract: 'from the contract', dates: 'from its dates', assumed: 'assumed' };
-const START_SOURCE = { set: 'set here', contract: 'the contract start', won: 'the day it was won' };
+const START_SOURCE = { set: 'set here', contract: 'the contract start', won: 'the day it was marked paid' };
 
 const PROJECTED_KEY = 'kit.compensation.projected';
 const readProjected = () => { try { return localStorage.getItem(PROJECTED_KEY) === '1'; } catch { return false; } };
@@ -48,7 +48,7 @@ export default function Compensation() {
 
   return (
     <div className="space-y-6 p-8">
-      <PageHeader title="Compensation" subtitle="The BD Director bonus plan (3/2/1) applied to each director's won deals: the bonus earned on revenue billed, and what to expect from the contracts won.">
+      <PageHeader title="Compensation" subtitle="The BD Director bonus plan (3/2/1) applied to each director's paid deals: the bonus earned on revenue billed, and what to expect from the contracts won.">
         <select className="input h-9 w-28 py-0 text-sm" value={year} onChange={(e) => setYear(Number(e.target.value))} aria-label="Plan year">
           {[-1, 0, 1, 2].map((d) => thisYear + d).map((y) => <option key={y} value={y}>{y}</option>)}
         </select>
@@ -82,8 +82,8 @@ export default function Compensation() {
             </div>
             {!data.directors.length && (
               <p className="panel text-sm text-slate-500">
-                {!own ? `Nobody has a plan or a won deal in ${year} yet. Add a director above to set their plan inputs; their wins join on their own as deals are won.`
-                  : `No compensation plan applies to you in ${year}. The plan covers BD directors' won deals.`}
+                {!own ? `Nobody has a plan or a paid deal in ${year} yet. Add a director above to set their plan inputs; their wins join on their own as deals are marked paid.`
+                  : `No compensation plan applies to you in ${year}. The plan covers BD directors' paid deals.`}
               </p>
             )}
             {data.directors.map((d) => (
@@ -167,10 +167,10 @@ function Figure({ label, value, note, tone = '' }) {
 /** Deals won in each month of the year, by value; with projections on, the months to come show the projected wins too. */
 function ClosingsChart({ closings, projectedMonths, projected }) {
   const byMonth = new Map((projectedMonths || []).map((m) => [m.month, m.amount]));
-  const series = [{ key: 'won', label: 'Won', color: WON_COLOR, values: closings.map((m) => m.value) }];
+  const series = [{ key: 'won', label: 'Paid', color: WON_COLOR, values: closings.map((m) => m.value) }];
   if (projected) series.push({ key: 'projected', label: 'Projected (PWIN-weighted, or your own)', color: PROJECTED_COLOR, values: closings.map((m) => byMonth.get(m.month) || 0) });
   const any = series.some((s) => s.values.some(Boolean));
-  if (!any) return <p className="py-6 text-center text-sm text-slate-400">{projected ? 'Nothing won or projected in these months.' : 'Nothing won in these months.'}</p>;
+  if (!any) return <p className="py-6 text-center text-sm text-slate-400">{projected ? 'Nothing paid or projected in these months.' : 'Nothing paid in these months.'}</p>;
   return <StackedColumns categories={closings.map((m) => m.label)} series={series} height={140} />;
 }
 
@@ -185,7 +185,7 @@ function TeamSummary({ team, year, projected }) {
         <span className="text-xs text-slate-500">{team.directors} director{team.directors === 1 ? '' : 's'} · {team.contracts} contract{team.contracts === 1 ? '' : 's'} in the plan</span>
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <Figure label={`Won in ${year}`} value={compact(team.wins.value)} note={`${team.wins.count} deal${team.wins.count === 1 ? '' : 's'}`} />
+        <Figure label={`Paid in ${year}`} value={compact(team.wins.value)} note={`${team.wins.count} deal${team.wins.count === 1 ? '' : 's'}`} />
         {projected
           ? <Figure label="Projected to close" value={compact(pj.amount)} tone="text-amber-700" note={`${pj.count} open deal${pj.count === 1 ? '' : 's'}${pj.overridden ? ` · ${pj.overridden} month${pj.overridden === 1 ? '' : 's'} set by hand` : ''}`} />
           : <Figure label={`Expected revenue, ${year}`} value={compact(yr.expected)} note={`${compact(yr.recognized)} billed so far`} />}
@@ -270,7 +270,7 @@ function DirectorCard({ d, year, today, settings, canEdit, me, projected, onChan
           </span>
         </button>
         <div className="ml-auto grid grid-cols-2 gap-x-6 gap-y-1 text-right sm:grid-cols-5">
-          <Headline label={`Won in ${year}`} value={compact(d.wins.value)} note={`${d.wins.count} deal${d.wins.count === 1 ? '' : 's'}`} />
+          <Headline label={`Paid in ${year}`} value={compact(d.wins.value)} note={`${d.wins.count} deal${d.wins.count === 1 ? '' : 's'}`} />
           {projected && <Headline label="Projected" value={compact(pj.amount)} note={`${pj.count} open deal${pj.count === 1 ? '' : 's'}`} tone="text-amber-700" />}
           <Headline label="Expected bonus" value={compact(bonus)} note={projected ? `${compact(pj.bonus.year)} from projected` : `${compact(yr.bonusRecognized)} earned`} tone="text-brand-700" />
           <Headline label="Base salary" value={d.plan.base_salary != null ? compact(d.plan.base_salary) : '—'} note={d.plan.base_salary == null && canEdit ? 'set below' : ''} />
@@ -541,16 +541,16 @@ const APPROVAL = { approved: ['Approved', 'bg-emerald-50 text-emerald-700'], not
 /** The director's won deals as the plan sees them, with what each pays this year and over its term. */
 function Contracts({ d, year, today, canEdit, onChange }) {
   const [editing, setEditing] = useState(null);
-  if (!d.contracts.length) return <p className="text-sm text-slate-500">No won deals yet.</p>;
+  if (!d.contracts.length) return <p className="text-sm text-slate-500">No paid deals yet.</p>;
   return (
     <div>
-      <h3 className="mb-2 text-xs font-semibold text-slate-600">Won deals in the plan</h3>
+      <h3 className="mb-2 text-xs font-semibold text-slate-600">Paid deals in the plan</h3>
       <div className="overflow-x-auto rounded-lg border border-slate-200">
         <table className="w-full min-w-[64rem] text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
             <tr>
               <th className="px-3 py-2">Deal</th>
-              <th className="px-3 py-2">Won</th>
+              <th className="px-3 py-2">Paid</th>
               <th className="px-3 py-2">Contract year 1 starts</th>
               <th className="px-3 py-2">Term</th>
               <th className="px-3 py-2">Now in</th>

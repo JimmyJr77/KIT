@@ -11,7 +11,7 @@ const BRAND = [37, 59, 156];
 // Status and category colors, as on the page.
 const TONES = {
   'On-Track': [4, 120, 87], 'Off-Track Trending Up': [77, 124, 15], 'Off-Track Steady': [180, 83, 9], 'Off-Track Trending Down': [185, 28, 28],
-  Closed: [71, 85, 105], Win: [4, 120, 87], 'Toss-up': [180, 83, 9], Loss: [185, 28, 28], Awarded: [7, 89, 133], 'Paid (Won)': [4, 120, 87], 'Closed - Not awarded': [71, 85, 105],
+  Closed: [71, 85, 105], Win: [4, 120, 87], 'Toss-up': [180, 83, 9], Loss: [185, 28, 28], Awarded: [7, 89, 133], Paid: [4, 120, 87], 'Closed - Not awarded': [71, 85, 105],
 };
 
 /**

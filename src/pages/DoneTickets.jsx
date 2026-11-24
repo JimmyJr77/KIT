@@ -18,7 +18,7 @@ const ownerOf = (t) => (t.owner_first_name ? `${t.owner_first_name} ${t.owner_la
 /**
  * Every work ticket in the Tickets page's Done lane. Work tickets leave the Tickets page 14 days after reaching Done, or
  * sooner when moved here by hand, and this is where they can all still be found, sorted and filtered. Newest first.
- * Pipeline tickets aren't here: won and lost deals are in Closed deals.
+ * Pipeline tickets aren't here: paid and lost deals are in Closed deals.
  */
 export default function DoneTickets() {
   const territories = useApi('/territories');
@@ -70,7 +70,7 @@ export default function DoneTickets() {
         <Link to="/tickets" className="btn h-9"><ArrowLeft size={15} /> Tickets</Link>
       </PageHeader>
       <p className="-mt-2 text-xs text-slate-500">
-        Work tickets leave the Tickets page {ARCHIVE_AFTER_DAYS} days after reaching Done, or sooner when moved here by hand. Pipeline tickets are not here: won and lost deals are in <Link to="/closed-deals" className="text-brand-700 hover:underline">Closed deals</Link>, and won ones are contracts in Delivery.
+        Work tickets leave the Tickets page {ARCHIVE_AFTER_DAYS} days after reaching Done, or sooner when moved here by hand. Pipeline tickets are not here: paid and lost deals are in <Link to="/closed-deals" className="text-brand-700 hover:underline">Closed deals</Link>, and won ones are contracts in Delivery.
         {tickets && ` ${onBoard} of ${tickets.length} are still on the Tickets page.`}
       </p>
 

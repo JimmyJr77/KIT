@@ -18,7 +18,7 @@ const KINDS = {
   },
   qualified: {
     title: 'Qualified pipeline targets', icon: Funnel, noun: 'qualified pipeline target',
-    blurb: 'How much Qualified+ pipeline (open pipeline tickets from Qualified through Awarded, until won) each person on the BD team is expected to hold in each quarter, and at year end. Targets apply to the BD team only. Leave the year end blank to use the last quarter set.',
+    blurb: 'How much Qualified+ pipeline (open pipeline tickets from Qualified through Awarded, until paid) each person on the BD team is expected to hold in each quarter, and at year end. Targets apply to the BD team only. Leave the year end blank to use the last quarter set.',
     yearFor: (amount, userId) => amount(userId, 0) ?? [...QUARTERS].reverse().map((q) => amount(userId, q)).find((v) => v != null) ?? 0,
     yearHead: (year) => `End of ${year}`,
   },

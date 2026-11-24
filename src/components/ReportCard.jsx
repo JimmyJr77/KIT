@@ -38,7 +38,7 @@ function explain(key, t) {
       assesses: 'Whether we are winning enough work to hit our booking goal.',
       how: 'Contract value awarded in the period ÷ the booking target for the period. While the period is still running, the result is compared with how much of the period has passed (pace), so 50% booked halfway through the quarter is on track.',
       scale: ['At or ahead of pace (100% or more for a finished period)', 'At least 75% of pace', 'Below 75% of pace'],
-      needs: 'Booking targets (Settings › Team Lead › Booking targets) and pipeline tickets marked won.',
+      needs: 'Booking targets (Settings › Team Lead › Booking targets) and pipeline tickets marked paid.',
     },
     newQualified: {
       assesses: 'Whether we are creating enough future growth opportunity.',
@@ -54,9 +54,9 @@ function explain(key, t) {
     },
     winRate: {
       assesses: 'Whether we are pursuing and winning the right work.',
-      how: 'Pipeline tickets won ÷ pipeline tickets decided (won or lost) in the period, by count; the share by dollar value is shown beside it. Wins are dated by their contract\'s award date.',
+      how: 'Pipeline tickets paid ÷ pipeline tickets decided (paid or lost) in the period, by count; the share by dollar value is shown beside it. Wins are dated by their contract\'s award date.',
       scale: [`${pctOf(t.winRate.good)} or more`, `${pctOf(t.winRate.watch)} to ${pctOf(t.winRate.good)}`, `Under ${pctOf(t.winRate.watch)}`],
-      needs: 'Pipeline tickets won or lost.',
+      needs: 'Pipeline tickets paid or lost.',
     },
     progression: {
       assesses: 'Whether pursuits are moving forward and improving our position to win.',

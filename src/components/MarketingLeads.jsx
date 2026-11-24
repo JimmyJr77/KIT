@@ -111,7 +111,7 @@ export default function MarketingLeads({ onCount }) {
                   <div className="flex items-center gap-2">
                     {state === 'ticket' && (
                       <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => navigate(`/tickets?open=${l.ticket_id}`)}>
-                        <Ticket size={13} /> {l.ticket_status === 'won' ? 'Won' : l.ticket_status === 'lost' ? 'Lost' : 'Open'} pipeline ticket
+                        <Ticket size={13} /> {l.ticket_status === 'won' ? 'Paid' : l.ticket_status === 'lost' ? 'Lost' : 'Open'} pipeline ticket
                       </button>
                     )}
                     {(state === 'open' || state === 'closed') && (

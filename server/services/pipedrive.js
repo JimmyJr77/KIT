@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, json, getSetting, setSetting, TERRITORY_RENAMES } from '../db.js';
+import { linkGoogleSolution } from '../leads.js';
 import { mirrorCards } from '../activities.js';
 import { hashPassword } from '../auth.js';
 import '../sample/registry.js'; // archived_rows, used to skip records archived by a full reset
@@ -529,6 +530,7 @@ export async function pull(scope, phase) {
       if (projects) Object.assign(ctx.count, writeProjects(projects, { ...ctx, downloaded, removeFiles: true }));
       if (holdNow) ctx.count.filesHeld = holdFiles(holdNow);
       holdConflicts(); // fields an admin hasn't settled stay as they were found
+      linkGoogleSolution(); // the Google Solution tag and field in step: a filled-in field wins, a tag fills in a blank one
       return { ...ctx.count, accountsMatched: ctx.matched, accountsCreated: ctx.created };
     })();
     storedGone.forEach((f) => { if (f.stored_name && !f.url) fs.rmSync(path.join(uploadDir, f.stored_name), { force: true }); });

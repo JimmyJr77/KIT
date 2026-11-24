@@ -223,7 +223,7 @@ export function OpportunitiesSection({ event, onUpdated }) {
               <li key={t.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-slate-50 px-2.5 py-1.5 text-sm">
                 <button type="button" className="min-w-0 truncate font-medium text-brand-700 hover:underline" onClick={() => navigate(`/tickets?open=${t.id}`)}>{t.title}</button>
                 <span className="text-xs text-slate-500">{[t.organization, t.director, t.value != null && money(t.value)].filter(Boolean).join(' · ')}</span>
-                {t.deal_status !== 'open' && <span className={`rounded px-1.5 text-[11px] font-semibold capitalize ${STATUS_CHIP[t.deal_status]}`}>{t.deal_status}</span>}
+                {t.deal_status !== 'open' && <span className={`rounded px-1.5 text-[11px] font-semibold capitalize ${STATUS_CHIP[t.deal_status]}`}>{t.deal_status === 'won' ? 'paid' : t.deal_status}</span>}
                 <label className={`ml-auto flex items-center gap-1 text-[11px] ${mayMark ? 'text-slate-600' : 'text-slate-400'}`}
                   title={mayMark ? 'The lead began at this event: tags the ticket Event Lead' : 'Only the ticket’s owner, Marketing or an admin can say where a lead came from'}>
                   <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={t.sourced} disabled={busy || !mayMark}

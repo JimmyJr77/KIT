@@ -147,7 +147,7 @@ export function reportCard(director, p) {
     key: 'winRate', title: 'Win rate', question: 'Are we pursuing and winning the right work?',
     value: decided.length ? won.length / decided.length : null, format: 'percent',
     valueRate: sum(decided, (tk) => tk.value) ? sum(won, (tk) => tk.value) / sum(decided, (tk) => tk.value) : null,
-    detail: decided.length ? `${won.length} won of ${decided.length} decided · $${fmt(sum(won, (tk) => tk.value))} of $${fmt(sum(decided, (tk) => tk.value))} by value` : `No pipeline tickets won or lost this ${p.noun}`,
+    detail: decided.length ? `${won.length} paid of ${decided.length} decided · $${fmt(sum(won, (tk) => tk.value))} of $${fmt(sum(decided, (tk) => tk.value))} by value` : `No pipeline tickets paid or lost this ${p.noun}`,
     status: status(decided.length ? won.length / decided.length : null, THRESHOLDS.winRate),
   };
 

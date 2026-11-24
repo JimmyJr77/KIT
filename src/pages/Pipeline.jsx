@@ -147,7 +147,7 @@ export default function Pipeline() {
   const markWon = async (t) => {
     if (!confirm(`Mark “${t.opportunity_title}” won? It moves into Delivery as a contract.${t.pipedrive_id ? ' Pipedrive follows.' : ''}`)) return;
     setError('');
-    try { await api.put(`/tickets/${t.id}/outcome`, { deal_status: 'won' }); load(); } catch (e) { setError(`Couldn’t mark “${t.opportunity_title}” won: ${e.message}`); }
+    try { await api.put(`/tickets/${t.id}/outcome`, { deal_status: 'won' }); load(); } catch (e) { setError(`Couldn’t mark “${t.opportunity_title}” paid: ${e.message}`); }
   };
   const columns = useMemo(() => {
     const onBoard = shown.filter((t) => keyOf(t.pipeline_id) === pipeline?.key);
@@ -377,8 +377,8 @@ function DraggableTicket({ ticket, onOpen, onOpenStep, hidden, now, onWon: won, 
       {onWon && (
         <button type="button" onClick={(e) => { e.stopPropagation(); onWon(ticket); }} onPointerDown={(e) => e.stopPropagation()}
           className="mt-1 flex w-full items-center justify-center gap-1 rounded-md bg-emerald-50 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
-          title="Mark won: it becomes a contract in Delivery">
-          <Trophy size={12} /> Mark won
+          title="Mark paid: the deal is won and becomes a contract in Delivery">
+          <Trophy size={12} /> Mark paid
         </button>
       )}
     </div>

@@ -23,7 +23,7 @@ const TIME_ZONE = process.env.PIPEDRIVE_TIME_ZONE || 'America/New_York';
 
 export const SEND_KINDS = ['deals', 'labels', 'notes', 'activities', 'files', 'products', 'installments', 'followers', 'contacts', 'organizations', 'projects'];
 export const FIELD_LABELS = {
-  opportunity_title: 'Title', value: 'Value', pipeline_status: 'Stage', deal_status: 'Won / lost', lost_reason: 'Lost reason', probability: 'Probability',
+  opportunity_title: 'Title', value: 'Value', pipeline_status: 'Stage', deal_status: 'Paid / lost', lost_reason: 'Lost reason', probability: 'Probability',
   projected_win_date: 'Expected close date', bd_director_id: 'Owner', territory_id: 'Account (territory)', organization: 'Organization',
   text: 'Subject', activity_type: 'Type', due_date: 'Due date', due_time: 'Due time', duration: 'Duration', assignee_id: 'Assigned to',
   location: 'Location', note: 'Note', done: 'Done',
@@ -117,7 +117,7 @@ function shown(field, v) {
   if (['value', 'item_price', 'amount'].includes(field)) return `$${Number(v).toLocaleString('en-US')}`;
   if (field === 'probability') return `${v}%`;
   if (field === 'labels') return json.parse(v, []).join(', ') || '—';
-  if (field === 'deal_status') return { open: 'Open', won: 'Won', lost: 'Lost' }[v] || String(v);
+  if (field === 'deal_status') return { open: 'Open', won: 'Paid', lost: 'Lost' }[v] || String(v);
   return String(v);
 }
 const changeList = (row, keys) => {

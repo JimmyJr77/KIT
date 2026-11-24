@@ -89,7 +89,7 @@ r.get('/parity', requireAdmin, async (req, res) => {
       checked_at: new Date().toISOString(),
       deals: [
         { key: 'open', label: 'Open deals', pipedrive: open, kit: kit("deal_status = 'open' AND archived_at IS NULL") },
-        { key: 'won', label: 'Won deals', pipedrive: won, kit: kit("deal_status = 'won'") },
+        { key: 'won', label: 'Paid (won) deals', pipedrive: won, kit: kit("deal_status = 'won'") },
         { key: 'lost', label: 'Lost deals', pipedrive: lost, kit: kit("deal_status = 'lost'") },
       ],
       projects: { pipedrive: projects.length, kit: kitProjects, unlinked: projects.filter((p) => !(p.deal_ids || []).length).length },

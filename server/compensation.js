@@ -387,7 +387,7 @@ export const deletePlan = (userId, year) => db.prepare('DELETE FROM comp_plans W
 
 /** Set what the plan knows about a won deal: start_date, term_months, approval, revenue_basis, excluded, notes. */
 export function saveContract(ticketId, body, by) {
-  if (!db.prepare("SELECT 1 FROM tickets WHERE id = ? AND deal_status = 'won'").get(ticketId)) throw Object.assign(new Error('Won deal not found'), { status: 404 });
+  if (!db.prepare("SELECT 1 FROM tickets WHERE id = ? AND deal_status = 'won'").get(ticketId)) throw Object.assign(new Error('Paid deal not found'), { status: 404 });
   const cur = db.prepare('SELECT * FROM comp_contracts WHERE ticket_id = ?').get(ticketId) || {};
   const next = { ...cur };
   if ('start_date' in body) {

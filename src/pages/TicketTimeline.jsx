@@ -104,6 +104,10 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
   const canEdit = canEditTicket(user, t);
   const access = { readOnly: !!t && !canEdit, ownerName: t?.owner_name ?? null };
   const isBid = t?.ticket_type === 'bid';
+  const marketingButton = t && (
+    <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => showTool('marketing')}
+      title={isBid ? 'Request marketing support or associate an event with this ticket' : 'Marketing requests for this ticket'}><Megaphone size={13} /> Marketing</button>
+  );
   const gate = t?.ticket_type === 'bid' && t.deal_status === 'open' ? nextGate(t.report_stage || t.pipeline_status) : null;
 
   return (
@@ -117,10 +121,8 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
         </button>
       )}
       headerBox={isBid && detailsOpen && (
-        <>
-          <h3 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Details</h3>
-          <TicketDetailsBox ticket={t} editing={detailsEditing} canEdit={canEdit} reloadKey={data} onEdit={editDetails} onDone={() => setDetailsEditing(false)} onChanged={refresh} />
-        </>
+        <TicketDetailsBox ticket={t} editing={detailsEditing} canEdit={canEdit} reloadKey={data} onEdit={editDetails} onDone={() => setDetailsEditing(false)} onChanged={refresh}
+          footer={canEdit && <ArchiveButton ticket={t} onChanged={refresh} />} />
       )}
       mainHidden={mainHidden && !!tool} onMainHidden={setMainHidden}
       rail={t && <PlanRail ticket={t} active={tool} onSelect={pickTool} skip={t.ticket_type === 'account' ? ['strategy', 'tickets'] : []} />}
@@ -128,14 +130,19 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
       drawer={t && tool && <PlanDrawer key={`${tool}-${openActivity}-${openStep}-${staffing}`} tool={tool} ticket={t} activityId={openActivity} stepId={openStep} staffing={staffing}
         onClose={closeTool} onChanged={refresh} onDirty={setToolDirty} />}
       subtitle={t && (
-        <span className="flex flex-wrap items-center gap-1.5">
-          <span className={`rounded px-1.5 font-semibold ${t.ticket_type === 'work' ? 'bg-slate-200 text-slate-700' : 'bg-brand-50 text-brand-700'}`}>{ticketKind(t)} #{t.id}</span>
-          {t.organization && <span>· {t.organization}</span>}
-          {t.team_name && <span className="rounded bg-slate-100 px-1.5 text-slate-600">{t.team_name}</span>}
-          {t.pipeline_status && <span className="rounded bg-slate-100 px-1.5 text-slate-600">{t.pipeline_status}</span>}
-          {t.deal_status === 'won' && <span className="flex items-center gap-1 rounded bg-emerald-100 px-1.5 font-semibold text-emerald-800" title={t.won_at ? `Won ${stamp(t.won_at)}` : 'Won'}><Trophy size={11} /> Won</span>}
+        <>
+        {/* Line two: what the ticket is, as plain grey text (the amount in green). Line three: its tags. */}
+        <span className="block text-slate-500">
+          {ticketKind(t)} #{t.id}
+          {t.organization && <> · {t.organization}</>}
+          {t.pipeline_status && <> · {t.pipeline_status}</>}
+          {t.value != null && <> · <span className="text-emerald-700">{usd(t.value).replace('.00', '')}</span></>}
+          {t.pwin && <> · <span className="text-brand-700" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>PWIN {t.pwin.score}%</span></>}
+        </span>
+        <span className="mt-1 flex flex-wrap items-center gap-1.5">
+          {!isBid && t.team_name && <span className="rounded bg-slate-100 px-1.5 text-slate-600">{t.team_name}</span>}
+          {t.deal_status === 'won' && <span className="flex items-center gap-1 rounded bg-emerald-100 px-1.5 font-semibold text-emerald-800" title={t.won_at ? `Paid ${stamp(t.won_at)}` : 'Paid'}><Trophy size={11} /> Paid</span>}
           {t.deal_status === 'lost' && <span className="flex items-center gap-1 rounded bg-red-100 px-1.5 font-semibold text-red-800" title={t.lost_at ? `Lost ${stamp(t.lost_at)}` : 'Lost'}><XCircle size={11} /> Lost</span>}
-          {t.value != null && <span className="rounded bg-emerald-50 px-1.5 text-emerald-700">{usd(t.value).replace('.00', '')}</span>}
           {isBid && t.deal_status === 'open' && !t.projected_win_date && !t.win_date_undetermined && (
             canEdit ? <button type="button" onClick={editDetails} className="rounded bg-amber-50 px-1.5 text-amber-800 ring-1 ring-amber-200 hover:bg-amber-100" title="Set the projected win date in Details">No win date</button>
               : <span className="rounded bg-amber-50 px-1.5 text-amber-800 ring-1 ring-amber-200">No win date</span>
@@ -154,12 +161,15 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
           {t.lost_reason && <span className="rounded bg-red-50 px-1.5 text-red-700" title="Lost reason">{t.lost_reason}</span>}
           {t.probability != null && <span className="rounded bg-slate-100 px-1.5 text-slate-600" title="Deal probability, set by hand (Pipedrive)">{t.probability}% probability</span>}
           <TicketLabels ticket={t} onChanged={refresh} readOnly={!canEdit} />
-          {t.pwin && <span className="rounded bg-brand-50 px-1.5 font-semibold text-brand-700" title={`PWIN: weighted bid and win assessment, ${t.pwin.rated} of ${t.pwin.total} areas rated${t.pwin.penalties.length ? `. Held back by ${t.pwin.penalties.map((x) => x.title).join(', ')}` : ''}`}>PWIN {t.pwin.score}%</span>}
         </span>
+        </>
       )}>
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {data && (
         <div className="space-y-5">
+          {/* Marketing, then Lost and Paid (the owner's), right-justified above the process box. */}
+          {isBid && <OutcomeBar ticket={t} canEdit={canEdit} onChanged={refresh} marketing={marketingButton} />}
+          {t.ticket_type === 'work' && <div className="flex justify-end">{marketingButton}</div>}
           {t.ticket_type === 'bid' && (
             <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
               <span className="flex items-center gap-1.5"><Workflow size={14} className="text-brand-600" /> Process steps &amp; Staffing Events</span>
@@ -176,21 +186,14 @@ export default function TicketTimeline({ ticketId, focus, activityId, initialToo
                     <Flag size={13} /> {gate.tag}
                   </button>
                 )}
-                <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => showTool('marketing')} title="Marketing requests, lead source and marketing dollars for this ticket"><Megaphone size={13} /> Marketing</button>
                 <button type="button" className="btn-primary px-2.5 py-1 text-xs" onClick={() => setProcessOpen(true)}>Process view</button>
               </span>
             </div>
           )}
-          {t.ticket_type === 'work' && (
-            <div className="flex justify-end">
-              <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => showTool('marketing')} title="Marketing requests for this ticket"><Megaphone size={13} /> Marketing</button>
-            </div>
-          )}
           <ViewOnlyNote />
-          {/* Archiving and won or lost are the owner's; others see them, disabled. The BD director, territory and win date are in the header's Details box. */}
+          {/* Archiving is the owner's; others see it, disabled. */}
           <fieldset disabled={!canEdit} className="min-w-0 space-y-5">
             {t.ticket_type !== 'account' && <ArchiveBar ticket={t} onChanged={refresh} />}
-            {t.ticket_type === 'bid' && (canEdit || t.deal_status !== 'open') && <OutcomeBar ticket={t} onChanged={refresh} />}
           </fieldset>
           <Composer ticketId={t.id} onPosted={refresh} canUpload={canEdit} />
           <Feed data={data} onChanged={refresh} onOpenActivity={showActivity} notePick={notePick} />
@@ -606,9 +609,11 @@ function Composer({ ticketId, onPosted, canUpload = true }) {
 /** Archive the ticket (it leaves the boards; restore it here or from the Archive page), or restore an archived one. */
 /**
  * Won, lost or open: the deal's status, apart from its stage (as in Pipedrive). Won puts the ticket into Delivery as a
- * contract; lost asks for a reason. On a Pipedrive deal the change is synced to Pipedrive.
+ * contract (its button reads Paid); lost asks for a reason. On a Pipedrive deal the change is synced to Pipedrive.
+ * The row is right-justified and starts with `marketing` (the Marketing button, which anyone can use); Lost, Paid and
+ * Reopen are the owner's, so someone else sees a closed deal's outcome with Reopen disabled, and no Lost or Paid.
  */
-function OutcomeBar({ ticket: t, onChanged }) {
+function OutcomeBar({ ticket: t, canEdit, onChanged, marketing }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [losing, setLosing] = useState(false);
@@ -627,31 +632,38 @@ function OutcomeBar({ ticket: t, onChanged }) {
   const synced = t.pipedrive_id ? ' Pipedrive follows.' : '';
   if (t.deal_status === 'won') {
     return (
+      <div className="space-y-2">
+      <div className="flex justify-end">{marketing}</div>
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-        <span className="flex items-center gap-1.5"><Trophy size={14} /> Won{t.won_at ? ` ${stamp(t.won_at)}` : ''}. It’s a contract in Delivery.</span>
+        <span className="flex items-center gap-1.5"><Trophy size={14} /> Paid{t.won_at ? ` ${stamp(t.won_at)}` : ''}. It’s a contract in Delivery.</span>
         <span className="flex items-center gap-2">
           <Link to={`/delivery?open=${program?.id ?? ''}&ticket=${t.id}`} className="flex items-center gap-1 text-xs font-medium text-emerald-800 hover:underline"><BriefcaseBusiness size={13} /> Open in Delivery</Link>
-          <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy} onClick={() => confirm(`Reopen “${t.opportunity_title}”? Its contract in Delivery goes on hold.${synced}`) && set('open')}><Undo2 size={13} /> Reopen</button>
+          <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy || !canEdit} onClick={() => confirm(`Reopen “${t.opportunity_title}”? Its contract in Delivery goes on hold.${synced}`) && set('open')}><Undo2 size={13} /> Reopen</button>
         </span>
+      </div>
       </div>
     );
   }
   if (t.deal_status === 'lost') {
     return (
+      <div className="space-y-2">
+      <div className="flex justify-end">{marketing}</div>
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-900">
         <span className="flex items-center gap-1.5"><XCircle size={14} /> Lost{t.lost_at ? ` ${stamp(t.lost_at)}` : ''}{t.lost_reason ? ` · ${t.lost_reason}` : ''}</span>
-        <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy} onClick={() => confirm(`Reopen “${t.opportunity_title}”?${synced}`) && set('open')}><Undo2 size={13} /> Reopen</button>
+        <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy || !canEdit} onClick={() => confirm(`Reopen “${t.opportunity_title}”?${synced}`) && set('open')}><Undo2 size={13} /> Reopen</button>
+      </div>
       </div>
     );
   }
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {!losing && (
+        {marketing}
+        {canEdit && !losing && (
           <>
             <button type="button" className="btn px-2.5 py-1 text-xs text-red-700" disabled={busy} onClick={() => setLosing(true)}><XCircle size={13} /> Lost</button>
-            <button type="button" className="btn-primary px-2.5 py-1 text-xs" disabled={busy} title={`Mark this deal won. It moves into Delivery as a contract.${synced}`}
-              onClick={() => confirm(`Mark “${t.opportunity_title}” won? It moves into Delivery as a contract.${synced}`) && set('won')}><Trophy size={13} /> Won</button>
+            <button type="button" className="btn-primary px-2.5 py-1 text-xs" disabled={busy} title={`Mark this deal paid. It moves into Delivery as a contract.${synced}`}
+              onClick={() => confirm(`Mark “${t.opportunity_title}” paid? It moves into Delivery as a contract.${synced}`) && set('won')}><Trophy size={13} /> Paid</button>
           </>
         )}
       </div>
@@ -740,7 +752,6 @@ function ConfirmArchive({ ticket, onCancel, onConfirm }) {
 function ArchiveBar({ ticket, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [confirming, setConfirming] = useState(false); // the "type ARCHIVE" popup, for a pipeline ticket
   const isBid = ticket.ticket_type === 'bid';
   const set = async (archived) => {
     setBusy(true);
@@ -766,18 +777,44 @@ function ArchiveBar({ ticket, onChanged }) {
       </div>
     );
   }
-  // A won deal is reopened first (its contract goes on hold), then archived or marked lost: see the Reopen button below.
-  if (isBid && ticket.deal_status === 'won') return null;
+  // A pipeline ticket is archived from the foot of its Details box (see ArchiveButton).
+  if (isBid) return null;
   return (
     <div className="space-y-1">
       <div className="flex justify-end">
-        <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500" onClick={() => (isBid ? setConfirming(true) : set(true))} disabled={busy}
-          title={isBid ? 'Take this deal off the boards. It goes to Closed deals under Other, and can be restored from here.' : 'Move this ticket to the Done archive. Restore it from there any time.'}>
-          <Archive size={13} /> {isBid ? 'Archive ticket' : 'Move to the Done archive'}
+        <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500" onClick={() => set(true)} disabled={busy}
+          title="Move this ticket to the Done archive. Restore it from there any time.">
+          <Archive size={13} /> Move to the Done archive
         </button>
       </div>
-      {confirming && <ConfirmArchive ticket={ticket} onCancel={() => setConfirming(false)} onConfirm={() => { setConfirming(false); set(true); }} />}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
     </div>
+  );
+}
+
+/**
+ * Archive ticket, at the foot of a pipeline ticket's Details box. It takes typing ARCHIVE first. Nothing shows on a ticket
+ * that's already archived, or on a won deal: that one is reopened first (its contract goes on hold), then archived.
+ */
+function ArchiveButton({ ticket, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  if (ticket.archived || ticket.deal_status === 'won') return null;
+  const archive = async () => {
+    setConfirming(false);
+    setBusy(true);
+    setError('');
+    try { await api.put(`/tickets/${ticket.id}/lane`, { archived: true }); onChanged(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <>
+      {error && <span className="text-xs text-red-600">{error}</span>}
+      <button type="button" className="btn-ghost px-2 py-1 text-xs text-slate-500" onClick={() => setConfirming(true)} disabled={busy}
+        title="Take this deal off the boards. It goes to Closed deals under Other, and can be restored from here.">
+        <Archive size={13} /> Archive ticket
+      </button>
+      {confirming && <ConfirmArchive ticket={ticket} onCancel={() => setConfirming(false)} onConfirm={archive} />}
+    </>
   );
 }

@@ -7,6 +7,7 @@
 import { db, json, LEAD_TAGS, GOOGLE_SOLUTION_TAG, pipelineTicketsClosed, PIPELINE_TICKETS_CLOSED, defaultAssignment } from './db.js';
 import { defaultPipeline } from './pipelines.js';
 import { recordWork } from './worklog.js';
+import { customDealFields } from './services/pipedriveFields.js';
 
 export { LEAD_TAGS, GOOGLE_SOLUTION_TAG };
 const lower = (s) => String(s).toLowerCase();
@@ -22,6 +23,46 @@ export function addTicketTags(ticketId, names) {
   const inPipedrive = add.some((n) => db.prepare('SELECT 1 FROM labels WHERE name = ? COLLATE NOCASE AND pipedrive_id IS NOT NULL').get(n));
   db.prepare(`UPDATE tickets SET labels = ?, labels_pending = CASE WHEN ? THEN 1 ELSE labels_pending END, updated_at = datetime('now') WHERE id = ?`)
     .run(json.str([...have, ...add]), inPipedrive && t.pipedrive_id ? 1 : 0, t.id);
+}
+
+/**
+ * Google Solution is one fact kept in two places, always in step: the deal's Google Solution field (Pipedrive's "Google
+ * Deal?") says Yes exactly when the ticket carries the Google Solution tag. `lead` says which side was just changed and so
+ * wins: 'field' (the field was saved: Yes puts the tag on, anything else takes it off), 'tag' (the tags were saved: the tag
+ * sets the field to Yes, taking it off sets a Yes to No), or 'either' (a pull, or startup: a field that's filled in wins,
+ * and a tag on a deal whose field is blank fills it in as Yes). With a ticket id that ticket is checked; without one,
+ * every pipeline ticket. Returns how many tickets were changed.
+ */
+export function linkGoogleSolution(ticketId = null, lead = 'either') {
+  const field = customDealFields().find((f) => /^google deal/i.test(f.name));
+  if (!field) return 0;
+  const option = (word) => (field.options || []).find((o) => lower(o.label).trim() === word)?.label;
+  const YES = option('yes') || 'Yes';
+  const NO = option('no') || null;
+  const rows = db.prepare(`SELECT id, labels, custom_fields, pipedrive_id FROM tickets WHERE ticket_type = 'bid' AND (? IS NULL OR id = ?)
+    AND (custom_fields LIKE '%' || ? || '%' OR labels LIKE '%' || ? || '%')`).all(ticketId, ticketId, field.key, GOOGLE_SOLUTION_TAG);
+  const setField = (t, value) => {
+    const rest = json.parse(t.custom_fields, []).filter((f) => f.key !== field.key);
+    db.prepare("UPDATE tickets SET custom_fields = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(json.str(value ? [...rest, { key: field.key, name: field.name, value }] : rest), t.id);
+  };
+  const untag = (t) => {
+    // A tag Pipedrive has as a label waits to be sent, like any tag change.
+    const inPipedrive = !!db.prepare('SELECT 1 FROM labels WHERE name = ? COLLATE NOCASE AND pipedrive_id IS NOT NULL').get(GOOGLE_SOLUTION_TAG);
+    db.prepare(`UPDATE tickets SET labels = ?, labels_pending = CASE WHEN ? THEN 1 ELSE labels_pending END, updated_at = datetime('now') WHERE id = ?`)
+      .run(json.str(json.parse(t.labels, []).filter((l) => lower(l) !== lower(GOOGLE_SOLUTION_TAG))), inPipedrive && t.pipedrive_id ? 1 : 0, t.id);
+  };
+  let changed = 0;
+  for (const t of rows) {
+    const value = String(json.parse(t.custom_fields, []).find((f) => f.key === field.key)?.value || '').trim();
+    const yes = value.split(',').some((v) => lower(v).trim() === 'yes');
+    const tagged = hasTag(json.parse(t.labels, []), GOOGLE_SOLUTION_TAG);
+    if (yes === tagged) continue;
+    const fieldLeads = lead === 'field' || (lead === 'either' && !!value);
+    if (fieldLeads) { if (yes) addTicketTags(t.id, [GOOGLE_SOLUTION_TAG]); else untag(t); } else setField(t, tagged ? YES : NO);
+    changed += 1;
+  }
+  return changed;
 }
 
 /** Whether Marketing was asked for support at an event and took the request. */

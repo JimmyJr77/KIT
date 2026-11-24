@@ -61,9 +61,10 @@ const Item = ({ label, wide, children }) => (
  * The Details box in a pipeline ticket's header: the deal at a glance, as Pipedrive holds it. Read as a grid; with `editing`
  * (the ticket's edit button, for its owner or an admin) every field is an input, saved together. Each field is one KIT
  * shares with the Pipedrive deal, so a save here goes to Pipedrive and a change there comes back on the next pull.
- * `reloadKey` re-reads the ticket when it changes elsewhere in the pane.
+ * `reloadKey` re-reads the ticket when it changes elsewhere in the pane. Edit sits at the box's top right; `footer` (Archive
+ * ticket) at its bottom right.
  */
-export default function TicketDetailsBox({ ticket, editing, canEdit, reloadKey, onEdit, onDone, onChanged }) {
+export default function TicketDetailsBox({ ticket, editing, canEdit, reloadKey, onEdit, onDone, onChanged, footer = null }) {
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -73,7 +74,8 @@ export default function TicketDetailsBox({ ticket, editing, canEdit, reloadKey, 
   }, [ticket.id, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (data) setForm(formOf(data)); setError(''); }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!data || !form) return <p className="py-2 text-xs text-slate-400">{error || 'Loading…'}</p>;
+  const heading = <h3 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Details</h3>;
+  if (!data || !form) return <>{heading}<p className="py-2 text-xs text-slate-400">{error || 'Loading…'}</p></>;
   const fields = boxFields(data.fields.deal);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -109,7 +111,8 @@ export default function TicketDetailsBox({ ticket, editing, canEdit, reloadKey, 
 
   if (editing) {
     return (
-      <form className="space-y-3 pt-1" onSubmit={(e) => { e.preventDefault(); save(); }}>
+      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save(); }}>
+        {heading}
         <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
           <div className="col-span-2">
             <label className="label">Opportunity title</label>
@@ -158,7 +161,11 @@ export default function TicketDetailsBox({ ticket, editing, canEdit, reloadKey, 
   const closed = parseUtc(data.won_at || data.lost_at);
   const custom = (f) => data.custom_fields.find((x) => x.key === f.key)?.value;
   return (
-    <div className="pt-1">
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        {heading}
+        {canEdit && <button type="button" className="btn-ghost -my-1 px-2 py-1 text-xs" onClick={onEdit}><Pencil size={12} /> Edit</button>}
+      </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
         <Item label="Opportunity title" wide>{data.opportunity_title}</Item>
         <Item label="Pipeline ticket">#{ticket.id}{data.pipedrive_id ? <span className="text-slate-400"> · Pipedrive deal #{data.pipedrive_id}</span> : null}</Item>
@@ -180,11 +187,7 @@ export default function TicketDetailsBox({ ticket, editing, canEdit, reloadKey, 
         </Item>
       </dl>
       {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
-      {canEdit && (
-        <div className="mt-2 flex justify-end">
-          <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={onEdit}><Pencil size={12} /> Edit</button>
-        </div>
-      )}
+      {footer && <div className="mt-2 flex items-center justify-end gap-2">{footer}</div>}
     </div>
   );
 }

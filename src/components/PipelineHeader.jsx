@@ -198,7 +198,7 @@ export function TicketSearch({ value, onChange, placeholder = 'Search for a pipe
                   <div className="truncate text-xs text-slate-500">{[t.organization, t.pipeline_status, t.director_first_name ? `${t.director_first_name} ${t.director_last_name}` : null].filter(Boolean).join(' · ') || `Ticket #${t.id}`}</div>
                 </div>
                 <span className="shrink-0 text-xs text-emerald-700 tabular-nums">{money(t.value)}</span>
-                {t.deal_status === 'won' && <Trophy size={13} className="shrink-0 text-emerald-600" title="Won" />}
+                {t.deal_status === 'won' && <Trophy size={13} className="shrink-0 text-emerald-600" title="Paid" />}
                 {t.deal_status === 'lost' && <XCircle size={13} className="shrink-0 text-red-600" title="Lost" />}
                 {t.archived && <Archive size={13} className="shrink-0 text-slate-400" title="Archived" />}
               </button>

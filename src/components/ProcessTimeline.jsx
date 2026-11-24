@@ -130,7 +130,7 @@ function TicketStrip({ ticket: t, pwin, onOpenTool, orient, onOrient }) {
           {t.organization && <span>{t.organization}</span>}
           {t.pipeline_name && <span className="rounded bg-slate-100 px-1.5">{t.pipeline_name}{t.pipeline_status ? ` · ${t.pipeline_status}` : ''}</span>}
           {!t.pipeline_name && t.pipeline_status && <span className="rounded bg-slate-100 px-1.5">{t.pipeline_status}</span>}
-          {t.deal_status === 'won' && <span className="flex items-center gap-1 rounded bg-emerald-100 px-1.5 font-semibold text-emerald-800"><Trophy size={11} /> Won{t.won_at ? ` ${stamp(t.won_at)}` : ''}</span>}
+          {t.deal_status === 'won' && <span className="flex items-center gap-1 rounded bg-emerald-100 px-1.5 font-semibold text-emerald-800"><Trophy size={11} /> Paid{t.won_at ? ` ${stamp(t.won_at)}` : ''}</span>}
           {t.deal_status === 'lost' && <span className="flex items-center gap-1 rounded bg-red-100 px-1.5 font-semibold text-red-800"><XCircle size={11} /> Lost{t.lost_reason ? ` · ${t.lost_reason}` : ''}</span>}
           {t.value != null && <span className="rounded bg-emerald-50 px-1.5 text-emerald-700">{money(t.value)}</span>}
           {pwin && <span className="rounded bg-brand-50 px-1.5 font-semibold text-brand-700" title={`PWIN: ${pwin.rated} of ${pwin.total} areas rated`}>PWIN {pwin.score}%</span>}

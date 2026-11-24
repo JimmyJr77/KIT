@@ -31,7 +31,7 @@ const CLOSED = { label: 'Closed', tone: 'bg-slate-200 text-slate-700 ring-slate-
 // Where the deal has got to, shown as the category in place of the stage.
 const OUTCOMES = {
   awarded: { label: 'Awarded', tone: 'bg-sky-50 text-sky-800 ring-sky-200' },
-  paid: { label: 'Paid (Won)', tone: 'bg-emerald-600 text-white ring-emerald-600' },
+  paid: { label: 'Paid', tone: 'bg-emerald-600 text-white ring-emerald-600' },
   closed: { label: 'Closed - Not awarded', tone: 'bg-slate-200 text-slate-700 ring-slate-300' },
 };
 const UNSET = 'bg-white text-slate-500 ring-slate-300';

@@ -1,4 +1,5 @@
-// The win assessment on a pipeline ticket: eight criteria, each with prompts to fill in and a 1–5 score.
+// The win assessment on a pipeline ticket: six criteria, each with a 1–5 score and prompts to fill in (Pursuit momentum
+// shows the ticket's latest activities and comments instead).
 // Stored on the ticket as { [criterion key]: { score, answers: { [prompt key]: text } } }.
 // Each criterion also carries its default PWIN weight, the reason for it, and whether it's a must-have;
 // teams can change weights and must-haves in BD Pipeline › Settings.
@@ -44,17 +45,6 @@ export const CRITERIA = [
     ],
   },
   {
-    key: 'acquisition', title: 'Acquisition path & timing', weight: 0,
-    why: 'We need a vehicle we can bid on and a timeline we can meet, but a path can often be found or teamed into.',
-    blurb: 'Expected vehicle, procurement plan, solicitation and award windows, and our eligibility or teaming path.',
-    prompts: [
-      { key: 'vehicle', label: 'Expected vehicle', placeholder: 'GSA schedule, IDIQ, OTA, full and open…' },
-      { key: 'plan', label: 'Procurement plan', placeholder: 'Set-aside, evaluation approach, contract type' },
-      { key: 'windows', label: 'Solicitation / award windows', placeholder: 'RFI, draft RFP, final RFP, and award dates' },
-      { key: 'eligibility', label: 'Our eligibility or teaming path', placeholder: 'Prime, sub, or the partner we need' },
-    ],
-  },
-  {
     key: 'solution', title: 'Solution & delivery fit', weight: 5,
     why: 'Capability gaps can usually be closed by hiring or teaming, so fit matters far less than customer pull.',
     blurb: 'Match to capabilities and past performance; staffing, clearance, technology, and gaps.',
@@ -78,26 +68,11 @@ export const CRITERIA = [
     ],
   },
   {
-    key: 'business', title: 'Business value', weight: 0,
-    why: 'Tells us whether the win is worth having, not whether we will win it.',
-    blurb: 'Estimated company share, expected margin, capture and proposal cost, and strategic account value.',
-    prompts: [
-      { key: 'share', label: 'Estimated company share', placeholder: 'Our share of the total value' },
-      { key: 'margin', label: 'Expected margin', placeholder: 'Expected fee or margin' },
-      { key: 'cost', label: 'Capture / proposal cost', placeholder: 'B&P budget and hours' },
-      { key: 'strategic', label: 'Strategic account value', placeholder: 'Why this matters beyond the contract itself' },
-    ],
-  },
-  {
     key: 'momentum', title: 'Pursuit momentum', weight: 10,
     why: 'Steady progress with a clear owner shows the pursuit is real and moving.',
-    blurb: 'Next milestone, accountable owner, due date, and evidence of progress.',
-    prompts: [
-      { key: 'milestone', label: 'Next milestone', placeholder: 'The next concrete step' },
-      { key: 'owner', label: 'Accountable owner', placeholder: 'Who owns it' },
-      { key: 'due', label: 'Due date', type: 'date' },
-      { key: 'progress', label: 'Evidence of progress', placeholder: 'What has moved since the last check-in' },
-    ],
+    blurb: 'Is the pursuit moving? Rate it from what has happened on the ticket lately.',
+    // Nothing to fill in: the ticket's own latest activities and comments are the evidence, shown in place of prompts.
+    prompts: [], recent: 5,
   },
 ];
 

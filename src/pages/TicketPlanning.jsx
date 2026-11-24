@@ -1011,14 +1011,17 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const saved = useRef(null);
-  const [nextStep, setNextStep] = useState(null);
+  const [recent, setRecent] = useState(null); // the ticket's activities and comments, newest first, for Pursuit momentum
   const [weights, setWeights] = useState(DEFAULT_PWIN_WEIGHTS);
   const [gates, setGates] = useState(DEFAULT_PWIN_GATES);
   useEffect(() => { api.get('/tickets/pwin-weights').then((d) => { setWeights(d.weights); setGates(d.gates); }); }, []);
   useEffect(() => {
     if (plan && draft === null) { setDraft(plan.assessment || {}); saved.current = JSON.stringify(plan.assessment || {}); }
   }, [plan]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { api.get(`/activities?ticket=${ticket.id}`).then((d) => setNextStep(d.activities.find((a) => a.rank === 1) || null)); }, [ticket.id]);
+  useEffect(() => {
+    api.get(`/tickets/${ticket.id}/timeline`).then((d) => setRecent(d.events.filter((e) => e.type === 'activity' || e.type === 'comment')
+      .sort((a, b) => String(b.at).localeCompare(String(a.at))))).catch(() => setRecent([]));
+  }, [ticket.id]);
 
   const dirty = draft !== null && JSON.stringify(draft) !== saved.current;
   useEffect(() => { onDirty?.(dirty); }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1102,13 +1105,11 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
                   </div>
                   <ScorePicker value={entry.score} onChange={(s) => setScore(c.key, s)} />
                 </div>
-                <div className="mt-3 space-y-2.5">
+                {c.recent && <RecentActivity events={recent} count={c.recent} />}
+                <div className={c.prompts.length ? 'mt-3 space-y-2.5' : 'hidden'}>
                   {c.prompts.map((p) => (
                     <div key={p.key}>
                       <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`a-${c.key}-${p.key}`}>{p.label}</label>
-                      {c.key === 'momentum' && p.key === 'milestone' && nextStep && (
-                        <p className="mb-1 flex items-center gap-1 text-[10px] text-brand-700"><Flag size={10} /> Filled in from the ticket’s next step, its top activity</p>
-                      )}
                       {p.options ? (
                         <select id={`a-${c.key}-${p.key}`} className="input py-1.5 text-sm" value={entry.answers?.[p.key] || ''} onChange={(e) => setAnswer(c.key, p.key, e.target.value)}>
                           <option value="">—</option>
@@ -1131,6 +1132,34 @@ function AssessmentDrawer({ ticket, onClose, onChanged, onDirty }) {
     </DrawerShell>
   );
 }
+
+/** The ticket's latest activities and comments, each with its date: the evidence for Pursuit momentum. */
+function RecentActivity({ events, count }) {
+  if (!events) return <p className="mt-3 text-xs text-slate-400">Loading…</p>;
+  if (!events.length) return <p className="mt-3 text-xs text-slate-400">No activities or comments on this ticket yet.</p>;
+  return (
+    <div className="mt-3">
+      <span className="mb-1 block text-[11px] font-medium text-slate-600">Last {Math.min(count, events.length)} activities and comments</span>
+      <ul className="divide-y divide-slate-100 rounded-md border border-slate-200">
+        {events.slice(0, count).map((e) => {
+          const a = e.activity;
+          const m = e.comment;
+          return (
+            <li key={`${e.type}-${a?.id ?? m?.id}`} className="flex items-start gap-2 px-2.5 py-1.5 text-xs">
+              <span className="w-20 shrink-0 text-slate-500 tabular-nums" title={fullStamp(e.at)}>{parseDay(e.at)}</span>
+              <span className="min-w-0 flex-1">
+                <span className="font-medium text-slate-700">{a ? a.activity_type : m.kind === 'note' ? 'Note' : 'Comment'}</span>
+                <span className="text-slate-400">{e.author ? ` · ${fullName(e.author)}` : ''}{a?.done ? ' · done' : ''}</span>
+                <span className="line-clamp-2 break-words text-slate-600">{a ? a.subject : m.body}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+const parseDay = (at) => new Date(`${String(at).replace(' ', 'T')}Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
 /** Five buttons, 1–5. Clicking the selected score clears it. */
 function ScorePicker({ value, onChange }) {
@@ -1289,7 +1318,7 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
                 </label>
               )}
               <div className="sm:col-span-2 rounded-lg bg-slate-50 px-3 py-1 text-sm">
-                <Row label="Status">{{ open: 'Open', won: 'Won', lost: 'Lost' }[data.deal_status] || 'Open'}{data.won_at ? ` · ${stamp(data.won_at)}` : data.lost_at ? ` · ${stamp(data.lost_at)}` : ''}</Row>
+                <Row label="Status">{{ open: 'Open', won: 'Paid', lost: 'Lost' }[data.deal_status] || 'Open'}{data.won_at ? ` · ${stamp(data.won_at)}` : data.lost_at ? ` · ${stamp(data.lost_at)}` : ''}</Row>
                 <Row label="Value">{data.value != null ? money(data.value, form.currency || data.currency) : null}</Row>
                 <Row label="Expected close date">{data.projected_win_date ? shortDate(data.projected_win_date, { month: 'short', day: 'numeric', year: 'numeric' }) : null}</Row>
                 <Row label="Organization">{org.name || null}</Row>
@@ -1330,10 +1359,7 @@ function DetailsDrawer({ ticket, onClose, onChanged, onDirty }) {
                 <Row label="Source channel ID">{data.source_channel_id}</Row>
               </div>
             ) : (
-              <label>
-                <span className="label">Source</span>
-                <input className="input" value={form.source} onChange={set('source')} placeholder="Where the deal came from" />
-              </label>
+              <input className="input" value={form.source} onChange={set('source')} placeholder="Where the deal came from" aria-label="Source" />
             )}
           </Section>
 

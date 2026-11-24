@@ -70,7 +70,7 @@ export default function Delivery() {
 
   return (
     <div className="space-y-5 p-8">
-      <PageHeader title="Delivery" subtitle="Contracts we’ve won. Each one lands here when its deal is marked won, with its Pipedrive project as the plan.">
+      <PageHeader title="Delivery" subtitle="Contracts we’ve won. Each one lands here when its deal is marked paid, with its Pipedrive project as the plan.">
         <div className="flex h-9 rounded-md bg-white p-0.5 text-sm ring-1 ring-slate-300">
           {[['active', 'Active'], ['complete', 'Complete'], ['canceled', 'Canceled'], ['held', `On hold${held ? ` (${held})` : ''}`], ['all', 'All']].map(([k, l]) => (
             <button key={k} type="button" onClick={() => setStatus(k)}
@@ -96,7 +96,7 @@ export default function Delivery() {
 
       {status === 'held' && (
         <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Contracts with information on them whose deal is no longer won. They’re saved as they were, but left out of bookings, backlog and revenue until an admin decides. If the deal is won again, the contract comes back on its own.
+          Contracts with information on them whose deal is no longer paid. They’re saved as they were, but left out of bookings, backlog and revenue until an admin decides. If the deal is marked paid again, the contract comes back on its own.
         </p>
       )}
 
@@ -118,14 +118,14 @@ export default function Delivery() {
                 <div className="font-semibold leading-snug text-slate-900">{p.name}</div>
                 <div className="truncate text-xs text-slate-500">{[p.organization, p.account_type].filter(Boolean).join(' · ') || 'Customer not set'}</div>
               </div>
-              {p.held_at ? <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">On hold · {p.deal_status === 'won' ? p.ticket_stage : 'not won'}</span>
+              {p.held_at ? <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">On hold · {p.deal_status === 'won' ? p.ticket_stage : 'not paid'}</span>
                 : p.status !== 'Active' ? <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[p.status]}`}>{p.status}</span>
                   : p.past_pop ? <PastPop program={p} />
                     : p.project.phase && <span className="shrink-0 rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700" title="Pipedrive project phase">{p.project.phase}</span>}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
               {p.value != null && <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-700">{money(p.value)}</span>}
-              <span className="text-slate-400">{p.held_at ? `Not won · ${p.ticket_stage || 'no stage'}` : `Won ${wonOn(p.awarded_at)}`}</span>
+              <span className="text-slate-400">{p.held_at ? `Not paid · ${p.ticket_stage || 'no stage'}` : `Paid ${wonOn(p.awarded_at)}`}</span>
             </div>
             {p.value > 0 && <FundedBar program={p} />}
             <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs">
@@ -213,7 +213,7 @@ function ProgramPanel({ program: p, users, teams, meta, onChange, onClose, onDec
 
   return (
     <SidePanel wide title={p.name} onClose={close} onEscape={tool ? () => switchTool(null) : close}
-      subtitle={[p.organization, p.value != null ? money(p.value) : null, `Won ${wonOn(p.awarded_at)}`].filter(Boolean).join(' · ')}
+      subtitle={[p.organization, p.value != null ? money(p.value) : null, `Paid ${wonOn(p.awarded_at)}`].filter(Boolean).join(' · ')}
       rail={<DeliveryRail active={tool} onSelect={switchTool} />}
       drawer={tool && (
         <DeliveryDrawer key={tool} tool={tool} program={p} meta={meta} users={users} teams={teams} onChange={onChange}
@@ -389,7 +389,7 @@ function ProjectDrawer({ program: p, meta, users, teams, onChange, onClose }) {
     try { onChange((await api.put(`/delivery/${p.id}`, body)).program); } catch (e) { setError(e.message); }
   };
   const create = async () => {
-    if (!confirm(`Make a Pipedrive project for “${p.name}”, linked to its won deal? Its plan, notes and documents then sync both ways.`)) return;
+    if (!confirm(`Make a Pipedrive project for “${p.name}”, linked to its paid deal? Its plan, notes and documents then sync both ways.`)) return;
     setBusy(true); setError('');
     try { onChange((await api.post(`/delivery/${p.id}/project`, {})).program); } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
@@ -708,7 +708,7 @@ function ProjectNotes({ program: p, onChange, onError }) {
 function HoldDecision({ program: p, onDecided, onError }) {
   const { user } = useAuth();
   const keep = async () => {
-    if (!confirm(`Keep “${p.name}” as a contract? It goes back into bookings, backlog and revenue, even though its deal isn’t won.`)) return;
+    if (!confirm(`Keep “${p.name}” as a contract? It goes back into bookings, backlog and revenue, even though its deal isn’t paid.`)) return;
     try { onDecided((await api.post(`/delivery/${p.id}/keep`)).program); } catch (e) { onError(e.message); }
   };
   const remove = async () => {
@@ -719,7 +719,7 @@ function HoldDecision({ program: p, onDecided, onError }) {
   return (
     <section className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
       <p className="flex items-start gap-1.5 font-medium"><AlertTriangle size={15} className="mt-0.5 shrink-0" /> On hold since {wonOn(p.held_at)}: its deal is no longer won ({p.deal_status === 'lost' ? 'lost' : 'reopened'}, in {p.ticket_stage || 'no stage'}).</p>
-      <p className="mt-1 text-xs">Everything here is saved, but it isn’t counted in bookings, backlog or revenue. If the deal is won again, this comes back on its own.</p>
+      <p className="mt-1 text-xs">Everything here is saved, but it isn’t counted in bookings, backlog or revenue. If the deal is marked paid again, this comes back on its own.</p>
       {user.role === 'admin' ? (
         <div className="mt-2 flex flex-wrap gap-2">
           <button type="button" className="btn-primary text-xs" onClick={keep}>Keep as a contract</button>
@@ -861,7 +861,7 @@ function ProgramTable({ programs, openId, onOpen }) {
         <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
           <tr>
             {header('name', 'Contract')}{header('customer', 'Customer')}{header('value', 'Value', 'text-right')}{header('funded', 'Funded', 'text-right')}
-            {header('billed', 'Billed', 'text-right')}{header('won', 'Won')}{header('pm', 'Program Manager')}{header('team', 'Team', 'text-right')}{header('phase', 'Phase')}{header('pop', 'PoP end')}{header('status', 'Status')}
+            {header('billed', 'Billed', 'text-right')}{header('won', 'Paid')}{header('pm', 'Program Manager')}{header('team', 'Team', 'text-right')}{header('phase', 'Phase')}{header('pop', 'PoP end')}{header('status', 'Status')}
           </tr>
         </thead>
         <tbody>

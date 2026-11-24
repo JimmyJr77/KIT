@@ -14,8 +14,10 @@ const longDate = (iso) => shortDate(iso, { month: 'short', day: 'numeric', year:
  * and activity. A request has to say what it's for (an event, a ticket, or both), what's needed, why, and which leads,
  * opportunities or meetings it's about, so the marketing dollars that follow can be traced to them.
  * `eventId`, `ticket` ({ id, opportunity_title, ticket_type }) and `activity` ({ id, subject }) start it off tied to where it was opened.
+ * It opens as its own side panel; `embedded` (a pipeline ticket's Marketing pane) draws it inside the pane it's in
+ * instead, where the meeting scheduler takes the pane over and hands it back with what's typed still there.
  */
-export default function MarketingRequestForm({ eventId = null, ticket = null, activity = null, onClose, onSaved }) {
+export default function MarketingRequestForm({ eventId = null, ticket = null, activity = null, onClose, onSaved, embedded = false }) {
   const [meta, setMeta] = useState(null);
   const [events, setEvents] = useState([]);
   const [tickets, setTickets] = useState([]);
@@ -84,31 +86,24 @@ export default function MarketingRequestForm({ eventId = null, ticket = null, ac
     } catch (e) { setError(e.message); setBusy(false); }
   };
 
-  return (
-    <SidePanel title="Request marketing support" subtitle={meta && (meta.team.length ? `Alerts ${meta.team.map(fullName).join(', ')}` : 'No one is on the Marketing team yet')} onClose={onClose}
-      onEscape={scheduling ? () => setScheduling(null) : onClose}
-      rail={(
-        <button type="button" onClick={() => setScheduling(scheduling ? null : 'new')} title="Meeting scheduler" aria-label="Meeting scheduler" aria-pressed={!!scheduling}
-          className={`grid h-9 w-9 place-items-center rounded-md transition ${scheduling ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-brand-700 hover:shadow-sm'}`}>
-          <CalendarPlus size={18} />
+  const subtitle = meta && (meta.team.length ? `Alerts ${meta.team.map(fullName).join(', ')}` : 'No one is on the Marketing team yet');
+  const scheduler = scheduling && (
+    <MeetingPanel key={scheduling.id ?? 'new'} meeting={scheduling === 'new' ? null : scheduling} event={event || null} ticket={forTicket || null}
+      opportunities={oppOptions.filter((o) => form.ticket_ids.includes(o.value)).map((o) => ({ id: o.value, title: o.label }))}
+      onClose={() => setScheduling(null)} onSaved={meetingSaved} />
+  );
+  const footer = (
+    <div className="flex items-center justify-between gap-2">
+      <span className={`text-xs ${error ? 'text-red-600' : 'text-slate-400'}`}>{error || missing}</span>
+      <div className="flex shrink-0 gap-2">
+        <button type="button" className="btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="btn-primary" onClick={submit} disabled={busy || !!missing}>
+          <Megaphone size={15} /> {busy ? 'Sending…' : 'Send request'}
         </button>
-      )}
-      drawer={scheduling && (
-        <MeetingPanel key={scheduling.id ?? 'new'} meeting={scheduling === 'new' ? null : scheduling} event={event || null} ticket={forTicket || null}
-          opportunities={oppOptions.filter((o) => form.ticket_ids.includes(o.value)).map((o) => ({ id: o.value, title: o.label }))}
-          onClose={() => setScheduling(null)} onSaved={meetingSaved} />
-      )}
-      footer={(
-        <div className="flex items-center justify-between gap-2">
-          <span className={`text-xs ${error ? 'text-red-600' : 'text-slate-400'}`}>{error || missing}</span>
-          <div className="flex shrink-0 gap-2">
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
-            <button type="button" className="btn-primary" onClick={submit} disabled={busy || !!missing}>
-              <Megaphone size={15} /> {busy ? 'Sending…' : 'Send request'}
-            </button>
-          </div>
-        </div>
-      )}>
+      </div>
+    </div>
+  );
+  const fields = (
       <div className="space-y-4">
         <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
           <legend className="px-1 text-xs font-medium text-slate-500">What it’s for (an event, a ticket, or both) *</legend>
@@ -204,6 +199,38 @@ export default function MarketingRequestForm({ eventId = null, ticket = null, ac
           </div>
         </fieldset>
       </div>
+  );
+
+  if (embedded) {
+    return (
+      <>
+        <div className={scheduling ? 'hidden' : 'contents'}>
+          <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+            <div className="min-w-0">
+              <h3 className="font-semibold">Request marketing support</h3>
+              {subtitle && <div className="text-xs text-slate-500">{subtitle}</div>}
+            </div>
+            <button className="btn-ghost p-1.5" onClick={onClose} aria-label="Close the request"><X size={18} /></button>
+          </header>
+          <div className="flex-1 overflow-y-auto px-5 py-4">{fields}</div>
+          <footer className="border-t border-slate-200 bg-white px-5 py-3">{footer}</footer>
+        </div>
+        {scheduler}
+      </>
+    );
+  }
+  return (
+    <SidePanel title="Request marketing support" subtitle={subtitle} onClose={onClose}
+      onEscape={scheduling ? () => setScheduling(null) : onClose}
+      rail={(
+        <button type="button" onClick={() => setScheduling(scheduling ? null : 'new')} title="Meeting scheduler" aria-label="Meeting scheduler" aria-pressed={!!scheduling}
+          className={`grid h-9 w-9 place-items-center rounded-md transition ${scheduling ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-brand-700 hover:shadow-sm'}`}>
+          <CalendarPlus size={18} />
+        </button>
+      )}
+      drawer={scheduler}
+      footer={footer}>
+      {fields}
     </SidePanel>
   );
 }
@@ -212,7 +239,7 @@ export default function MarketingRequestForm({ eventId = null, ticket = null, ac
  * Pick an event by typing: upcoming events first, soonest at the top. Past events don't crowd the list, but typing finds
  * them too, marked as past.
  */
-function EventPicker({ events, value, onChange }) {
+export function EventPicker({ events, value, onChange }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const ref = useRef(null);

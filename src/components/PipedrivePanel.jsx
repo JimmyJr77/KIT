@@ -22,7 +22,7 @@ function summary(r) {
     part(r.notesAdded, r.notesUpdated, 'note'), gone(r.notesDeleted, 'note'),
     r.filesAdded && plural(r.filesAdded, 'new file'), gone(r.filesDeleted, 'file'), r.filesHeld && `${plural(r.filesHeld, 'file')} deleted in Pipedrive, held for a decision`,
     part(r.productsAdded, r.productsUpdated, 'product'), gone(r.productsDeleted, 'product'), r.installmentsAdded && plural(r.installmentsAdded, 'new installment'),
-    r.projectsUpdated && plural(r.projectsUpdated, 'project'), r.projectsUnlinked && `${plural(r.projectsUnlinked, 'project')} not on a won deal`,
+    r.projectsUpdated && plural(r.projectsUpdated, 'project'), r.projectsUnlinked && `${plural(r.projectsUnlinked, 'project')} not on a paid deal`,
     part(r.tasksAdded, r.tasksUpdated, 'project task'), gone(r.tasksDeleted, 'project task'), part(r.projectNotesAdded, 0, 'project note'), r.projectFilesAdded && plural(r.projectFilesAdded, 'project file'),
   ].filter(Boolean).join(' · ');
 }

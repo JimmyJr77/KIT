@@ -16,8 +16,8 @@ export const LANES = [
 export const CLOSED_STAGES = ['Awarded', 'Lost'];
 /** Whether a pipeline ticket is closed: won or lost. Older rows without a deal status fall back to the closing stages. */
 export const isClosed = (t) => (t.deal_status ? t.deal_status !== 'open' : CLOSED_STAGES.includes(t.pipeline_status));
-/** "Won" or "Lost" for a closed pipeline ticket, else null. */
-export const outcomeOf = (t) => (t.deal_status === 'won' || (!t.deal_status && t.pipeline_status === 'Awarded') ? 'Won'
+/** "Paid" (a won deal) or "Lost" for a closed pipeline ticket, else null. */
+export const outcomeOf = (t) => (t.deal_status === 'won' || (!t.deal_status && t.pipeline_status === 'Awarded') ? 'Paid'
   : t.deal_status === 'lost' || (!t.deal_status && t.pipeline_status === 'Lost') ? 'Lost' : null);
 export const ARCHIVE_AFTER_DAYS = 14;
 

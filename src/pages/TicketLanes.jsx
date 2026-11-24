@@ -17,7 +17,7 @@ const HINT = {
   todo: 'New tickets, and PL tickets quiet for 14+ days',
   in_work: 'PL tickets with activity in the last 7 days',
   stale: 'PL tickets quiet for 7–14 days',
-  done: 'Won, lost, or finished. Work tickets archive after 14 days; won and lost deals stay, and are in Closed deals.',
+  done: 'Paid, lost, or finished. Work tickets archive after 14 days; paid and lost deals stay, and are in Closed deals.',
 };
 
 /**

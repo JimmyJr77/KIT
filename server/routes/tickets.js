@@ -22,7 +22,7 @@ import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTag
 import { NEXT_STEP_SQL } from '../activities.js';
 import { canEditTicket, ownerOnlyMessage } from '../../src/lib/ticketAccess.js';
 import { focusTickets } from '../focus.js';
-import { sourceFromEvent } from '../leads.js';
+import { sourceFromEvent, linkGoogleSolution } from '../leads.js';
 
 const r = Router();
 
@@ -286,6 +286,7 @@ r.post('/', (req, res) => {
   if (type === 'bid') {
     if (dealFields.list.length) db.prepare('UPDATE tickets SET custom_fields = ? WHERE id = ?').run(json.str(dealFields.list), id);
     if (String(req.body?.gov_lead ?? '').trim()) setGovLead(ticketRow(id), req.body.gov_lead, req.user.id);
+    linkGoogleSolution(id, 'field');
   }
   recordWork(req.user, { kind: 'ticket', ticket_id: id, summary: fields.opportunity_title });
   const eventId = type === 'bid' && Number(req.body?.source_event_id);
@@ -490,7 +491,7 @@ r.put('/:id/lane', ownerOnly(), (req, res) => {
       // A won deal's contract is in Delivery and in the books; archiving it would silently take it out. Reopening the deal
       // puts the contract on hold first, and then the ticket can be archived or marked lost.
       if (t.ticket_type === 'bid' && t.deal_status === 'won') {
-        return res.status(400).json({ error: 'A won deal can’t be archived while its contract is in Delivery. Reopen the deal first (its contract goes on hold), then archive it or mark it lost.' });
+        return res.status(400).json({ error: 'A paid deal can’t be archived while its contract is in Delivery. Reopen the deal first (its contract goes on hold), then archive it or mark it lost.' });
       }
       // A work ticket archived from any lane is finished: it joins the Done archive.
       if (t.ticket_type === 'work') set("archived_at = datetime('now'), lane = 'done', done_at = COALESCE(done_at, datetime('now'))");
@@ -578,7 +579,7 @@ function lastOpenStage(t) {
 r.put('/:id/outcome', ownerOnly(), (req, res) => {
   const t = ticketRow(req.params.id);
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets are won or lost' });
+  if (t.ticket_type !== 'bid') return res.status(400).json({ error: 'Only pipeline tickets are paid or lost' });
   const status = req.body?.deal_status;
   if (!['won', 'lost', 'open'].includes(status)) return res.status(400).json({ error: 'Choose won, lost or open' });
   setOutcome(t.id, status, req.body?.lost_reason);
@@ -586,11 +587,11 @@ r.put('/:id/outcome', ownerOnly(), (req, res) => {
   if (status === 'open' && req.get(UNDO_HEADER) && statusesFor(t.pipeline_id).includes(req.body?.pipeline_status)) {
     db.prepare('UPDATE tickets SET pipeline_status = ? WHERE id = ?').run(req.body.pipeline_status, t.id);
   }
-  recordWork(req.user, { kind: 'ticket', ticket_id: t.id, summary: `${t.opportunity_title}: ${status === 'open' ? 'reopened' : status}` });
+  recordWork(req.user, { kind: 'ticket', ticket_id: t.id, summary: `${t.opportunity_title}: ${status === 'open' ? 'reopened' : status === 'won' ? 'paid' : status}` });
   // A recent action when an open deal was closed: undoing it reopens the deal. Reopening isn't one, since closing it
   // again would date the win or loss today.
   if ((t.deal_status || 'open') === 'open' && status !== 'open') {
-    recordAction(req, { ticket_id: t.id, summary: `Marked ${status}`, undo: { method: 'PUT', path: `/tickets/${t.id}/outcome`, body: { deal_status: 'open', pipeline_status: t.pipeline_status } },
+    recordAction(req, { ticket_id: t.id, summary: `Marked ${status === 'won' ? 'paid' : status}`, undo: { method: 'PUT', path: `/tickets/${t.id}/outcome`, body: { deal_status: 'open', pipeline_status: t.pipeline_status } },
       guard: { table: 'tickets', id: t.id, fields: { deal_status: status } } });
   }
   res.json({ ticket: ticketRow(t.id), program: db.prepare('SELECT id FROM delivery_programs WHERE ticket_id = ?').get(t.id) || null });
@@ -1165,6 +1166,8 @@ r.put('/:id/details', ownerOnly(), (req, res) => {
       b.followers.forEach((u) => add.run(t.id, Number(u)));
     }
   })();
+  if (set.custom_fields) linkGoogleSolution(t.id, 'field');
+  else if (set.labels) linkGoogleSolution(t.id, 'tag');
   touch(t.id);
   recordTicketUpdate(req.user, t, 'Details');
   res.json(detailsOf(ticketRow(t.id)));
@@ -1200,6 +1203,7 @@ r.put('/:id/summary', ownerOnly(), (req, res) => {
     Object.entries(set).forEach(([k, v]) => db.prepare(`UPDATE tickets SET ${k} = ? WHERE id = ?`).run(v, t.id));
     if ('gov_lead' in b) setGovLead(ticketRow(t.id), b.gov_lead, req.user.id);
   })();
+  if (set.custom_fields) linkGoogleSolution(t.id, 'field');
   touch(t.id);
   recordTicketUpdate(req.user, t, 'Details');
   res.json(detailsOf(ticketRow(t.id)));
@@ -1224,6 +1228,7 @@ r.put('/:id/labels', ownerOnly(), (req, res) => {
   const labels = cleanLabels(req.body?.labels);
   db.prepare('UPDATE tickets SET labels = ?, labels_pending = ? WHERE id = ?').run(labels, t.pipedrive_id ? 1 : 0, t.id);
   queueFromTags(req.user, t.id, t.labels, labels); // a process tag queues its staffing event, and so the SAC list
+  linkGoogleSolution(t.id, 'tag'); // the Google Solution tag and the deal's Google Solution field say the same thing
   touch(t.id);
   recordTicketUpdate(req.user, t, 'Labels');
   res.json({ labels: json.parse(ticketRow(t.id).labels, []) });

@@ -10,10 +10,10 @@ import DirectorSelect from '../components/DirectorSelect.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 
 const GROUPS = [
-  { key: 'execution', label: 'In execution', about: 'Won and in delivery. It moves to Executed once its funding covers the contract value, or once the contract is marked Complete on Delivery (or its Pipedrive project is completed).', date: 'Won' },
+  { key: 'execution', label: 'In execution', about: 'Paid and in delivery. It moves to Executed once its funding covers the contract value, or once the contract is marked Complete on Delivery (or its Pipedrive project is completed).', date: 'Won' },
   { key: 'executed', label: 'Executed', about: 'Fully funded, or the contract is Complete or canceled. Its contract is still in Delivery.', date: 'Completed' },
   { key: 'lost', label: 'Lost', about: 'Deals marked lost, here or in Pipedrive.', date: 'Lost' },
-  { key: 'other', label: 'Other', about: 'Left the pipeline with no outcome: archived here while still open, or archived or deleted in Pipedrive. A won deal archived or deleted in Pipedrive leaves Delivery and lands here; one that already had funding recorded is flagged, in case it was only tidied away in Pipedrive once funded.', date: 'Removed' },
+  { key: 'other', label: 'Other', about: 'Left the pipeline with no outcome: archived here while still open, or archived or deleted in Pipedrive. A paid deal archived or deleted in Pipedrive leaves Delivery and lands here; one that already had funding recorded is flagged, in case it was only tidied away in Pipedrive once funded.', date: 'Removed' },
 ];
 const money = (n) => (n == null ? '—' : usd(Math.round(n)).replace('.00', ''));
 const directorOf = (d) => (d.director_first_name ? `${d.director_first_name} ${d.director_last_name}` : null);
@@ -106,7 +106,7 @@ export default function ClosedDeals() {
       {discrepancies > 0 && (
         <p className="flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
           <TriangleAlert size={15} className="shrink-0" />
-          {discrepancies === 1 ? 'One won deal had' : `${discrepancies} won deals had`} funding recorded when Pipedrive archived or deleted {discrepancies === 1 ? 'it' : 'them'}. {group === 'other' ? 'They are flagged below.' : 'See Other.'} Check each against Pipedrive before treating it as gone.
+          {discrepancies === 1 ? 'One paid deal had' : `${discrepancies} paid deals had`} funding recorded when Pipedrive archived or deleted {discrepancies === 1 ? 'it' : 'them'}. {group === 'other' ? 'They are flagged below.' : 'See Other.'} Check each against Pipedrive before treating it as gone.
         </p>
       )}
 

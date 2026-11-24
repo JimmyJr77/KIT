@@ -63,7 +63,7 @@ export default function Archive() {
     const files = tab === 'cards' ? 0 : picked.reduce((s, r) => s + r.file_count, 0);
     const contracts = tab === 'cards' ? 0 : picked.reduce((s, r) => s + (r.contract_count || 0), 0);
     const extra = [cards && `${cards} priority card${cards === 1 ? '' : 's'}`, files && `${files} document${files === 1 ? '' : 's'}`,
-      contracts && `${contracts} won contract${contracts === 1 ? '' : 's'} with its funding and billing`].filter(Boolean);
+      contracts && `${contracts} paid contract${contracts === 1 ? '' : 's'} with its funding and billing`].filter(Boolean);
     const deals = tab === 'cards' || !data?.deletesDeals ? 0 : picked.filter((r) => r.pipedrive_id).length;
     const text = `Permanently delete ${picked.length} ${noun(picked.length)}?${extra.length ? ` This also deletes ${extra.join(' and ')} on ${picked.length === 1 ? 'it' : 'them'}, plus comments, tasks and history.` : ''}${deals ? `\n\n${deals === 1 ? 'The Pipedrive deal' : `${deals} Pipedrive deals`} will be deleted in Pipedrive too.` : ''}\n\nThis can't be undone.`;
     if (!confirm(text)) return;
@@ -75,7 +75,7 @@ export default function Archive() {
     run(() => api.post(`/archive/datasets/${d.id}/load`), () => `Loaded “${d.name}” back onto the boards.`);
   };
   const deleteSet = (d) => {
-    if (!confirm(`Permanently delete “${d.name}”? This deletes its ${contents(d)}${d.files ? ` and ${plural(d.files, 'document')}` : ''}, plus their comments, tasks, activities, history and won contracts.\n\nThis can't be undone.`)) return;
+    if (!confirm(`Permanently delete “${d.name}”? This deletes its ${contents(d)}${d.files ? ` and ${plural(d.files, 'document')}` : ''}, plus their comments, tasks, activities, history and paid contracts.\n\nThis can't be undone.`)) return;
     run(() => api.del(`/archive/datasets/${d.id}`), () => `Deleted “${d.name}” for good.`);
   };
 

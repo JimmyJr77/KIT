@@ -13,7 +13,7 @@ const STATUS_CHIP = { open: 'bg-slate-100 text-slate-600', won: 'bg-emerald-100 
 const INVOLVEMENT = { sourced: ['At the beginning', 'bg-violet-100 text-violet-800'], supported: ['Later on', 'bg-sky-100 text-sky-800'] };
 
 /** Open, won and lost as "3 open · 1 won · 0 lost". */
-const outcomeText = (b) => (count(b) ? [`${b.open.count} open`, `${b.won.count} won`, `${b.lost.count} lost`].join(' · ') : 'None yet');
+const outcomeText = (b) => (count(b) ? [`${b.open.count} open`, `${b.won.count} paid`, `${b.lost.count} lost`].join(' · ') : 'None yet');
 
 /**
  * Marketing tracking: every marketing ask and what it's tied to, the dollars behind each, the opportunities those reach,
@@ -36,7 +36,7 @@ export default function MarketingImpact({ brief = false }) {
   const sourceRows = d.bySource.map((r) => ({ ...r, key: r.tag, openN: r.open.count, openV: r.open.value, wonN: r.won.count, wonV: r.won.value, lostN: r.lost.count, rate: winRate(r) }));
   const outcomeColumns = [
     { key: 'openN', label: 'Open', align: 'right' }, { key: 'openV', label: 'Open value', align: 'right', format: compact },
-    { key: 'wonN', label: 'Won', align: 'right' }, { key: 'wonV', label: 'Won value', align: 'right', format: compact },
+    { key: 'wonN', label: 'Paid', align: 'right' }, { key: 'wonV', label: 'Paid value', align: 'right', format: compact },
     { key: 'lostN', label: 'Lost', align: 'right' }, { key: 'rate', label: 'Win rate', align: 'right', format: pct },
   ];
 
@@ -48,7 +48,7 @@ export default function MarketingImpact({ brief = false }) {
         <StatTile label="Opportunities marketing is on" value={d.opportunities.length}
           sub={`${count(inf.sourced)} from the beginning · ${count(inf.supported)} later on`} />
         <StatTile label="Wins marketing was part of" value={`${touched.wonCount} of ${d.all.won.count}`}
-          sub={d.all.won.value ? `${compact(touched.won)} of ${compact(d.all.won.value)} won (${pct(touched.won / d.all.won.value)})` : 'No wins yet'} />
+          sub={d.all.won.value ? `${compact(touched.won)} of ${compact(d.all.won.value)} paid (${pct(touched.won / d.all.won.value)})` : 'No wins yet'} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -70,7 +70,7 @@ export default function MarketingImpact({ brief = false }) {
               { key: 'spend', label: 'Marketing $', align: 'right', format: fullMoney }, { key: 'requests', label: 'Asks', align: 'right' },
               { key: 'meetings', label: 'Meetings', align: 'right' }, { key: 'tickets', label: 'Opportunities', align: 'right' },
               { key: 'sourced', label: 'Came out of it', align: 'right' }, { key: 'openV', label: 'Open value', align: 'right', format: compact },
-              { key: 'wonN', label: 'Won', align: 'right' }, { key: 'wonV', label: 'Won value', align: 'right', format: compact }, { key: 'lostN', label: 'Lost', align: 'right' },
+              { key: 'wonN', label: 'Paid', align: 'right' }, { key: 'wonV', label: 'Paid value', align: 'right', format: compact }, { key: 'lostN', label: 'Lost', align: 'right' },
             ]} />
         ) : <p className="py-6 text-center text-sm text-slate-400">No event has marketing asks, dollars or opportunities tied to it yet.</p>}
       </ChartCard>
@@ -97,7 +97,7 @@ export default function MarketingImpact({ brief = false }) {
                         <td className="px-2 py-2"><RequestTies request={r} /></td>
                         <td className="max-w-xs px-2 py-2 text-xs text-slate-600"><p className="line-clamp-3">{r.justification || <span className="text-slate-300">—</span>}</p></td>
                         <td className="px-2 py-2 text-right font-medium text-slate-800 tabular-nums">{r.spent ? fullMoney(r.spent) : <span className="text-slate-300">—</span>}</td>
-                        <td className="px-2 py-2 text-xs whitespace-nowrap text-slate-600">{outcomeText(r.outcome)}{r.outcome.won.value > 0 && <div className="text-emerald-700">{compact(r.outcome.won.value)} won</div>}</td>
+                        <td className="px-2 py-2 text-xs whitespace-nowrap text-slate-600">{outcomeText(r.outcome)}{r.outcome.won.value > 0 && <div className="text-emerald-700">{compact(r.outcome.won.value)} paid</div>}</td>
                         <td className="px-2 py-2 text-xs whitespace-nowrap">
                           {r.status === 'accepted'
                             ? <Link to={`/tickets?open=${r.ticket_id}`} className="text-brand-700 hover:underline">Work ticket</Link>

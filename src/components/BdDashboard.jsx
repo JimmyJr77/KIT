@@ -90,7 +90,7 @@ function TodoHighlights({ todo, isTeam, self, who, teamLabel }) {
           sub={[todo.activities.overdue && `${todo.activities.overdue} overdue`, todo.activities.dueThisWeek && `${todo.activities.dueThisWeek} due this week`].filter(Boolean).join(' · ') || 'Activities assigned'} />
         <StatTile label="Pipeline tickets moved this week" value={todo.pipeline.moved}
           sub={[todo.pipeline.forward && `${todo.pipeline.forward} forward`, todo.pipeline.back && `${todo.pipeline.back} back`,
-            todo.pipeline.won && `${todo.pipeline.won} won`, todo.pipeline.lost && `${todo.pipeline.lost} lost`].filter(Boolean).join(' · ')
+            todo.pipeline.won && `${todo.pipeline.won} paid`, todo.pipeline.lost && `${todo.pipeline.lost} lost`].filter(Boolean).join(' · ')
             || `No stage changes since ${day(todo.pipeline.since)}`} />
         <StatTile label="Unread alerts" value={todo.alerts} sub={self ? <Link to="/alerts" className="text-brand-700 hover:underline">Open alerts</Link> : null} />
         <StatTile label="Upcoming trips" value={todo.trips.list.length} sub={todo.trips.list.length ? `${compact(todo.trips.cost)} estimated` : 'None planned'} />
@@ -351,7 +351,7 @@ function BdNumbers({ numbers: n, isTeam }) {
           timeline={<LineChart points={rv.map((x) => x.quarter)} labels={rv.map((x) => shortQuarter(x.quarter))} height={180}
             series={[{ key: 'rev', label: 'Revenue', values: rv.map((x) => x.value) }]} />} />
 
-        <ViewCard className="lg:col-span-2" title="Qualified+ pipeline" subtitle={`Open pipeline tickets from Qualified through Awarded, until they're marked won: ${compact(ql.stages.reduce((s, x) => s + x.value, 0))} in all`}
+        <ViewCard className="lg:col-span-2" title="Qualified+ pipeline" subtitle={`Open pipeline tickets from Qualified through Awarded, until they're marked paid: ${compact(ql.stages.reduce((s, x) => s + x.value, 0))} in all`}
           table={{ columns: [{ key: 'label', label: qualBy === 'stage' ? 'Stage' : qualBy === 'territory' ? 'Territory' : 'BD director' }, { key: 'count', label: 'PL tickets', align: 'right' },
             { key: 'value', label: 'Value', align: 'right', format: fullMoney }, { key: 'weighted', label: 'PWIN-adjusted', align: 'right', format: fullMoney }], rows: qualRows }}
           bar={(

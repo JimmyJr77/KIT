@@ -231,7 +231,7 @@ function RecentActions() {
       <p className="mb-2 text-xs text-slate-500">What you did on tickets in the last week. Only you see this. Undo puts it back in KIT, and in Pipedrive where it’s synced.</p>
       {actions && !actions.length && (
         <p className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-4 text-sm text-slate-400">
-          Nothing yet. When you add, edit, complete or reopen a task or subtask, move a ticket to another stage, rename a ticket, or mark a deal won or lost, it shows here with an Undo.
+          Nothing yet. When you add, edit, complete or reopen a task or subtask, move a ticket to another stage, rename a ticket, or mark a deal paid or lost, it shows here with an Undo.
         </p>
       )}
       <ul className={`divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white shadow-sm ${actions?.length ? '' : 'hidden'}`}>
