@@ -29,8 +29,8 @@ export function addTicketTags(ticketId, names) {
  * Google Solution is one fact kept in two places, always in step: the deal's Google Solution field (Pipedrive's "Google
  * Deal?") says Yes exactly when the ticket carries the GOOGLE DEAL tag. `lead` says which side was just changed and so
  * wins: 'field' (the field was saved: Yes puts the tag on, anything else takes it off), 'tag' (the tags were saved: the tag
- * sets the field to Yes, taking it off sets a Yes to No), or 'either' (a pull, or startup: a field that's filled in wins,
- * and a tag on a deal whose field is blank fills it in as Yes). With a ticket id that ticket is checked; without one,
+ * sets the field to Yes, taking it off sets a Yes to No), or 'either' (a pull, or startup, when nobody just changed
+ * either: a deal that has it on one side gets it on both, so a Yes puts the tag on and the tag sets the field to Yes, whatever it said). With a ticket id that ticket is checked; without one,
  * every pipeline ticket. Returns how many tickets were changed.
  */
 export function linkGoogleSolution(ticketId = null, lead = 'either') {
@@ -59,8 +59,10 @@ export function linkGoogleSolution(ticketId = null, lead = 'either') {
     const yes = value.split(',').some((v) => lower(v).trim() === 'yes');
     const tagged = hasTag(json.parse(t.labels, []), TAG);
     if (yes === tagged) continue;
-    const fieldLeads = lead === 'field' || (lead === 'either' && !!value);
-    if (fieldLeads) { if (yes) addTicketTags(t.id, [TAG]); else untag(t); } else setField(t, tagged ? YES : NO);
+    // Exactly one side says Google deal. With nobody having just changed either, that one is believed and the other follows.
+    if (lead === 'either') { if (yes) addTicketTags(t.id, [TAG]); else setField(t, YES); }
+    else if (lead === 'field') { if (yes) addTicketTags(t.id, [TAG]); else untag(t); }
+    else setField(t, tagged ? YES : NO);
     changed += 1;
   }
   return changed;

@@ -530,7 +530,7 @@ export async function pull(scope, phase) {
       if (projects) Object.assign(ctx.count, writeProjects(projects, { ...ctx, downloaded, removeFiles: true }));
       if (holdNow) ctx.count.filesHeld = holdFiles(holdNow);
       holdConflicts(); // fields an admin hasn't settled stay as they were found
-      linkGoogleSolution(); // the GOOGLE DEAL tag and the Google Solution field in step: a filled-in field wins, a tag fills in a blank one
+      linkGoogleSolution(); // the GOOGLE DEAL tag and the Google Solution field in step: a deal with either gets both
       return { ...ctx.count, accountsMatched: ctx.matched, accountsCreated: ctx.created };
     })();
     storedGone.forEach((f) => { if (f.stored_name && !f.url) fs.rmSync(path.join(uploadDir, f.stored_name), { force: true }); });
