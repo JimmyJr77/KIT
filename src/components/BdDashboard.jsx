@@ -226,7 +226,7 @@ function TopMetrics({ top, people, territory }) {
           </div>
         </StatTile>
         <TravelVariance months={top.travelVariance} />
-        {top.googleWon && [['deals', 'Google deals won', 'Pipeline tickets tagged Google Solution'], ['leads', 'Google leads won', 'Pipeline tickets whose lead came from Google']].map(([k, label, what]) => (
+        {top.googleWon && [['deals', 'Wins with Google solutions', 'Pipeline tickets tagged Google Solution'], ['leads', 'Google leads won', 'Pipeline tickets whose lead came from Google']].map(([k, label, what]) => (
           <PairTile key={k} label={label} note={`${what}, marked paid in the last finished quarter and the last four`}
             q={{ label: top.googleWon.quarter.label, value: top.googleWon.quarter[k].value, sub: `${top.googleWon.quarter[k].count} won` }}
             y={{ label: top.googleWon.year.label, value: top.googleWon.year[k].value, sub: `${top.googleWon.year[k].count} won` }} />
