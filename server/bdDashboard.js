@@ -3,15 +3,17 @@
 //   To-do highlights: this week's priorities, open activities, pipeline tickets moved this week, unread alerts, upcoming
 //     trips and their estimated cost, open account objectives, and upcoming events (who from the scope is going, and the events nobody is going to).
 //   Top-level metrics: Qualified+ pipeline, booked and revenue this quarter and year, PWIN-adjusted expected bookings,
-//     and expenses (actual travel and marketing) against revenue.
+//     expenses (actual travel and marketing) against revenue, and the open pipeline stage by stage: the Google Solution
+//     tickets, the value each lead source (Google, BD, Marketing) has sitting in each stage, and Prospecting's value month over month.
 //   BD numbers: bookings, revenue and expected bookings over time, the Qualified+ pipeline, and book-to-bill three ways.
 //   (The BD report card is its own endpoint: /financials/report-card.)
 // Bookings are contracts won, on their award date; revenue is what's billed on them; both follow the pipeline ticket's BD director.
-import { db, json } from './db.js';
+import { db, json, LEAD_TAGS, googleDealTag } from './db.js';
+import { hasTag } from './leads.js';
 import { weekStartFor } from './routes/priorities.js';
 import {
   bids, contracts, expected, byStage, qualifiedBy, bookingsByQuarter, backlog, bookToBill, bookToBillSeries, fundedTtm, pipelineByPerson,
-  targets, qualifiedTargets, quartersTarget, trailingQuarters, trends, quarters, quarterRange, localToday, QUALIFIED_STAGES, isOpen,
+  targets, qualifiedTargets, quartersTarget, trailingQuarters, trends, quarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES, isOpen, isWon,
 } from './financials.js';
 import { spendEntries, spendFor } from './marketingSpend.js';
 import { mondayOf, moveCounts } from './tacticalReport.js';
@@ -252,6 +254,10 @@ export function bdDashboard(s, basis = 'calendar') {
       },
       expenses: { quarter: { label: thisQ, ...expenses(s, entries, deals, qr.start, qr.end) }, year: { label: yr.label, ...expenses(s, entries, deals, yr.start, t4q ? yr.end : yearEnd) } },
       spendWatch: spendWatch(s, entries, deals, today),
+      tagged: taggedByStage(list.filter(isOpen)),
+      googleWon: googleWon(list),
+      // Top of the funnel: the open value sitting in Prospecting at the end of each of the last 12 months, and today.
+      prospecting: { points: tr.points, values: tr.series.find((x) => x.key === 'Prospecting')?.values || tr.points.map(() => 0) },
       travelVariance: travelVariance(s, today),
     },
     basis: t4q ? 't4q' : 'calendar',
@@ -280,6 +286,50 @@ export function bdDashboard(s, basis = 'calendar') {
         backlog: backlog(deals),
       },
     },
+  };
+}
+
+/** Every pipeline ticket's tags, by ticket id. */
+const ticketTags = () => new Map(db.prepare("SELECT id, labels FROM tickets WHERE ticket_type = 'bid'").all().map((r) => [r.id, json.parse(r.labels, [])]));
+
+/**
+ * Pipeline tickets won (marked paid) in the last finished quarter and in the last four finished quarters, on the day
+ * they were won: the Google deals (tagged Google Solution) and the Google leads (lead source Google). A ticket that is
+ * both counts under both.
+ */
+function googleWon(list) {
+  const labels = ticketTags();
+  const t4q = trailingQuarters();
+  const won = list.filter((t) => isWon(t) && t.won_at);
+  const over = (label, start, end) => {
+    const xs = won.filter((t) => t.won_at.slice(0, 10) >= start && t.won_at.slice(0, 10) <= end);
+    const figures = (tag) => { const ys = xs.filter((t) => hasTag(labels.get(t.id), tag)); return { count: ys.length, value: sum(ys, (t) => t.value) }; };
+    return { label, deals: figures(googleDealTag()), leads: figures(LEAD_TAGS.google) };
+  };
+  const lastQ = t4q.quarters[3];
+  return { quarter: over(lastQ, quarterRange(lastQ).start, quarterRange(lastQ).end), year: over(t4q.label, t4q.start, t4q.end) };
+}
+
+/**
+ * The open pipeline stage by stage, for the tickets carrying each of four tags: Google Solution (the tag, in
+ * step with the deal's Google Solution field) and the Google, BD and Marketing lead sources. Each stage gives every
+ * group's count, value and PWIN-adjusted value, beside the stage's whole. A ticket with two lead sources counts under both.
+ */
+function taggedByStage(open) {
+  const labels = ticketTags();
+  const groups = [
+    { key: 'googleSolution', label: 'Google Solution', tag: googleDealTag() },
+    { key: 'google', label: LEAD_TAGS.google, tag: LEAD_TAGS.google },
+    { key: 'bd', label: LEAD_TAGS.bd, tag: LEAD_TAGS.bd },
+    { key: 'marketing', label: LEAD_TAGS.marketing, tag: LEAD_TAGS.marketing },
+  ];
+  const figures = (xs) => ({ count: xs.length, value: sum(xs, (t) => t.value), weighted: sum(xs, weighted) });
+  const split = (xs) => ({ all: figures(xs), ...Object.fromEntries(groups.map((g) => [g.key, figures(xs.filter((t) => hasTag(labels.get(t.id), g.tag)))])) });
+  const staged = open.filter((t) => !t.pipeline_status || OPEN_STAGES.includes(t.pipeline_status));
+  return {
+    groups: groups.map(({ key, label, tag }) => ({ key, label, tag })),
+    stages: byStage(staged, OPEN_STAGES).map((x) => ({ stage: x.stage, ...split(staged.filter((t) => (t.pipeline_status || 'No stage') === x.stage)) })),
+    total: split(staged),
   };
 }
 

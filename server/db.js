@@ -1917,6 +1917,20 @@ CREATE TABLE IF NOT EXISTS main.label_deletes (
     setSetting('google_solution_tag_removed', '1');
   }
   keep({ name: GOOGLE_DEAL_TAG, color: 'yellow', kind: 'solution' });
+  // The tag reads Google Solution, like the deal field it's in step with; GOOGLE DEAL stays only as its fixed key. Done
+  // once, the way an admin's rename is: tickets carrying it follow, and Pipedrive's label is renamed with the next send.
+  if (!getSetting('google_deal_tag_renamed')) {
+    const tag = db.prepare('SELECT * FROM main.labels WHERE key = ?').get(GOOGLE_DEAL_TAG);
+    const to = 'Google Solution';
+    if (tag && tag.name === GOOGLE_DEAL_TAG && !db.prepare('SELECT 1 FROM main.labels WHERE name = ? COLLATE NOCASE AND id != ?').get(to, tag.id)) {
+      db.transaction(() => {
+        db.prepare('UPDATE main.labels SET name = ? WHERE id = ?').run(to, tag.id);
+        db.prepare(`UPDATE main.tickets SET labels = (SELECT json_group_array(CASE WHEN j.value = ? COLLATE NOCASE THEN ? ELSE j.value END) FROM json_each(tickets.labels) j)
+          WHERE json_valid(labels) AND EXISTS (SELECT 1 FROM json_each(tickets.labels) j WHERE j.value = ? COLLATE NOCASE)`).run(tag.name, to, tag.name);
+      })();
+    }
+    setSetting('google_deal_tag_renamed', '1');
+  }
   // Teaming, in pink: an ordinary tag (it can be renamed, recolored or deleted), added once. One already there is left as it is.
   if (!getSetting('teaming_tag_added')) {
     db.prepare(`INSERT OR IGNORE INTO main.labels (name, color, position) VALUES ('Teaming', 'pink', (SELECT COALESCE(MAX(position) + 1, 0) FROM main.labels))`).run();

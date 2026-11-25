@@ -179,6 +179,7 @@ function PairTile({ label, q, y, note }) {
           <div key={x.label} className="min-w-0">
             <div className="text-xl font-bold text-slate-900 tabular-nums">{compact(x.value)}</div>
             <div className="text-[11px] text-slate-500">{x.label}</div>
+            {x.sub && <div className="text-[11px] text-slate-500">{x.sub}</div>}
             {x.target !== undefined && <Meter value={x.value} target={x.target} />}
           </div>
         ))}
@@ -225,7 +226,15 @@ function TopMetrics({ top, people, territory }) {
           </div>
         </StatTile>
         <TravelVariance months={top.travelVariance} />
+        {top.googleWon && [['deals', 'Google deals won', 'Pipeline tickets tagged Google Solution'], ['leads', 'Google leads won', 'Pipeline tickets whose lead came from Google']].map(([k, label, what]) => (
+          <PairTile key={k} label={label} note={`${what}, marked paid in the last finished quarter and the last four`}
+            q={{ label: top.googleWon.quarter.label, value: top.googleWon.quarter[k].value, sub: `${top.googleWon.quarter[k].count} won` }}
+            y={{ label: top.googleWon.year.label, value: top.googleWon.year[k].value, sub: `${top.googleWon.year[k].count} won` }} />
+        ))}
       </div>
+
+      <TaggedByStage tagged={top.tagged} />
+      <ProspectingByMonth trend={top.prospecting} />
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <ViewCard title="Expenses against revenue" subtitle="Actual travel spend plus marketing spend, against revenue billed. Estimated trip cost is shown for comparison."
@@ -257,6 +266,64 @@ function TopMetrics({ top, people, territory }) {
       </div>
       <SpendWatch watch={top.spendWatch} />
     </section>
+  );
+}
+
+/**
+ * The open pipeline stage by stage, two ways: the Google Solution tickets in each stage, and the value each lead source
+ * (Google, BD, Marketing) has sitting in each stage.
+ */
+function TaggedByStage({ tagged }) {
+  if (!tagged) return null;
+  const { stages, total } = tagged;
+  const [gs, ...sources] = tagged.groups;
+  const flat = (x, label) => ({ stage: label, ...Object.fromEntries(Object.entries(x).filter(([, v]) => v && typeof v === 'object').flatMap(([k, v]) => [[`${k}Count`, v.count], [`${k}Value`, v.value], [`${k}Weighted`, v.weighted]])) });
+  const rows = stages.map((x) => flat(x, x.stage));
+  const foot = flat(total, 'All stages');
+  const share = total.all.value ? ` · ${pct(total[gs.key].value / total.all.value)} of the open pipeline's value` : '';
+  return (
+    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <ViewCard title="Google Solution pipeline by stage" initial="table"
+        subtitle={`Open pipeline tickets marked Google Solution, in the stage each sits in: ${compact(total[gs.key].value)} across ${plural(total[gs.key].count, 'PL ticket')}${share}`}
+        table={{ columns: [{ key: 'stage', label: 'Stage' }, { key: `${gs.key}Count`, label: 'PL tickets', align: 'right' }, { key: `${gs.key}Value`, label: 'Value', align: 'right', format: fullMoney },
+          { key: `${gs.key}Weighted`, label: 'PWIN-adjusted', align: 'right', format: fullMoney }, { key: 'allCount', label: 'All in stage', align: 'right' }], rows, foot }}
+        bar={<BarList rows={stages.map((x) => ({ key: x.stage, label: x.stage, value: x[gs.key].value, sub: `${x[gs.key].count}` }))} empty="No Google Solution pipeline tickets." />} />
+      <ViewCard title="Pipeline value by lead source" initial="table"
+        subtitle="The value of the open pipeline tickets sitting in each stage, by where the lead came from. A ticket with two sources counts under both."
+        table={{ columns: [{ key: 'stage', label: 'Stage' },
+          ...sources.map((g) => ({ key: `${g.key}Value`, label: g.label, align: 'right', format: (v, r) => <>{fullMoney(v)}<span className="ml-1 font-normal text-slate-400">{r[`${g.key}Count`]}</span></> })),
+          { key: 'allValue', label: 'All in stage', align: 'right', format: fullMoney }], rows, foot }}
+        bar={<StackedColumns categories={stages.map((x) => x.stage)} height={150}
+          series={sources.map((g, i) => ({ key: g.key, label: g.label, color: SERIES[i], values: stages.map((x) => x[g.key].value) }))} />}
+        footer={<p className="mt-2 text-[11px] text-slate-400">The small number beside each value is how many pipeline tickets it covers.</p>} />
+    </div>
+  );
+}
+
+/**
+ * Top of the funnel: the value of the open pipeline tickets in Prospecting at the end of each month (the last point is
+ * today), as a table with the change on the month before, a bar chart or a line.
+ */
+function ProspectingByMonth({ trend }) {
+  if (!trend?.points.length) return null;
+  const { points, values } = trend;
+  const today = todayIso();
+  const month = (d) => shortDate(d, { month: 'short', year: '2-digit' });
+  const labels = points.map((d, i) => (i === points.length - 1 && d === today ? 'Now' : month(d)));
+  const rows = points.map((d, i) => {
+    const before = i ? values[i - 1] : null;
+    return { month: i === points.length - 1 && d === today ? `${month(d)} (so far)` : month(d), value: values[i], change: before == null ? null : values[i] - before,
+      rate: before ? (values[i] - before) / before : null };
+  });
+  const last = rows[rows.length - 1];
+  return (
+    <ViewCard className="mt-4" title="Prospecting value, month over month" initial="timeline"
+      subtitle={`Top of the funnel: the total value of open pipeline tickets in Prospecting at each month's end. ${compact(last.value)} today${last.change == null ? '' : `, ${signed(last.change)} on last month`}.`}
+      table={{ columns: [{ key: 'month', label: 'Month' }, { key: 'value', label: 'Prospecting value', align: 'right', format: fullMoney },
+        { key: 'change', label: 'Change', align: 'right', format: (v) => (v == null ? '—' : <span className={v < -0.5 ? 'text-red-700' : v > 0.5 ? 'text-emerald-700' : ''}>{signed(v)}</span>) },
+        { key: 'rate', label: '% change', align: 'right', format: (v) => (v == null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v * 100).toFixed(1)}%`) }], rows }}
+      bar={<StackedColumns categories={labels} height={150} series={[{ key: 'p', label: 'Prospecting', color: SERIES[0], values }]} />}
+      timeline={<LineChart points={points} labels={labels} height={180} series={[{ key: 'p', label: 'Prospecting', values }]} />} />
   );
 }
 
