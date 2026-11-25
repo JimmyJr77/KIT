@@ -24,7 +24,7 @@ export function formatPhone(s) {
 
 export function publicUser(u) {
   if (!u) return null;
-  const { password_hash, phone_digits, ...rest } = u;
+  const { password_hash, phone_digits, chat_space, ...rest } = u;
   return rest;
 }
 

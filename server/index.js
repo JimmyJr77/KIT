@@ -36,6 +36,8 @@ import supportRoutes from './routes/support.js';
 import ticketRoutes from './routes/tickets.js';
 import dashboardRoutes from './routes/dashboard.js';
 import alertRoutes from './routes/alerts.js';
+import { scheduleAlertDelivery } from './services/alertDelivery.js';
+import { handleChatEvent } from './services/googleChat.js';
 import eventRoutes from './routes/events.js';
 import eventScoutRoutes from './routes/eventScout.js';
 import contactRoutes from './routes/contacts.js';
@@ -96,6 +98,8 @@ app.use('/api/pipedrive', requireAuth, pipedriveRoutes);
 app.use('/api/labels', requireAuth, labelRoutes);
 app.use('/api/dashboard', requireAuth, dashboardRoutes);
 app.use('/api/alerts', requireAuth, alertRoutes);
+// Google Chat calls this when someone opens the KIT app there; each call is signed by Google (see googleChat.js), not a KIT session.
+app.post('/api/google-chat/events', handleChatEvent);
 app.use('/api/event-scout', requireAuth, eventScoutRoutes);
 app.use('/api/events', requireAuth, eventRoutes);
 app.use('/api/contacts', requireAuth, contactRoutes);
@@ -143,6 +147,7 @@ scheduleProjectRefresh();
 scheduleAutoSend();
 scheduleLive();
 scheduleRollover();
+scheduleAlertDelivery();
 // Conflicts on which both sides hold the same value have nothing to settle (a send once recorded them when a field had no baseline yet).
 try { const n = dropAgreed(); if (n) console.log(`Pipedrive: dropped ${n} conflicts on which KIT and Pipedrive agree`); } catch (e) { console.error('Pipedrive conflicts:', e.message); }
 

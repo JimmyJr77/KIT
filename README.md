@@ -77,6 +77,20 @@ RENDER_API_URL=https://your-kit-service.onrender.com npm run build:vercel
 
 This validates the URL and builds the static app plus API proxy rules; it does not deploy or contact that example backend. Local `npm run dev` and the single-server `npm run build && npm start` workflow still work.
 
+### Alerts by email and Google Chat
+
+Every alert on the Alerts page can also reach its person outside KIT: by email to the address on their KIT account (their Google account's Gmail), and as a direct message from a KIT app in Google Chat. Each person switches either off under Settings › Alert delivery, where **Send a test** shows that it arrives. Alerts go out within a minute; ones made together come as one message, and an alert already read in KIT isn't sent. Only the production server sends (a development server passes alerts over; `ALERT_DELIVERY_DEV=1` makes one send, for trying it out), and switching a channel on never sends older alerts.
+
+**Email.** Pick the Google account the alerts come from (a shared one such as `kit-alerts@yourcompany.com` reads best), turn on 2-Step Verification for it and create an app password (Google Account → Security → App passwords). In Render add `SMTP_USER` (that address) and `SMTP_PASS` (the app password), and `APP_URL` with the address people open KIT at, so the messages can link back. `ALERT_EMAIL_FROM` sends from another address the account owns; `SMTP_HOST` and `SMTP_PORT` point at a different mail server (they default to `smtp.gmail.com` and `587`).
+
+**Google Chat.** A Chat app can't look a person up by email, so each person connects once from Chat's side, and KIT matches their Google account's email to their KIT account.
+
+1. In a Google Cloud project owned by the company's Workspace, enable the **Google Chat API** and open its **Configuration** tab. Name the app `KIT`, turn on interactive features, set the connection to **HTTP endpoint URL** with `https://<the Render address>/api/google-chat/events`, set **Authentication audience** to **Project number**, and make the app visible to the company's domain.
+2. In the same project create a service account and a JSON key for it. In Render add `GOOGLE_CHAT_CREDENTIALS` (the whole key file, on one line) and `GOOGLE_CHAT_PROJECT_NUMBER` (the project's number, from the Cloud console's welcome page). Redeploy.
+3. Each person opens Google Chat, starts a chat with the **KIT** app and says hello. The app answers that they're connected, and Settings › Alert delivery shows it. Removing the app from Chat disconnects them.
+
+KIT only accepts calls on that address that Google Chat signed for this project, so nobody else can tie a chat to someone's account.
+
 ## Access model
 
 - Only **approved** emails can sign in. Admins approve emails under **Profile → Admin · Access & team directory**.

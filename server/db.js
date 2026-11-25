@@ -999,6 +999,17 @@ addColumn('users', 'pipedrive_id', 'INTEGER');
 addColumn('users', 'hidden_nav', "TEXT NOT NULL DEFAULT '[]'");
 // Focus (Settings): while on, the main pages show this person only what they're tied to or mentioned in (see server/focus.js).
 addColumn('users', 'focus', 'INTEGER NOT NULL DEFAULT 0');
+// Alerts also go out by email and as a Google Chat direct message (see services/alertDelivery.js). Each person can
+// switch either off in Settings. chat_space is their direct message with the KIT Chat app, learned when they open the
+// app in Google Chat (see services/googleChat.js); without one there's nowhere to send a chat message.
+addColumn('users', 'alert_email', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('users', 'alert_chat', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('users', 'chat_space', 'TEXT');
+// When each channel was done with an alert: sent, or passed over (already read, switched off, too old). Alerts from
+// before delivery existed are marked done, so turning it on never sends old ones.
+if (!db.prepare('PRAGMA table_info(alerts)').all().some((c) => c.name === 'emailed_at')) {
+  db.exec("ALTER TABLE alerts ADD COLUMN emailed_at TEXT; ALTER TABLE alerts ADD COLUMN chatted_at TEXT; UPDATE alerts SET emailed_at = datetime('now'), chatted_at = datetime('now')");
+}
 // KIT → Pipedrive goes only when an admin sends it. pipedrive_pending marks a KIT edit (or pin) to a Pipedrive note that
 // hasn't been sent yet; pipedrive_note_id is the Pipedrive note a linked (not uploaded) document went to.
 addColumn('ticket_comments', 'pipedrive_pending', 'INTEGER NOT NULL DEFAULT 0');

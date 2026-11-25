@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Check, X, Crosshair, Settings as SettingsIcon, ShieldCheck, Target, Code2 } from 'lucide-react';
+import { Check, X, Crosshair, BellRing, Mail, MessageSquare, Settings as SettingsIcon, ShieldCheck, Target, Code2 } from 'lucide-react';
 import { useApi } from '../lib/data.js';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -82,6 +82,7 @@ function GeneralView() {
   return (
     <>
       <FocusPanel />
+      <AlertDeliveryPanel />
       <SidebarPanel />
       {!isAdmin(user) && !ledTeams(user).length && <PipedrivePullPanel scope="mine" />}
       <IntegrationsPanel />
@@ -127,6 +128,91 @@ function FocusPanel() {
         </button>
       </div>
       {msg && <p className="mt-2 text-sm text-red-600">{msg}</p>}
+    </div>
+  );
+}
+
+/**
+ * Where your alerts go besides the Alerts page: your email, and a direct message from the KIT app in Google Chat. Each is
+ * your own switch, saved as soon as it's flipped. Chat needs you to open the KIT app there once, which ties your Google
+ * account to your KIT account by its email (see server/services/googleChat.js).
+ */
+function AlertDeliveryPanel() {
+  const { user } = useAuth();
+  const { data, reload } = useApi('/alerts/delivery');
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [msg, setMsg] = useState(null); // { ok, text }
+  useEffect(() => { if (data) setD(data); }, [data]);
+  if (!d) return null;
+  const { server } = d;
+
+  const flip = async (key) => {
+    setBusy(key);
+    try {
+      setD(await api.put('/alerts/delivery', { [key]: !d[key] }));
+      setMsg(null);
+    } catch (err) {
+      setMsg({ text: err.message });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const test = async (channel) => {
+    setBusy(`test-${channel}`);
+    try {
+      await api.post('/alerts/delivery/test', { channel });
+      setMsg({ ok: true, text: channel === 'chat' ? 'Sent. Look for it in Google Chat.' : `Sent to ${d.address}.` });
+    } catch (err) {
+      setMsg({ text: err.message });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const off = !server.sending ? 'This is a development server, so it doesn’t send alerts out.' : null;
+  const rows = [
+    {
+      key: 'email', icon: Mail, label: 'Email', ready: server.email.configured,
+      note: !server.email.configured ? 'Email isn’t set up on this server yet.'
+        : off || server.email.error && isAdmin(user) && `Last send failed: ${server.email.error}`
+        || <>New alerts are emailed to <span className="font-medium text-slate-700">{d.address}</span>.</>,
+      canTest: server.email.configured,
+    },
+    {
+      key: 'chat', icon: MessageSquare, label: 'Google Chat', ready: server.chat.configured,
+      note: !server.chat.configured ? (isAdmin(user) && server.chat.problem ? `Google Chat isn’t set up on this server yet: ${server.chat.problem}.` : 'Google Chat isn’t set up on this server yet.')
+        : !d.chat_connected ? <>Not connected yet. In Google Chat, start a chat with the <span className="font-medium text-slate-700">KIT</span> app and say hello, signed in as <span className="font-medium text-slate-700">{d.address}</span>. <button type="button" className="text-brand-600 hover:underline" onClick={() => reload({ quiet: true })}>Check again</button></>
+        : off || server.chat.error && isAdmin(user) && `Last send failed: ${server.chat.error}`
+        || 'Connected. New alerts arrive as a direct message from the KIT app.',
+      canTest: server.chat.configured && d.chat_connected,
+    },
+  ].filter((row) => row.key !== 'chat' || server.chat.configured || (isAdmin(user) && server.chat.problem)); // Chat shows only once the server has it (or is half set up, to an admin)
+
+  return (
+    <div className="panel">
+      <h2 className="section-title flex items-center gap-2"><BellRing size={16} className="text-slate-400" /> Alert delivery</h2>
+      <p className="mt-1 max-w-2xl text-xs text-slate-500">
+        Get your alerts outside KIT as they happen. Ones that arrive together come as one message, and an alert you’ve already
+        read in KIT isn’t sent. Only you see this.
+      </p>
+      <ul className="mt-3 divide-y divide-slate-100">
+        {rows.map(({ key, icon: Icon, label, ready, note, canTest }) => (
+          <li key={key} className="flex items-start gap-3 py-3">
+            <Icon size={18} className={`mt-0.5 shrink-0 ${ready && d[key] ? 'text-brand-600' : 'text-slate-300'}`} />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-slate-800">{label}</div>
+              <p className="text-xs text-slate-500">{note}</p>
+            </div>
+            {canTest && <button type="button" className="btn-ghost shrink-0 text-xs" disabled={!!busy} onClick={() => test(key)}>{busy === `test-${key}` ? 'Sending…' : 'Send a test'}</button>}
+            <button type="button" role="switch" aria-checked={d[key]} aria-label={`${label} alerts`} onClick={() => flip(key)} disabled={!!busy}
+              className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${d[key] ? 'bg-brand-600' : 'bg-slate-300'} ${busy === key ? 'opacity-60' : ''}`}>
+              <span className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${d[key] ? 'translate-x-5' : ''}`} />
+            </button>
+          </li>
+        ))}
+      </ul>
+      {msg && <p className={`mt-1 text-sm ${msg.ok ? 'text-emerald-700' : 'text-red-600'}`}>{msg.text}</p>}
     </div>
   );
 }

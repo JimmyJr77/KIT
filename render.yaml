@@ -53,3 +53,14 @@ services:
       # GSA Per Diem API (free key from https://api.data.gov/signup). Secret: set it in Render's dashboard.
       - key: GSA_API_KEY
         sync: false
+      # Alerts by email and Google Chat (see README). Secrets: set the values in Render's dashboard.
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: GOOGLE_CHAT_CREDENTIALS
+        sync: false
+      - key: GOOGLE_CHAT_PROJECT_NUMBER
+        sync: false
