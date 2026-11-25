@@ -1,4 +1,4 @@
-import { Play, Hourglass } from 'lucide-react';
+import { Play, Hourglass, MoreHorizontal } from 'lucide-react';
 import { nextStepState } from '../lib/nextStep.js';
 
 const TONES = {
@@ -12,6 +12,7 @@ const ROTATE = { right: '', left: 'rotate-180', down: 'rotate-90' };
 /**
  * The ticket's next step as a circle: its color and arrow say how soon it's due (see lib/nextStep.js). Selecting it
  * opens the activity; with no next step it's a yellow yield-style caution sign that opens the Activity pane to add one.
+ * A greenfield step (ongoing, no due date on purpose) is a green rounded square with three dots.
  * `small` draws it a size down, as pipeline tickets do.
  */
 export default function NextStepBadge({ step, onOpen, className = '', small = false }) {
@@ -42,8 +43,9 @@ export default function NextStepBadge({ step, onOpen, className = '', small = fa
     <button type="button" title={title} aria-label={title}
       onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
       onClick={(e) => { e.stopPropagation(); onOpen?.(step); }}
-      className={`grid ${box} shrink-0 place-items-center rounded-full shadow-sm ${small ? 'ring-1' : 'ring-2'} transition hover:scale-110 ${TONES[s.tone]} ${s.flash ? 'animate-blink' : ''} ${className}`}>
-      <Play size={small ? 8 : 11} className={`fill-current ${s.arrow === 'right' ? 'translate-x-px' : ''} ${ROTATE[s.arrow]}`} strokeWidth={0} />
+      className={`grid ${box} shrink-0 place-items-center ${s.arrow === 'dots' ? (small ? 'rounded' : 'rounded-md') : 'rounded-full'} shadow-sm ${small ? 'ring-1' : 'ring-2'} transition hover:scale-110 ${TONES[s.tone]} ${s.flash ? 'animate-blink' : ''} ${className}`}>
+      {s.arrow === 'dots' ? <MoreHorizontal size={small ? 12 : 16} strokeWidth={3} />
+        : <Play size={small ? 8 : 11} className={`fill-current ${s.arrow === 'right' ? 'translate-x-px' : ''} ${ROTATE[s.arrow]}`} strokeWidth={0} />}
       {waiting}
     </button>
   );

@@ -9,12 +9,13 @@ import { useAuth } from '../lib/auth.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { fullName, stamp } from '../lib/format.js';
 import { LabelList, byTags, tagName, useTagName } from '../components/Labels.jsx';
-import { PROCESS_TYPES, CRITICALITY, SA_FIELD, REQUEST_FIELD, milestoneOf } from '../lib/process.js';
+import { PROCESS_TYPES, CRITICALITY, SA_FIELD, REQUEST_FIELD, milestoneOf, needsApproval } from '../lib/process.js';
 import { DueDate, CriticalityPill, GateTag } from './TicketPlanning.jsx';
 import TicketTimeline from './TicketTimeline.jsx';
 import { SaChecks, SaFiles, SaAttach, SaApprovedNote, NEEDS_ARCHITECT } from '../components/SaResponse.jsx';
 import PipelineHeader, { AddExistingButton, useOwnerTerritoryFilter, useStoredTags, useStoredScope } from '../components/PipelineHeader.jsx';
 import { useStored } from '../lib/stored.js';
+import LinkText from '../components/LinkText.jsx';
 
 const CRIT_RANK = Object.fromEntries(CRITICALITY.map((c, i) => [c.key, i]));
 const today = () => new Date().toLocaleDateString('en-CA');
@@ -228,18 +229,19 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
       <td className="px-3 py-3" onClick={r.completed_at ? undefined : stop}>
         <div className="space-y-1.5">
           {r.completed_at
-            ? (r.request ? <p className="line-clamp-3 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.request}>{r.request}</p> : !requestFiles.length && <span className="text-xs text-slate-400">No request written</span>)
+            ? (r.request ? <p className="line-clamp-3 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.request}><LinkText text={r.request} /></p> : !requestFiles.length && <span className="text-xs text-slate-400">No request written</span>)
             : <TextCell value={r.request} what="request" label={`${def.requestLabel || 'Request'} for ${r.step_type} on ${r.title}`}
                 placeholder="What's needed from the solution architect: the ask, the customer's deadline, open questions…" onSave={(text) => saved(api.put(`/tickets/process/${r.id}`, { notes: text }))} />}
           <SaFiles files={requestFiles} {...removable} />
           {!r.completed_at && <SaAttach {...attach(REQUEST_FIELD)} />}
         </div>
       </td>
-      {/* The Solution Architect Response, as in the event's form: notes, links and documents, then approve / deny / need more info. */}
+      {/* The Solution Architect Response, as in the event's form: notes, links and documents, then (on a review that needs
+          approval) approve / deny / need more info. */}
       <td className="px-3 py-3" onClick={stop}>
         <div className="space-y-1.5">
           {r.completed_at
-            ? (r.sa_notes ? <p className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.sa_notes}>{r.sa_notes}</p> : !saFiles.length && <span className="text-xs text-slate-400">No SA notes</span>)
+            ? (r.sa_notes ? <p className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-slate-700" title={r.sa_notes}><LinkText text={r.sa_notes} /></p> : !saFiles.length && <span className="text-xs text-slate-400">No SA notes</span>)
             : <TextCell value={r.sa_notes} what="SA note" addLabel="Add SA notes" label={`SA notes on ${r.step_type} for ${r.title}`} lines={4}
                 placeholder="The solution architect's thoughts on the request…" onSave={(text) => saved(api.put(`/tickets/process/${r.id}`, { sa_notes: text }))} />}
           <SaFiles files={saFiles} {...removable} />
@@ -247,9 +249,11 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
         </div>
       </td>
       <td className="px-3 py-3" onClick={stop}>
-        <SaChecks className="space-y-1" value={r.sa_response} disabled={!!r.completed_at} about={`${r.step_type} for ${r.title}`}
-          blocked={def.qualifies && !r.architects.length ? { approve: NEEDS_ARCHITECT } : {}}
-          onChange={(v) => saved(api.put(`/tickets/process/${r.id}`, { sa_response: v })).catch((e) => alert(e.message))} />
+        {needsApproval(r.step_type) ? (
+          <SaChecks className="space-y-1" value={r.sa_response} disabled={!!r.completed_at} about={`${r.step_type} for ${r.title}`}
+            blocked={def.qualifies && !r.architects.length ? { approve: NEEDS_ARCHITECT } : {}}
+            onChange={(v) => saved(api.put(`/tickets/process/${r.id}`, { sa_response: v })).catch((e) => alert(e.message))} />
+        ) : <span className="text-xs text-slate-400" title="Only gate reviews and estimates are approved or denied">No approval needed</span>}
         {def.qualifies && r.sa_response === 'approve' && <SaApprovedNote className="mt-1 whitespace-normal" by={r.sa_response_by} architects={r.architects} />}
       </td>
       <td className="px-3 py-3 text-right" onClick={stop}>
@@ -290,10 +294,11 @@ function TextCell({ value, what, addLabel = `Add a ${what}`, label, placeholder,
   useEffect(() => { if (text !== null && document.activeElement !== ref.current) { const el = ref.current; el?.focus(); el?.setSelectionRange(el.value.length, el.value.length); } }, [text === null]); // eslint-disable-line react-hooks/exhaustive-deps
   if (text === null) {
     return value
-      ? <button type="button" onClick={() => setText(value)} title={`Click to edit the ${what}`}
-          className="-mx-1.5 block w-[calc(100%+0.75rem)] rounded px-1.5 py-0.5 text-left text-sm break-words whitespace-pre-wrap text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-300">
-          <span className={lines === 4 ? 'line-clamp-4' : 'line-clamp-3'}>{value}</span>
-        </button>
+      ? <div role="button" tabIndex={0} onClick={() => setText(value)} title={`Click to edit the ${what}`}
+          onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setText(value); } }}
+          className="-mx-1.5 block cursor-pointer w-[calc(100%+0.75rem)] rounded px-1.5 py-0.5 text-left text-sm break-words whitespace-pre-wrap text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-300">
+          <span className={lines === 4 ? 'line-clamp-4' : 'line-clamp-3'}><LinkText text={value} /></span>
+        </div>
       : <button type="button" onClick={() => setText('')} className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline"><Plus size={12} /> {addLabel}</button>;
   }
   const changed = text.trim() !== value.trim();
@@ -391,12 +396,12 @@ function ArchitectCell({ row: r, options, onSave }) {
 /** The due date. The ticket's owner (or an admin) clicks it, or "No due date", to set it. */
 function DueCell({ row: r, onSave }) {
   const [value, setValue] = useState(null); // null: not editing
-  if (!r.can_edit) return <DueDate date={r.due_date} done={false} className="text-sm" />;
+  if (!r.can_edit) return <DueDate date={r.due_date} done={false} year className="text-sm" />;
   if (value === null) {
     return (
       <button type="button" onClick={() => setValue(r.due_date || '')} title="Click to set the due date"
         className="-mx-1.5 rounded px-1.5 py-0.5 text-left text-sm hover:bg-white hover:ring-1 hover:ring-slate-300">
-        <DueDate date={r.due_date} done={false} />
+        <DueDate date={r.due_date} done={false} year />
       </button>
     );
   }

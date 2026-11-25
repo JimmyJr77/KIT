@@ -13,6 +13,7 @@ import MarketingLeads from '../components/MarketingLeads.jsx';
 import MarketingImpact, { RequestTies } from '../components/MarketingImpact.jsx';
 import MarketingRequestForm from '../components/MarketingRequestForm.jsx';
 import { fullMoney } from '../components/Charts.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 const TABS = [
   { key: 'brand', label: 'Logos & Images', icon: ImageIcon },
@@ -171,7 +172,7 @@ function BrandAssets({ assets, q, canManage, onEdit }) {
                     <h3 className="min-w-0 truncate font-semibold text-slate-900" title={a.title}>{a.title}</h3>
                     {canManage && <EditButton onClick={() => onEdit(a)} />}
                   </div>
-                  {a.description && <p className="line-clamp-2 text-xs text-slate-500">{a.description}</p>}
+                  {a.description && <p className="line-clamp-2 text-xs text-slate-500"><LinkText text={a.description} /></p>}
                   <div className="mt-auto flex items-center justify-between gap-2 pt-2">
                     <span className="min-w-0 truncate text-[11px] text-slate-400" title={a.name}>{a.name.split('.').pop().toUpperCase()} · {fileSize(a.size)}</span>
                     <DownloadLink asset={a} />
@@ -276,7 +277,7 @@ function CopyCard({ item: c, canManage, onEdit }) {
         </div>
         {canManage && <EditButton onClick={onEdit} />}
       </div>
-      <p className={`mt-3 flex-1 text-sm whitespace-pre-wrap text-slate-700 ${expanded ? '' : 'line-clamp-6'}`}>{c.body}</p>
+      <p className={`mt-3 flex-1 text-sm whitespace-pre-wrap text-slate-700 ${expanded ? '' : 'line-clamp-6'}`}><LinkText text={c.body} /></p>
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="text-[11px] text-slate-400" title={fullStamp(c.updated_at || c.created_at)}>
           Updated {ago(c.updated_at || c.created_at)}{c.updated_by && ` by ${fullName(c.updated_by)}`}
@@ -364,9 +365,9 @@ function Requests({ requests, meta, onChanged }) {
                 </div>
                 {STATUS[r.status] || STATUS.open}
               </div>
-              <p className="mt-2 text-sm whitespace-pre-wrap text-slate-700">{r.details}</p>
-              {r.justification && <p className="mt-2 text-sm whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Justification:</span> {r.justification}</p>}
-              {r.purpose && <p className="mt-1 text-sm whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Purpose of the event:</span> {r.purpose}</p>}
+              <p className="mt-2 text-sm whitespace-pre-wrap text-slate-700"><LinkText text={r.details} /></p>
+              {r.justification && <p className="mt-2 text-sm whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Justification:</span> <LinkText text={r.justification} /></p>}
+              {r.purpose && <p className="mt-1 text-sm whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Purpose of the event:</span> <LinkText text={r.purpose} /></p>}
               <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-2">
                 <div className="mb-1 text-[10px] font-semibold tracking-wide text-slate-400 uppercase">Tied to</div>
                 <RequestTies request={r} />

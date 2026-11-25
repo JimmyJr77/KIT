@@ -7,6 +7,7 @@ import { fullMoney } from '../components/Charts.jsx';
 import MarketingRequestForm, { MarketingButton, EventPicker } from '../components/MarketingRequestForm.jsx';
 import { RequestTies } from '../components/MarketingImpact.jsx';
 import { DrawerShell } from './TicketPlanning.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 const longDate = (iso) => shortDate(iso, { month: 'short', day: 'numeric', year: 'numeric' });
 const heading = 'mb-1.5 text-xs font-semibold tracking-wide text-slate-500 uppercase';
@@ -21,7 +22,7 @@ function RequestCard({ request: r, ticket }) {
           ? <Link to={`/tickets?open=${r.ticket_id}`} className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 hover:underline">Work ticket</Link>
           : <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Waiting on Marketing</span>}
       </div>
-      <p className="mt-1 line-clamp-3 text-xs whitespace-pre-wrap text-slate-600">{r.details}</p>
+      <p className="mt-1 line-clamp-3 text-xs whitespace-pre-wrap text-slate-600"><LinkText text={r.details} /></p>
       <div className="mt-1.5"><RequestTies request={{ ...r, for_ticket: r.for_ticket?.id === ticket.id ? null : r.for_ticket, tickets: r.tickets.filter((t) => t.id !== ticket.id) }} /></div>
       <div className="mt-1.5 text-[11px] text-slate-400">
         {fullName(r.requested_by) || 'Someone'} asked {longDate(r.created_at.slice(0, 10))}{r.spent > 0 && <span className="text-emerald-700"> · {fullMoney(r.spent)} spent</span>}

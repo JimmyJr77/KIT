@@ -7,7 +7,7 @@ const LEFT_OUT = '';
 
 /**
  * A pipeline's stages, in board order: add one anywhere, rename, move and delete them (admins only; everyone else reads
- * the list, and keeps personal aliases of their own underneath: see MyAliases). Each stage added here carries two choices: whether it syncs with Pipedrive (off unless ticked),
+ * the list, and keeps stages of their own: see MyAliases). Each stage added here carries two choices: whether it syncs with Pipedrive (off unless ticked),
  * and how reports count it (as one of the standard stages, as a step of its own, or not at all).
  * KIT's own pipeline (no id) works the same, without the sync choice: nothing on it goes to Pipedrive.
  * `pipeline` is the board's current pipeline; `onChanged` runs after a change so the board follows.
@@ -101,8 +101,12 @@ export default function StageSettings({ pipeline, onChanged }) {
   };
   const adding = (after) => canManage && form?.mode === 'add' && form.after === after;
 
+  // Stages of your own come first for everyone who can't change the team's stages: they're what that person can add here.
+  const mine = <MyAliases first={!canManage} pid={pid} aliases={stages.data.aliases || []} stageNames={stages.data.aliasStages || []} onChanged={async () => { await stages.reload({ quiet: true }); onChanged?.(); }} />;
+
   return (
     <div className="space-y-4">
+      {!canManage && mine}
       <p className="rounded-lg bg-slate-50 p-3 text-xs leading-snug text-slate-600">
         The stages of <b className="text-slate-800">{pipeline.name}</b>, in the order the board shows them, the same for everyone. {kit
           ? 'This is KIT’s own pipeline: nothing on it goes to Pipedrive. You choose how reports count each stage you add.'
@@ -146,19 +150,20 @@ export default function StageSettings({ pipeline, onChanged }) {
       </ol>
       {canManage ? (
         <button type="button" className="btn" onClick={() => startAdd(null)} disabled={busy}><Plus size={15} /> Add a stage at the start</button>
-      ) : <p className="text-xs text-slate-500">Only an admin adds, renames, moves and deletes stages and team-wide aliases, so every ticket sits in an approved stage that’s reported.</p>}
+      ) : <p className="text-xs text-slate-500">Only an admin adds, renames, moves and deletes the team’s stages, so every ticket sits in an approved stage that’s reported. Stages of your own are yours to add, above.</p>}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-      <MyAliases pid={pid} aliases={stages.data.aliases || []} stageNames={stages.data.aliasStages || []} onChanged={async () => { await stages.reload({ quiet: true }); onChanged?.(); }} />
+      {canManage && mine}
     </div>
   );
 }
 
 /**
- * Your own stage aliases on this pipeline: a column only you see on the board, beside the stage it belongs to. Each has
- * to be tied to one of the pipeline's stages. A ticket you put in an alias is still in that stage for everyone else, in
- * Pipedrive and in every report. Anyone can keep these; team-wide aliases are an admin's to add, in the list above.
+ * Your own stages on this pipeline (kept as personal aliases): a column only you see on the board, beside the team stage
+ * it's part of. Each has to be tied to one of the pipeline's stages. A ticket you put in one is still in that stage for
+ * everyone else, in Pipedrive and in every report. Anyone can keep these; the team's stages are an admin's to add.
+ * `first` draws it at the top of the tab, without the rule that sets it off from the team's list above it.
  */
-function MyAliases({ pid, aliases, stageNames, onChanged }) {
+function MyAliases({ pid, aliases, stageNames, onChanged, first = false }) {
   const [form, setForm] = useState(null); // { id?, name, stage }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -173,42 +178,42 @@ function MyAliases({ pid, aliases, stageNames, onChanged }) {
       : api.post('/stages/aliases', { pipeline_id: pid, name: form.name, stage: form.stage })));
     if (done) setForm(null);
   };
-  const remove = (a) => confirm(`Delete your alias “${a.name}”?${a.tickets ? ` Its ${a.tickets} ticket${a.tickets === 1 ? '' : 's'} show in ${a.stage} again.` : ''}`) && run(() => api.del(`/stages/aliases/${a.id}`));
+  const remove = (a) => confirm(`Delete your stage “${a.name}”?${a.tickets ? ` Its ${a.tickets} ticket${a.tickets === 1 ? '' : 's'} show in ${a.stage} again.` : ''}`) && run(() => api.del(`/stages/aliases/${a.id}`));
   const formRow = (
     <li className="space-y-2 bg-brand-50/50 px-3 py-3">
       <div className="flex flex-wrap items-end gap-2">
         <div className="min-w-40 flex-1">
-          <label className="label" htmlFor="alias-name">Alias name</label>
-          <input id="alias-name" className="input h-9 text-sm" placeholder="Name the alias…" value={form?.name || ''} autoFocus maxLength={60}
+          <label className="label" htmlFor="alias-name">Stage name</label>
+          <input id="alias-name" className="input h-9 text-sm" placeholder="Name your stage…" value={form?.name || ''} autoFocus maxLength={60}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } if (e.key === 'Escape') { e.stopPropagation(); setForm(null); } }} />
         </div>
         <div>
-          <label className="label" htmlFor="alias-stage">Alias of</label>
+          <label className="label" htmlFor="alias-stage">Part of</label>
           <select id="alias-stage" className="input h-9 py-0 text-sm" value={form?.stage || ''} onChange={(e) => setForm({ ...form, stage: e.target.value })}>
             {stageNames.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
       </div>
-      {form?.id && form.stage !== form.was && <p className="text-xs text-amber-700">Tied to another stage, the alias starts empty: its tickets stay in {form.was}.</p>}
+      {form?.id && form.stage !== form.was && <p className="text-xs text-amber-700">Tied to another stage, it starts empty: its tickets stay in {form.was}.</p>}
       <div className="flex items-center gap-2">
-        <button type="button" className="btn-primary h-8 px-3 py-0 text-sm" onClick={save} disabled={busy || !form?.name.trim() || !form?.stage}>{form?.id ? 'Save' : 'Add alias'}</button>
+        <button type="button" className="btn-primary h-8 px-3 py-0 text-sm" onClick={save} disabled={busy || !form?.name.trim() || !form?.stage}>{form?.id ? 'Save' : 'Add stage'}</button>
         <button type="button" className="btn h-8 px-3 py-0 text-sm" onClick={() => setForm(null)}>Cancel</button>
       </div>
     </li>
   );
   return (
-    <section className="space-y-2 border-t border-slate-200 pt-4">
-      <h3 className="text-sm font-semibold text-slate-800">Your aliases</h3>
+    <section className={`space-y-2 ${first ? '' : 'border-t border-slate-200 pt-4'}`}>
+      <h3 className="text-sm font-semibold text-slate-800">Your own stages</h3>
       <p className="text-xs leading-snug text-slate-600">
-        A column of your own on the board, beside the stage it belongs to. Only you see it. A ticket you drag into one stays in that stage for everyone else, in Pipedrive and in every report.
+        Add a stage only you see: a column of your own on the board, beside the team stage it’s part of. A ticket you drag into it stays in that team stage for everyone else, in Pipedrive and in every report, so nothing outside your view changes.
       </p>
       {(aliases.length > 0 || form) && (
         <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
           {aliases.map((a) => (form?.id === a.id ? <Rows key={a.id}>{formRow}</Rows> : (
             <li key={a.id} className="flex items-center gap-2 px-3 py-2">
               <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{a.name}</span>
-              <Chip tone="violet">Alias of {a.stage}</Chip>
+              <Chip tone="violet">Part of {a.stage}</Chip>
               <span className="shrink-0 text-xs text-slate-400 tabular-nums">{a.tickets} ticket{a.tickets === 1 ? '' : 's'}</span>
               <IconButton label={`Edit ${a.name}`} title="Rename, or tie it to another stage" disabled={busy} onClick={() => setForm({ id: a.id, name: a.name, stage: a.stage, was: a.stage })}><Pencil size={14} /></IconButton>
               <IconButton danger label={`Delete ${a.name}`} title="Delete" disabled={busy} onClick={() => remove(a)}><Trash2 size={14} /></IconButton>
@@ -217,7 +222,7 @@ function MyAliases({ pid, aliases, stageNames, onChanged }) {
           {form && !form.id && formRow}
         </ul>
       )}
-      {!form && <button type="button" className="btn" onClick={() => setForm({ name: '', stage: stageNames[0] || '' })} disabled={busy || !stageNames.length}><Plus size={15} /> Add an alias</button>}
+      {!form && <button type="button" className="btn" onClick={() => setForm({ name: '', stage: stageNames[0] || '' })} disabled={busy || !stageNames.length}><Plus size={15} /> Add a stage of your own</button>}
       {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
     </section>
   );

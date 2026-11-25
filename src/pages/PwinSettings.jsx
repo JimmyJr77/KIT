@@ -16,7 +16,7 @@ const sameSet = (a, b) => a.length === b.length && a.every((k) => b.includes(k))
 const everyArea = (rating, override = {}) => Object.fromEntries(CRITERIA.map((c) => [c.key, { score: override[c.key] ?? rating }]));
 
 const TABS = [['pwin', 'PWIN'], ['gate', 'Qualified lead'], ['tags', 'Tags'], ['layout', 'Layout'], ['stages', 'Stages']];
-const SUBTITLES = { pwin: 'PWIN weights and must-have areas', gate: 'What makes a qualified lead at the Initial Gate', tags: 'The tags you see on the board’s cards, and the tag list', layout: 'How wide the board’s tickets are, and their text size', stages: 'The board’s columns' };
+const SUBTITLES = { pwin: 'PWIN weights and must-have areas', gate: 'What makes a qualified lead at the Initial Gate', tags: 'The tags you see on the board’s cards, and the tag list', layout: 'How wide the board’s tickets are, and their text size', stages: 'The board’s columns, and stages of your own' };
 
 /**
  * BD Pipeline settings, in tabs: PWIN weights and must-have areas for the PWIN Assessment, with a way back to the

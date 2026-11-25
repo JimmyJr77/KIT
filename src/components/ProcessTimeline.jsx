@@ -9,6 +9,7 @@ import Avatar from './Avatar.jsx';
 import { LabelList } from './Labels.jsx';
 import { MentionText } from './MentionTextarea.jsx';
 import { TicketAccess } from '../pages/TicketPlanning.jsx';
+import LinkText from './LinkText.jsx';
 
 const money = (n) => (n == null ? '—' : usd(n).replace('.00', ''));
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
@@ -295,7 +296,7 @@ function LeadItem({ item: it }) {
     return (
       <Row icon={Megaphone} tint="bg-amber-100 text-amber-700" title={<>{money(s.amount)} <span className="font-normal text-slate-600">{s.description}</span></>}>
         <div className="text-slate-500">{[s.category, s.vendor, s.event_name, s.user_name].filter(Boolean).join(' · ') || 'Marketing spend'}</div>
-        {s.note && <div className="mt-0.5 whitespace-pre-wrap">{s.note}</div>}
+        {s.note && <div className="mt-0.5 whitespace-pre-wrap"><LinkText text={s.note} /></div>}
       </Row>
     );
   }
@@ -311,7 +312,7 @@ function LeadItem({ item: it }) {
   if (it.type === 'interaction') {
     return (
       <Row icon={MessageSquare} tint="bg-emerald-50 text-emerald-700" title={`With ${it.contact.first_name} ${it.contact.last_name || ''}`}>
-        <div className="whitespace-pre-wrap">{it.body}</div>
+        <div className="whitespace-pre-wrap"><LinkText text={it.body} /></div>
         {it.by && <div className="text-slate-400">Logged by {it.by}</div>}
       </Row>
     );
@@ -354,7 +355,7 @@ function strategyParts(s, onOpenTool) {
       <>
         <div>
           <Heading icon={ChessPawn} action={<Open onOpenTool={onOpenTool} tool="strategy"><Pencil size={11} className="inline" /> Edit</Open>}>Strategy for this ticket</Heading>
-          {s.text ? <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed">{s.text}</p> : <p className="mt-1 text-slate-400">No strategy written yet.</p>}
+          {s.text ? <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed"><LinkText text={s.text} /></p> : <p className="mt-1 text-slate-400">No strategy written yet.</p>}
           {s.updated_at && <div className="mt-1 text-[10px] text-slate-400">Saved {stamp(s.updated_at)}{s.updated_by ? ` by ${s.updated_by}` : ''}</div>}
         </div>
         <div>
@@ -402,7 +403,7 @@ function Clamp({ text, className = '' }) {
   const long = text.length > 220;
   return (
     <div className={className}>
-      <p className={`whitespace-pre-wrap ${open ? '' : 'line-clamp-4'}`}>{text}</p>
+      <p className={`whitespace-pre-wrap ${open ? '' : 'line-clamp-4'}`}><LinkText text={text} /></p>
       {long && <button type="button" className="text-[11px] font-medium text-brand-700 hover:underline" onClick={() => setOpen(!open)}>{open ? 'Less' : 'More'}</button>}
     </div>
   );
@@ -452,7 +453,7 @@ function milestoneParts(m, data, onOpenTool, onChanged) {
         {def.gate && (
           <div>
             <Heading>Price considerations</Heading>
-            {m.pricing ? <p className="mt-1 whitespace-pre-wrap">{m.pricing}</p> : <p className="mt-1 text-slate-400">None recorded</p>}
+            {m.pricing ? <p className="mt-1 whitespace-pre-wrap"><LinkText text={m.pricing} /></p> : <p className="mt-1 text-slate-400">None recorded</p>}
           </div>
         )}
         {def.gate && fullAssessment && (
@@ -488,7 +489,7 @@ function milestoneParts(m, data, onOpenTool, onChanged) {
                       })}
                     </ul>
                   )}
-                  {r.notes && <p className="mt-1 whitespace-pre-wrap text-slate-600">{r.notes}</p>}
+                  {r.notes && <p className="mt-1 whitespace-pre-wrap text-slate-600"><LinkText text={r.notes} /></p>}
                 </div>
               );
             })}
@@ -497,7 +498,7 @@ function milestoneParts(m, data, onOpenTool, onChanged) {
         {m.notes && (
           <div>
             <Heading>{def.requestLabel || 'Notes'}</Heading>
-            <p className="mt-1 whitespace-pre-wrap">{m.notes}</p>
+            <p className="mt-1 whitespace-pre-wrap"><LinkText text={m.notes} /></p>
           </div>
         )}
         <Documents milestone={m} onChanged={onChanged} />

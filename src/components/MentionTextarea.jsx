@@ -3,6 +3,7 @@ import { Users } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName } from '../lib/format.js';
 import Avatar from './Avatar.jsx';
+import { linkify } from './LinkText.jsx';
 
 // Everyone who can be mentioned, fetched once and shared by every box.
 let cache = null;
@@ -119,22 +120,28 @@ const escape = (n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Text with each "@First Last" and "@Team Name" mention highlighted, read the way the server reads them: the longest
- * name wins, and a team name has to stand alone ("@BDs" and "press@marketing.example" aren't mentions).
+ * name wins, and a team name has to stand alone ("@BDs" and "press@marketing.example" aren't mentions). Web
+ * addresses in the text are links.
  */
 export function MentionText({ text }) {
   const users = useMentionUsers();
   const teams = useMentionTeams();
-  if (!text || !text.includes('@') || !(users.length || teams.length)) return text;
+  if (!text) return text;
+  if (!text.includes('@') || !(users.length || teams.length)) return linkify(text);
   const persons = new Set(users.map((u) => fullName(u).toLowerCase()));
   const names = [
     ...users.map((u) => ({ n: fullName(u), re: escape(fullName(u)) })),
     ...teams.map((t) => ({ n: t.name, re: `${escape(t.name)}(?!\\w)` })),
   ].sort((a, b) => b.n.length - a.n.length); // a stable sort: a person comes before a team of the same length
-  const parts = text.split(new RegExp(`(@(?:${names.map((x) => x.re).join('|')}))`, 'gi'));
-  return parts.map((p, i) => {
-    const glued = i % 2 && !persons.has(p.slice(1).toLowerCase()) && /[\w.+-]$/.test(parts[i - 1]);
-    return i % 2 && !glued
-      ? <span key={i} className="rounded bg-brand-50 px-0.5 font-medium text-brand-700">{p}</span>
-      : <Fragment key={i}>{p}</Fragment>;
+  const re = new RegExp(`(@(?:${names.map((x) => x.re).join('|')}))`, 'gi');
+  // web addresses become links first, so an "@" inside one is never read as a mention
+  return linkify(text, (run) => {
+    const parts = run.split(re);
+    return parts.map((p, i) => {
+      const glued = i % 2 && !persons.has(p.slice(1).toLowerCase()) && /[\w.+-]$/.test(parts[i - 1]);
+      return i % 2 && !glued
+        ? <span key={i} className="rounded bg-brand-50 px-0.5 font-medium text-brand-700">{p}</span>
+        : <Fragment key={i}>{p}</Fragment>;
+    });
   });
 }

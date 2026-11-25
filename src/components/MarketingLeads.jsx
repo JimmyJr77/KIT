@@ -10,6 +10,7 @@ import Avatar from './Avatar.jsx';
 import SidePanel from './SidePanel.jsx';
 import MultiSelect from './MultiSelect.jsx';
 import { LabelChip, tagName } from './Labels.jsx';
+import LinkText from './LinkText.jsx';
 
 const longDate = (iso) => shortDate(iso, { month: 'short', day: 'numeric', year: 'numeric' });
 const stateOf = (l) => (l.ticket_id ? 'ticket' : l.closed_at ? 'closed' : l.claimed_by ? 'claimed' : 'open');
@@ -99,7 +100,7 @@ export default function MarketingLeads({ onCount }) {
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1"><LabelChip name={tagName('Marketing Lead')} />{l.event_id && <LabelChip name={tagName('Event Lead')} />}</div>
                 {l.contact && <p className="mt-2 text-xs text-slate-600"><span className="font-medium text-slate-500">Contact:</span> {l.contact}</p>}
-                {l.details && <p className="mt-2 flex-1 text-sm whitespace-pre-wrap text-slate-700">{l.details}</p>}
+                {l.details && <p className="mt-2 flex-1 text-sm whitespace-pre-wrap text-slate-700"><LinkText text={l.details} /></p>}
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
                   <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-slate-400">
                     {l.claimed_by_user ? (

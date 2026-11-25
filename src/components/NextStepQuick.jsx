@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { X, ArrowUp, Plus, ExternalLink } from 'lucide-react';
+import { X, ArrowUp, Plus, ExternalLink, MoreHorizontal, RotateCcw } from 'lucide-react';
 import { api } from '../lib/api.js';
+import LinkText from './LinkText.jsx';
 
 /**
  * A ticket's next step, in a small popup opened from its circle on the pipeline board: the step with its subtasks and due
- * date, to edit, tick off or swap for another open task, and a line each to add a subtask to it and a new task. Nothing else of the ticket is here;
+ * date (or Greenfield in its place: an ongoing step with no due date, whose Reset starts the ticket's inactivity clock over), to edit, tick off or swap for another open task, and a line each to add a subtask to it and a new task. Nothing else of the ticket is here;
  * "Open ticket" goes to the full Activity pane. `onChanged` runs after each save so the board's circle keeps up.
  */
 export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket }) {
@@ -14,6 +15,7 @@ export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket
   const [subject, setSubject] = useState('');
   const [added, setAdded] = useState({ subject: '', due_date: '' });
   const [subtask, setSubtask] = useState('');
+  const [wasReset, setWasReset] = useState(false);
   const step = open?.[0] || null;
   // The next step's box grows with its text, so all of it shows however long it is.
   const box = useRef(null);
@@ -84,17 +86,44 @@ export default function NextStepQuick({ ticket, onClose, onChanged, onOpenTicket
                 value={subject} onChange={(e) => setSubject(e.target.value.replace(/\n/g, ' '))} onBlur={rename} aria-label="Next step"
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }} />
             </div>
-            <label className="mt-1 flex items-center gap-2 pl-6 text-xs text-slate-500">Due
-              <input type="date" className={date} value={step.due_date || ''} disabled={busy} aria-label="Due date"
-                onChange={(e) => run(() => api.put(`/activities/${step.id}`, { due_date: e.target.value || null }))} />
-            </label>
+            {/* A due date, or Greenfield in its place. Greenfield has Reset: the step is still live, so the ticket's inactivity clock starts over. */}
+            <div className="mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs text-slate-500">
+              {step.greenfield ? (
+                <>
+                  <span className="flex items-center gap-1.5 font-semibold text-emerald-700" title="An ongoing step with no due date">
+                    <span className="grid h-[18px] w-[18px] place-items-center rounded bg-emerald-500 text-white" aria-hidden="true"><MoreHorizontal size={12} strokeWidth={3} /></span>
+                    Greenfield
+                  </span>
+                  <button type="button" disabled={busy} title="Still in play: start the ticket's inactivity clock over"
+                    onClick={() => run(async () => { await api.post(`/activities/${step.id}/reset`); setWasReset(true); })}
+                    className="flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:border-brand-500 hover:text-brand-700 disabled:opacity-50"><RotateCcw size={11} /> Reset</button>
+                  {wasReset && <span className="text-emerald-700" role="status">Clock reset</span>}
+                  <button type="button" disabled={busy} className="ml-auto text-slate-500 hover:text-slate-800 hover:underline"
+                    onClick={() => { setWasReset(false); run(() => api.put(`/activities/${step.id}`, { greenfield: false })); }}>Use a due date</button>
+                </>
+              ) : (
+                <>
+                  <label className="flex items-center gap-2">Due
+                    <input type="date" className={date} value={step.due_date || ''} disabled={busy} aria-label="Due date"
+                      onChange={(e) => run(() => api.put(`/activities/${step.id}`, { due_date: e.target.value || null }))} />
+                  </label>
+                  <span className="text-slate-400">or</span>
+                  <button type="button" disabled={busy} title="An ongoing step with no due date"
+                    onClick={() => run(() => api.put(`/activities/${step.id}`, { greenfield: true }))}
+                    className="flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:border-emerald-500 hover:text-emerald-700 disabled:opacity-50">
+                    <span className="grid h-3.5 w-3.5 place-items-center rounded-sm bg-emerald-500 text-white" aria-hidden="true"><MoreHorizontal size={10} strokeWidth={3} /></span>
+                    Greenfield
+                  </button>
+                </>
+              )}
+            </div>
             {step.subtasks.length > 0 && (
               <ul className="mt-2 space-y-1 pl-6">
                 {step.subtasks.map((s) => (
                   <li key={s.id} className="flex items-start gap-2 text-sm">
                     <input type="checkbox" className="mt-0.5 h-3.5 w-3.5 shrink-0" checked={!!s.done} disabled={busy}
                       onChange={() => run(() => api.put(`/activities/subtasks/${s.id}`, { done: !s.done }))} aria-label={`Mark “${s.text}” ${s.done ? 'not done' : 'done'}`} />
-                    <span className={`min-w-0 break-words ${s.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{s.text}</span>
+                    <span className={`min-w-0 break-words ${s.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}><LinkText text={s.text} /></span>
                   </li>
                 ))}
               </ul>

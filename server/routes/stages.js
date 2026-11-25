@@ -38,7 +38,7 @@ r.get('/', (req, res) => {
 });
 
 function manager(req, res, next) {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an admin adds or changes a pipeline’s stages and team-wide aliases. You can add a personal alias, which only you see.' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an admin adds or changes a pipeline’s stages. You can add a stage of your own, which only you see.' });
   next();
 }
 
@@ -53,9 +53,9 @@ const aliasesOf = (user, pipelineId) => db.prepare(`SELECT a.id, a.name, a.stage
   FROM stage_aliases a WHERE a.user_id = ? AND a.pipeline_id IS ? ORDER BY a.id`).all(user.id, pipelineId);
 const ownAlias = (req) => db.prepare('SELECT * FROM stage_aliases WHERE id = ? AND user_id = ?').get(Number(req.params.id ?? req.body?.alias_id) || 0, req.user.id);
 function aliasNameError(user, pipelineId, name, id = 0) {
-  if (!name) return 'Name the alias';
+  if (!name) return 'Name your stage';
   if (rows(pipelineId).some((s) => s.name.toLowerCase() === name.toLowerCase())) return `${name} is already a stage of this pipeline`;
-  if (db.prepare('SELECT 1 FROM stage_aliases WHERE user_id = ? AND pipeline_id IS ? AND name = ? COLLATE NOCASE AND id != ?').get(user.id, pipelineId, name, id)) return `You already have an alias called ${name}`;
+  if (db.prepare('SELECT 1 FROM stage_aliases WHERE user_id = ? AND pipeline_id IS ? AND name = ? COLLATE NOCASE AND id != ?').get(user.id, pipelineId, name, id)) return `You already have a stage of your own called ${name}`;
   return null;
 }
 
@@ -66,7 +66,7 @@ r.post('/aliases', (req, res) => {
   const name = cleanName(req.body?.name);
   const error = aliasNameError(req.user, p.id, name);
   if (error) return res.status(400).json({ error });
-  if (!aliasStages(p.id).includes(req.body?.stage)) return res.status(400).json({ error: 'Pick the stage this alias belongs to' });
+  if (!aliasStages(p.id).includes(req.body?.stage)) return res.status(400).json({ error: 'Pick the stage it’s part of' });
   db.prepare('INSERT INTO stage_aliases (user_id, pipeline_id, name, stage) VALUES (?, ?, ?, ?)').run(req.user.id, p.id, name, req.body.stage);
   res.json({ aliases: aliasesOf(req.user, p.id) });
 });
@@ -83,8 +83,8 @@ r.put('/aliases/place', (req, res) => {
     return res.json({ alias_id: null });
   }
   const a = ownAlias(req);
-  if (!a) return res.status(404).json({ error: 'That alias isn’t yours' });
-  if ((a.pipeline_id ?? null) !== (t.pipeline_id ?? null) || a.stage !== t.pipeline_status) return res.status(400).json({ error: `${a.name} is an alias of ${a.stage}: the ticket has to be in ${a.stage} first` });
+  if (!a) return res.status(404).json({ error: 'That stage isn’t yours' });
+  if ((a.pipeline_id ?? null) !== (t.pipeline_id ?? null) || a.stage !== t.pipeline_status) return res.status(400).json({ error: `${a.name} is part of ${a.stage}: the ticket has to be in ${a.stage} first` });
   db.prepare('INSERT OR REPLACE INTO stage_alias_tickets (user_id, ticket_id, alias_id) VALUES (?, ?, ?)').run(req.user.id, t.id, a.id);
   res.json({ alias_id: a.id });
 });
@@ -92,7 +92,7 @@ r.put('/aliases/place', (req, res) => {
 /** Body: { name?, stage? }. Tied to another stage, the alias starts empty: its tickets stay where they really are. */
 r.put('/aliases/:id', (req, res) => {
   const a = ownAlias(req);
-  if (!a) return res.status(404).json({ error: 'That alias isn’t yours' });
+  if (!a) return res.status(404).json({ error: 'That stage isn’t yours' });
   const b = req.body || {};
   if (b.name !== undefined) {
     const name = cleanName(b.name);
@@ -101,7 +101,7 @@ r.put('/aliases/:id', (req, res) => {
     db.prepare('UPDATE stage_aliases SET name = ? WHERE id = ?').run(name, a.id);
   }
   if (b.stage !== undefined && b.stage !== a.stage) {
-    if (!aliasStages(a.pipeline_id).includes(b.stage)) return res.status(400).json({ error: 'Pick the stage this alias belongs to' });
+    if (!aliasStages(a.pipeline_id).includes(b.stage)) return res.status(400).json({ error: 'Pick the stage it’s part of' });
     db.transaction(() => {
       db.prepare('UPDATE stage_aliases SET stage = ? WHERE id = ?').run(b.stage, a.id);
       db.prepare('DELETE FROM stage_alias_tickets WHERE alias_id = ?').run(a.id);
@@ -113,7 +113,7 @@ r.put('/aliases/:id', (req, res) => {
 /** Its tickets go back to showing in the stage they're in. */
 r.delete('/aliases/:id', (req, res) => {
   const a = ownAlias(req);
-  if (!a) return res.status(404).json({ error: 'That alias isn’t yours' });
+  if (!a) return res.status(404).json({ error: 'That stage isn’t yours' });
   db.prepare('DELETE FROM stage_aliases WHERE id = ?').run(a.id);
   res.json({ aliases: aliasesOf(req.user, a.pipeline_id) });
 });

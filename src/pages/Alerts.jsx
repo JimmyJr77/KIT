@@ -11,6 +11,7 @@ import { MentionText } from '../components/MentionTextarea.jsx';
 import { EstimateLockPanel } from '../components/EstimateLock.jsx';
 import CommentPanel, { TicketSummary } from './CommentPanel.jsx';
 import SupportPanel from './SupportPanel.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 /** Tell the sidebar bell to recount unread alerts. */
 export const alertsChanged = () => window.dispatchEvent(new Event('kit:alerts'));
@@ -343,7 +344,7 @@ function SupportPane({ alert: a, onClose, onDone, markRead }) {
               <span className="font-semibold text-slate-800">{a.kind === 'support_accepted' ? 'Your request' : `${fullName(a.actor) || 'Someone'} asked`}</span>{' '}
               <span className="text-slate-400">{ago(a.created_at)}</span>
             </div>
-            <p className="mt-1 text-sm whitespace-pre-wrap text-slate-800">{a.excerpt}</p>
+            <p className="mt-1 text-sm whitespace-pre-wrap text-slate-800"><LinkText text={a.excerpt} /></p>
           </div>
         </section>
         {a.kind === 'support_accepted' && (

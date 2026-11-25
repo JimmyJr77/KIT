@@ -9,12 +9,13 @@ import { stamp, fullStamp, fullName, shortDate } from '../lib/format.js';
 import { ContactForm, ContactDetail, RelationshipBadge, contactName, contactLine } from './ContactEditor.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import { PROCESS_TYPES, REVIEW_AREAS, DECISIONS, CRITICALITY, DEFAULT_CRITICALITY, SA_FIELD, REQUEST_FIELD, QUAL_FIELD, SHARED_FIELDS, QUALIFICATION, QUAL_SCORES, STAFF_PICKS, canOverrideGate,
-  defaultCriticality, criticalityOf, milestoneOf } from '../lib/process.js';
+  defaultCriticality, criticalityOf, milestoneOf, needsApproval } from '../lib/process.js';
 import { SaChecks, SaFiles, SaAttach, SaApprovedNote, NEEDS_ARCHITECT } from '../components/SaResponse.jsx';
 import { ActivitiesDrawer } from './TicketActivities.jsx';
 import { MarketingDrawer } from './TicketMarketing.jsx';
 import { kitFieldLabel } from '../lib/dealFields.js';
 import { CRITERIA, SCORE_LABELS, DEFAULT_PWIN_WEIGHTS, DEFAULT_PWIN_GATES, pwin, weightShares } from '../lib/assessment.js';
+import LinkText from '../components/LinkText.jsx';
 
 /**
  * The menu items along the ticket pane's left edge. Strategy and the win assessment are for pipeline tickets only; Marketing
@@ -227,11 +228,11 @@ const DECISION_STYLE = { Proceed: 'bg-emerald-100 text-emerald-800', Revise: 'bg
 const byDue = (a, b) => (a.done - b.done) || (a.done ? String(b.completed_at).localeCompare(String(a.completed_at))
   : ((!a.step_date) - (!b.step_date)) || String(a.step_date || '').localeCompare(String(b.step_date || '')) || a.id - b.id);
 
-/** A due date as "Due Dec 4", reddened once it's passed while the event is open. */
-export function DueDate({ date, done, className = '' }) {
+/** A due date as "Due Dec 4" (with `year`, "Due Dec 4, 2026"), reddened once it's passed while the event is open. */
+export function DueDate({ date, done, year = false, className = '' }) {
   if (!date) return <span className={`text-slate-400 ${className}`}>No due date</span>;
   const late = !done && date < today();
-  return <span className={`${late ? 'font-semibold text-red-600' : 'text-slate-500'} ${className}`} title={late ? 'Past due' : undefined}>Due {shortDate(date)}</span>;
+  return <span className={`${late ? 'font-semibold text-red-600' : 'text-slate-500'} ${className}`} title={late ? 'Past due' : undefined}>Due {shortDate(date, year ? { month: 'short', day: 'numeric', year: 'numeric' } : undefined)}</span>;
 }
 
 /** A criticality pill. */
@@ -396,7 +397,7 @@ function ProcessStep({ step: s, open, onToggle, byId, userOptions, users, gateRu
                   {people.length > 0 && <span className="flex -space-x-1">{people.slice(0, 5).map((u) => <Avatar key={u.id} user={u} size="xs" className="ring-2 ring-white" />)}</span>}
                 </div>
               )}
-              {!open && s.notes && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{s.notes}</p>}
+              {!open && s.notes && <p className="mt-1 line-clamp-2 text-xs text-slate-600"><LinkText text={s.notes} /></p>}
               </>
             )}
           </div>
@@ -678,7 +679,7 @@ function ProcessStepEditor({ step: s, user, userOptions, users, gateRule, onDirt
         <SaAttach className="mt-1.5" onLink={request.onLink} onUpload={request.onUpload} />
       </WorkBlock>
 
-      {/* The Solution Architect Response: the architect's notes, links and documents, then where they landed. Anyone can write it. */}
+      {/* The Solution Architect Response: the architect's notes, links and documents, then (on a review that needs approval) where they landed. Anyone can write it. */}
       <section className="rounded-lg border border-brand-100 bg-brand-50/40 p-2.5">
         <div className="mb-1.5 text-xs font-semibold text-slate-700">{def.saLabel || 'Solution Architect Response'}</div>
         <label className="mb-0.5 block text-[11px] font-medium text-slate-600" htmlFor={`ps-sa-${s.id}`}>SA Notes</label>
@@ -686,12 +687,16 @@ function ProcessStepEditor({ step: s, user, userOptions, users, gateRule, onDirt
           placeholder="The solution architect's thoughts on the request. Add a link or a document below." />
         <SaFiles files={sa.files} className="mt-1.5" canRemove={sa.canRemove} onRemove={sa.onRemove} />
         <SaAttach className="mt-1.5" onLink={sa.onLink} onUpload={sa.onUpload} />
-        <SaChecks className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-brand-100 pt-2" value={form.sa_response} onChange={(v) => set('sa_response', v)} about={s.step_type}
-          blocked={def.qualifies && !architects.length ? { approve: NEEDS_ARCHITECT } : {}} />
-        {def.qualifies && !architects.length && form.sa_response !== 'approve' && <p className="mt-1 text-[11px] text-slate-500">To approve, first pick the solution architect at the top of this form.</p>}
-        {/* Whoever ticks Approve does it on the named architect's behalf; a saved approval keeps the name of who ticked it. */}
-        {def.qualifies && form.sa_response === 'approve' && (
-          <SaApprovedNote className="mt-1" architects={architects} by={s.sa_response === 'approve' && s.sa_response_by ? s.sa_response_by : users.find((u) => u.id === user.id) || user} />
+        {needsApproval(s.step_type) && (
+          <>
+            <SaChecks className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-brand-100 pt-2" value={form.sa_response} onChange={(v) => set('sa_response', v)} about={s.step_type}
+              blocked={def.qualifies && !architects.length ? { approve: NEEDS_ARCHITECT } : {}} />
+            {def.qualifies && !architects.length && form.sa_response !== 'approve' && <p className="mt-1 text-[11px] text-slate-500">To approve, first pick the solution architect at the top of this form.</p>}
+            {/* Whoever ticks Approve does it on the named architect's behalf; a saved approval keeps the name of who ticked it. */}
+            {def.qualifies && form.sa_response === 'approve' && (
+              <SaApprovedNote className="mt-1" architects={architects} by={s.sa_response === 'approve' && s.sa_response_by ? s.sa_response_by : users.find((u) => u.id === user.id) || user} />
+            )}
+          </>
         )}
       </section>
 
@@ -874,7 +879,7 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
       ) : (
         <li key={s.id} className="group">
           <p className={`text-sm break-words whitespace-pre-wrap ${muted ? 'text-slate-500' : 'text-slate-800'}`}>
-            <ChessPawn size={13} className={`mr-1.5 -mt-0.5 inline ${muted ? 'text-slate-300' : 'text-brand-600'}`} />{s.body}
+            <ChessPawn size={13} className={`mr-1.5 -mt-0.5 inline ${muted ? 'text-slate-300' : 'text-brand-600'}`} /><LinkText text={s.body} />
           </p>
           <div className="flex min-h-6 items-center justify-between gap-2">
             <p className="text-[11px] text-slate-400">{[s.by, stamp(s.created_at), s.updated_at && 'edited'].filter(Boolean).join(' · ')}</p>
@@ -946,7 +951,7 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
                   </div>
                   {editing === `o${o.id}`
                     ? <InlineText initial={o.body} label="Obstacle" busy={busy} onCancel={() => setEditing(null)} onSave={(body) => run(() => api.put(`/tickets/obstacles/${o.id}`, { body }))} />
-                    : o.body ? <p className="text-sm break-words whitespace-pre-wrap text-slate-800">{o.body}</p>
+                    : o.body ? <p className="text-sm break-words whitespace-pre-wrap text-slate-800"><LinkText text={o.body} /></p>
                       : <p className="text-sm text-slate-400 italic">No obstacle named</p>}
                 </header>
                 <div className="space-y-2.5 px-3 py-2.5">
@@ -974,7 +979,7 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
                 <article key={o.id} className="rounded-lg border border-slate-200 bg-slate-50/70">
                   <header className="flex items-start gap-2 px-3 pt-2">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm break-words whitespace-pre-wrap text-slate-500 line-through decoration-slate-400">{o.body || 'No obstacle named'}</p>
+                      <p className="text-sm break-words whitespace-pre-wrap text-slate-500 line-through decoration-slate-400"><LinkText text={o.body || 'No obstacle named'} /></p>
                       <p className="text-[11px] text-slate-400">Crossed off {[stamp(o.resolved_at), o.resolved_by && `by ${o.resolved_by}`].filter(Boolean).join(' ')}</p>
                     </div>
                     {!readOnly && (
@@ -994,7 +999,7 @@ function StrategyDrawer({ ticket, onClose, onChanged, onDirty }) {
                       <div className="group flex items-start gap-2 rounded-md bg-emerald-50/70 px-2 py-1.5">
                         <div className="min-w-0 flex-1">
                           <div className="text-[10px] font-semibold tracking-wide text-emerald-800 uppercase">Outcome</div>
-                          {o.outcome ? <p className="text-sm break-words whitespace-pre-wrap text-slate-800">{o.outcome}</p> : <p className="text-sm text-slate-400 italic">None written</p>}
+                          {o.outcome ? <p className="text-sm break-words whitespace-pre-wrap text-slate-800"><LinkText text={o.outcome} /></p> : <p className="text-sm text-slate-400 italic">None written</p>}
                         </div>
                         {!readOnly && <button type="button" className="rounded p-1 text-slate-400 hover:bg-white hover:text-slate-700" onClick={() => setEditing(`out${o.id}`)} aria-label="Edit the outcome" title={o.outcome ? 'Edit' : 'Add the outcome'}><PenLine size={13} /></button>}
                       </div>

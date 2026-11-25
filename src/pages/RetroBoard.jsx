@@ -8,6 +8,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import SidePanel from '../components/SidePanel.jsx';
 import { LessonPanel, lessonNo } from './LessonsLearned.jsx';
 import { RetroPanel, STAGE_NAMES } from './Retros.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 // How often a board picks up other people's changes while it's on screen.
 const POLL_MS = 2000;
@@ -180,7 +181,7 @@ const Face = ({ note, overlay, picked, dropping, flash, children }) => (
     {dropping && <p className="mb-1.5 flex items-center gap-1 text-xs font-semibold text-brand-700"><Merge size={13} /> Drop to merge</p>}
     {note.hidden
       ? <p className="flex items-center gap-1.5 text-sm text-slate-400"><EyeOff size={14} /> Hidden until the lead reveals</p>
-      : <p className="text-sm break-words whitespace-pre-wrap text-slate-800">{note.text}</p>}
+      : <p className="text-sm break-words whitespace-pre-wrap text-slate-800"><LinkText text={note.text} /></p>}
     {children}
   </div>
 );
@@ -192,7 +193,7 @@ function Originals({ note, laneNames, canMerge, onAct }) {
     <div className="mt-2 space-y-1.5 border-t border-slate-100 pt-2">
       {note.originals.map((o) => (
         <div key={o.id} className="rounded-md bg-slate-50 p-2">
-          <p className="text-xs break-words whitespace-pre-wrap text-slate-700">{o.text}</p>
+          <p className="text-xs break-words whitespace-pre-wrap text-slate-700"><LinkText text={o.text} /></p>
           <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
             <span className="inline-flex items-center gap-1 tabular-nums"><ThumbsUp size={12} /> {o.votes}</span>
             {o.lane_id !== note.lane_id && laneNames[o.lane_id] && <span className="truncate">From {laneNames[o.lane_id]}</span>}
@@ -318,7 +319,7 @@ function MergePanel({ notes, onClose, onMerge }) {
           <div className="space-y-1.5">
             {parts.map((o) => (
               <div key={o.id} className="rounded-md bg-slate-50 p-2">
-                <p className="text-sm break-words whitespace-pre-wrap text-slate-700">{o.text}</p>
+                <p className="text-sm break-words whitespace-pre-wrap text-slate-700"><LinkText text={o.text} /></p>
                 <span className="mt-1 inline-flex items-center gap-1 text-xs text-slate-400 tabular-nums"><ThumbsUp size={12} /> {o.votes}</span>
               </div>
             ))}

@@ -4,6 +4,7 @@ import { MentionText } from '../components/MentionTextarea.jsx';
 import { ago, fullName, fullStamp } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import PriorityCard from './PriorityCard.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 /** Small text glyphs for the views lucide has no icon for. */
 const Glyph = ({ children }) => <span className="font-mono text-[10px] leading-none font-bold tracking-tighter">{children}</span>;
@@ -138,7 +139,7 @@ function TaskList({ label, tasks, card, editable, onToggle, done }) {
             <label className={`flex items-start gap-2 rounded px-0.5 py-0.5 text-sm ${editable ? 'cursor-pointer hover:bg-white' : ''}`}>
               <input type="checkbox" className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-brand-600" checked={!!t.done} disabled={!editable}
                 onChange={(e) => onToggle(card, t.index, e.target.checked)} />
-              <span className={done ? 'text-slate-400 line-through' : 'text-slate-700'}>{t.text}</span>
+              <span className={done ? 'text-slate-400 line-through' : 'text-slate-700'}><LinkText text={t.text} /></span>
             </label>
           </li>
         ))}
@@ -230,7 +231,7 @@ export function WorkEntry({ entry, rows, onOpen }) {
       </div>
       <div className="truncate font-semibold text-slate-800" title={entry.ticket_title}>{entry.ticket_title || 'Deleted ticket'}</div>
       {entry.card_title && <div className="truncate text-[11px] text-slate-500" title={entry.card_title}>Priority: {entry.card_title}</div>}
-      {entry.summary && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{entry.summary}</p>}
+      {entry.summary && <p className="mt-1 line-clamp-2 text-xs text-slate-600"><LinkText text={entry.summary} /></p>}
     </button>
   );
 }

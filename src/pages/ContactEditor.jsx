@@ -7,6 +7,7 @@ import MultiSelect from '../components/MultiSelect.jsx';
 import { useAuth } from '../lib/auth.jsx';
 import { fullName, formatPhoneInput, stamp, fullStamp, ticketKind } from '../lib/format.js';
 import Avatar from '../components/Avatar.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 // How well we know someone, 0–5.
 export const RELATIONSHIP = [
@@ -111,7 +112,7 @@ export function ContactForm({ initial, submitLabel, onSubmit, onCancel, extra })
             <ul className="mt-2 space-y-1">
               {pending.map((n, i) => (
                 <li key={`${i}-${n}`} className="group flex items-start gap-2 rounded-md bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">
-                  <span className="flex-1 break-words whitespace-pre-wrap">{n}</span>
+                  <span className="flex-1 break-words whitespace-pre-wrap"><LinkText text={n} /></span>
                   <button type="button" onClick={() => setPending((xs) => xs.filter((_, j) => j !== i))} aria-label="Remove note" className="text-slate-300 hover:text-red-600"><Trash2 size={13} /></button>
                 </li>
               ))}
@@ -222,7 +223,7 @@ export function ContactDetail({ contactId, onChanged, onDeleted }) {
                       <button type="button" onClick={() => removeNote(i)} aria-label="Delete note" className="ml-auto text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-600"><Trash2 size={13} /></button>
                     )}
                   </div>
-                  <p className="text-sm break-words whitespace-pre-wrap text-slate-700">{i.body}</p>
+                  <p className="text-sm break-words whitespace-pre-wrap text-slate-700"><LinkText text={i.body} /></p>
                 </div>
               </li>
             ))}

@@ -4,6 +4,7 @@ import { api } from '../lib/api.js';
 import { shortDate } from '../lib/format.js';
 import { usd } from '../lib/travelCalc.js';
 import { locationLabel } from '../components/LocationInput.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 const money = (n) => usd(n).replace('.00', '');
 const dates = (e) => {
@@ -74,7 +75,7 @@ function CandidateTable({ rows, actions }) {
                         {[['Description', e.description], ['Notes', e.notes], ['POC', [e.poc_name, e.poc_phone].filter(Boolean).join(' · ')],
                           ['Address', e.address], ['Found by', e.prompt ? `Search: “${e.prompt}”` : e.source === 'refresh' ? 'Scout refresh' : null]]
                           .filter(([, v]) => v).map(([k, v]) => (
-                            <div key={k}><dt className="font-semibold text-slate-500 uppercase">{k}</dt><dd className="whitespace-pre-wrap text-slate-700">{v}</dd></div>
+                            <div key={k}><dt className="font-semibold text-slate-500 uppercase">{k}</dt><dd className="whitespace-pre-wrap text-slate-700"><LinkText text={v} /></dd></div>
                           ))}
                       </dl>
                     </td>

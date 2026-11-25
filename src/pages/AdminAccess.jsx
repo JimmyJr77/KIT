@@ -20,6 +20,7 @@ import SiteFeedbackPanel from '../components/SiteFeedbackPanel.jsx';
 import BdTeamPanel from '../components/BdTeamPanel.jsx';
 import { TerritoryTags, TerritoryChecklist, TerritoriesPanel, saveUserTerritories } from '../components/Territories.jsx';
 import { ledTeams, TeamRoster } from './MyTeam.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 const isAdmin = (user) => user.role === 'admin';
 
@@ -152,7 +153,7 @@ function RequestsPanel({ onApproved }) {
               <div className="min-w-60 flex-1">
                 <div className="text-sm font-semibold text-slate-800">{q.first_name} {q.last_name}</div>
                 <div className="text-xs text-slate-500">{q.email} · <span title={fullStamp(q.created_at)}>requested {stamp(q.created_at)}</span></div>
-                {q.reason && <p className="mt-1 text-sm whitespace-pre-wrap text-slate-700">{q.reason}</p>}
+                {q.reason && <p className="mt-1 text-sm whitespace-pre-wrap text-slate-700"><LinkText text={q.reason} /></p>}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <select className="input w-28 py-1.5 text-sm" value={roles[q.id] || 'member'} onChange={(e) => setRoles({ ...roles, [q.id]: e.target.value })} aria-label={`Role for ${q.email}`}>

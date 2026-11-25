@@ -17,7 +17,7 @@ import { statusesFor, listPipelines, defaultPipeline, pipelineForNew, kitPipelin
 import '../sample/registry.js'; // sample_rows, so sample tickets aren't moved off KIT's own pipeline
 import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields, fieldValue } from '../services/pipedriveFields.js';
-import { PROCESS_TYPES, DECISIONS, SA_RESPONSES, SHARED_FIELDS, cleanReviews, cleanFields, cleanQualification, GATE_OVERRIDES, gateDecision, gateRuleText, QUALIFICATION, milestoneOf } from '../../src/lib/process.js';
+import { PROCESS_TYPES, DECISIONS, SA_RESPONSES, SHARED_FIELDS, cleanReviews, cleanFields, cleanQualification, GATE_OVERRIDES, gateDecision, gateRuleText, QUALIFICATION, milestoneOf, needsApproval } from '../../src/lib/process.js';
 import { listObstacles, strategyText } from '../strategy.js';
 import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTags, gateFlagger, gateOut, mayOverrideGate, ensureGateDraft, gateRule, saveGateRule, mayEditGateRule } from '../staffing.js';
 import { NEXT_STEP_SQL } from '../activities.js';
@@ -954,7 +954,8 @@ r.put('/process/:pid', (req, res) => {
   // has to be submitted again.
   const qualifies = !!milestoneOf(type).qualifies;
   let draft = qualifies && !!p.draft;
-  let saResponse = b.sa_response !== undefined ? (b.sa_response || null) : p.sa_response;
+  // Only a review that needs approval takes approve / deny / need more info; on anything else what's sent is ignored.
+  let saResponse = b.sa_response !== undefined && needsApproval(type) ? (b.sa_response || null) : p.sa_response;
   const override = overriding ? (b.gate_override || null) : p.gate_override;
   if (qualifies) {
     if (p.completed_at && !done) draft = true;

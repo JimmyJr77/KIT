@@ -16,7 +16,7 @@ import { recordAction, UNDO_HEADER } from '../actions.js';
 const r = Router();
 
 /** What an edited field is called in a recent action's summary. */
-const FIELD_WORDS = { text: 'name', activity_type: 'type', due_date: 'due date', due_time: 'time', assignee_id: 'assignee', waiting_client: 'waiting on client', video_call: 'video call', ticket_id: 'ticket' };
+const FIELD_WORDS = { text: 'name', activity_type: 'type', due_date: 'due date', due_time: 'time', assignee_id: 'assignee', waiting_client: 'waiting on client', greenfield: 'greenfield', video_call: 'video call', ticket_id: 'ticket' };
 /** An undo takes back the "completed" entry the action put on the week's board. */
 const unlogWork = (user, ticketId, summary) => db.prepare(`DELETE FROM work_log WHERE id = (SELECT id FROM work_log
   WHERE user_id = ? AND kind = 'task' AND ticket_id = ? AND summary = ? ORDER BY id DESC LIMIT 1)`).run(user.id, ticketId, String(summary).slice(0, 280));
@@ -43,7 +43,7 @@ function withDetails(rows) {
   const ranks = new Map();
   [...new Set(rows.map((a) => a.ticket_id))].forEach((t) => openOrder(t).forEach((id, i) => ranks.set(id, i + 1)));
   return rows.map(({ text, ...a }) => ({
-    ...a, subject: text, activity_type: a.activity_type || 'Task', done: !!a.done, flagged: !!a.flagged, waiting_client: !!a.waiting_client, rank: ranks.get(a.id) ?? null,
+    ...a, subject: text, activity_type: a.activity_type || 'Task', done: !!a.done, flagged: !!a.flagged, waiting_client: !!a.waiting_client, greenfield: !!a.greenfield, rank: ranks.get(a.id) ?? null,
     participants: people.filter((p) => p.task_id === a.id).map(({ task_id, ...c }) => c),
     // A weekly priority is the whole activity, or one of its subtasks: each lists its own cards.
     subtasks: subs.filter((s) => s.task_id === a.id).map((s) => ({ ...s, comment_count: count('subtask', s.id),
@@ -70,6 +70,9 @@ function clean(b, partial) {
   if (has('duration')) out.duration = /^\d{1,2}:\d{2}$/.test(b.duration || '') && b.duration !== '00:00' ? b.duration : null;
   if (has('flagged')) out.flagged = b.flagged ? 1 : 0;
   if (has('waiting_client')) out.waiting_client = b.waiting_client ? 1 : 0;
+  // Greenfield stands in for a due date: turning it on clears the date and time, and a due date takes it off.
+  if (has('greenfield')) out.greenfield = b.greenfield ? 1 : 0;
+  if (out.greenfield) { out.due_date = null; out.due_time = null; } else if (out.due_date) out.greenfield = 0;
   if (has('assignee_id')) out.assignee_id = Number(b.assignee_id) || null;
   if (has('ticket_id')) {
     const t = db.prepare('SELECT id FROM tickets WHERE id = ?').get(Number(b.ticket_id));
@@ -182,6 +185,18 @@ r.put('/:id', (req, res) => {
     });
   }
   res.json({ activity: one(k.id) });
+});
+
+/**
+ * Reset on a greenfield step: it's still being worked, so the ticket's clock for how long it's gone without activity
+ * starts over, as any entry on the ticket would start it.
+ */
+r.post('/:id/reset', (req, res) => {
+  const k = db.prepare('SELECT id, ticket_id, greenfield, done FROM ticket_tasks WHERE id = ?').get(req.params.id);
+  if (!k) return res.status(404).json({ error: 'Activity not found' });
+  if (!k.greenfield || k.done) return res.status(400).json({ error: 'Only an open greenfield step can be reset' });
+  touch(k.ticket_id);
+  res.json({ ok: true });
 });
 
 r.delete('/:id', (req, res) => {

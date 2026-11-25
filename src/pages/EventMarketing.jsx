@@ -11,6 +11,7 @@ import Avatar from '../components/Avatar.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import { MarketingButton } from '../components/MarketingRequestForm.jsx';
 import { RequestTies } from '../components/MarketingImpact.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 const money = (n) => usd(n).replace('.00', '');
 const dayLabel = (iso) => shortDate(iso, { weekday: 'long', month: 'short', day: 'numeric' });
@@ -55,13 +56,13 @@ export function SupportSection({ event, onUpdated }) {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   {q.title && <div className="font-semibold text-slate-900">{q.title}</div>}
-                  <p className="break-words whitespace-pre-wrap text-slate-800">{q.details}</p>
+                  <p className="break-words whitespace-pre-wrap text-slate-800"><LinkText text={q.details} /></p>
                 </div>
                 {q.status === 'accepted'
                   ? <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">Work ticket created</span>
                   : <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Waiting on Marketing</span>}
               </div>
-              {q.justification && <p className="mt-1 text-xs whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Justification:</span> {q.justification}</p>}
+              {q.justification && <p className="mt-1 text-xs whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Justification:</span> <LinkText text={q.justification} /></p>}
               {(q.for_ticket || q.tickets.length > 0 || q.meetings.length > 0) && <div className="mt-1.5"><RequestTies request={{ ...q, event_id: null }} /></div>}
               <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-400">
                 <Avatar user={q.requested_by} size="xs" />
@@ -148,7 +149,7 @@ export function MeetingsSection({ event, onUpdated, onSchedule }) {
                   {m.people.map((p) => <span key={p.id} className="chip py-0 text-[11px]" title={[p.role, p.organization].filter(Boolean).join(', ')}>{personName(p)}{p.organization ? ` · ${p.organization}` : ''}</span>)}
                 </div>
                 {m.users.length > 0 && <div className="mt-1 text-[11px] text-slate-500">From Knexus: {m.users.map(fullName).join(', ')}</div>}
-                {(m.objectives || m.notes) && <p className="mt-1 text-xs whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Objectives:</span> {m.objectives || m.notes}</p>}
+                {(m.objectives || m.notes) && <p className="mt-1 text-xs whitespace-pre-wrap text-slate-600"><span className="font-medium text-slate-500">Objectives:</span> <LinkText text={m.objectives || m.notes} /></p>}
                 {m.files.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
                     {m.files.map((file) => <a key={file.id} href={`/api/meetings/files/${file.id}`} className="flex items-center gap-1 text-xs text-brand-700 hover:underline"><Paperclip size={11} /> {file.name}</a>)}

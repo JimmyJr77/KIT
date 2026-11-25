@@ -17,6 +17,7 @@ const detail = (t) => [t.accounts?.join(', ') || t.organization, ...(t.ticket_ty
 /** " · $1,200,000" over the open pipeline tickets among these; nothing when they're all work tickets. */
 const pipelineTotal = (open) => { const bids = open.filter((t) => t.ticket_type !== 'work'); return bids.length ? ` · ${money(bids.reduce((s, t) => s + (t.value || 0), 0))}` : ''; };
 import { isClosed } from '../lib/lanes.js';
+import LinkText from './LinkText.jsx';
 // Words too common in agency names to match on by themselves.
 const GENERIC = new Set(['the', 'and', 'for', 'of', 'command', 'department', 'office', 'agency', 'systems', 'center', 'program', 'executive', 'directorate', 'division', 'service', 'services', 'administration', 'national', 'defense', 'force', 'air', 'u.s.', 'us']);
 
@@ -522,7 +523,7 @@ function StrategyCard({ n, strategy: s, edit, save, accountName }) {
     <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`group rounded-lg border border-slate-200 bg-white p-2 ${isDragging ? 'relative z-10 opacity-60 shadow-lg' : ''}`}>
       {edit ? <StrategyText rows={4} value={s.body} required label={`Foothold strategy ${n} for ${accountName}`} onSave={(body) => update({ body })} />
-        : <p className="text-sm whitespace-pre-wrap text-slate-700">{s.body}</p>}
+        : <p className="text-sm whitespace-pre-wrap text-slate-700"><LinkText text={s.body} /></p>}
       <div className="mt-1.5 mb-1 flex h-6 items-center justify-between">
         <span className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Status</span>
         {edit && (
@@ -535,7 +536,7 @@ function StrategyCard({ n, strategy: s, edit, save, accountName }) {
         )}
       </div>
       {edit ? <StrategyText rows={3} value={s.status || ''} label={`Status of strategy ${n}`} placeholder="Where does this stand? What’s next?" onSave={(status) => update({ status })} />
-        : s.status ? <p className="text-sm whitespace-pre-wrap text-slate-700">{s.status}</p> : <p className="text-sm text-slate-400">No status yet.</p>}
+        : s.status ? <p className="text-sm whitespace-pre-wrap text-slate-700"><LinkText text={s.status} /></p> : <p className="text-sm text-slate-400">No status yet.</p>}
     </li>
   );
 }

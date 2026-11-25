@@ -12,6 +12,7 @@ import Avatar from '../components/Avatar.jsx';
 import { contactName } from './ContactEditor.jsx';
 import { DrawerShell } from './TicketPlanning.jsx';
 import { MarketingButton } from '../components/MarketingRequestForm.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 // Pipedrive's activity types, each with its icon.
 export const TYPE_ICONS = { Call: Phone, Meeting: Users, Task: SquareCheck, Deadline: Clock, Email: Mail, Lunch: Utensils };
@@ -412,7 +413,7 @@ export function SubtaskList({ activity, ticketId, onChanged, compact }) {
             <div className="group flex items-start gap-2 rounded px-1 py-0.5 hover:bg-slate-50">
               <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600" checked={s.done} disabled={busy}
                 onChange={() => run(api.put(`/activities/subtasks/${s.id}`, { done: !s.done }))} aria-label={`Mark “${s.text}” ${s.done ? 'not done' : 'done'}`} />
-              <span className={`min-w-0 flex-1 text-sm ${s.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{s.text}</span>
+              <span className={`min-w-0 flex-1 text-sm ${s.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}><LinkText text={s.text} /></span>
               {s.cards?.length > 0 && (
                 <span className="mt-0.5 flex shrink-0 items-center gap-0.5 text-[11px] text-slate-400" title={`A weekly priority on its own: ${s.cards.map((c) => `${c.team_name}, week of ${shortDate(c.week_start)}`).join('; ')}`}>
                   <CalendarRange size={11} /> Priority
@@ -522,7 +523,7 @@ function ActivityComments({ comments, activity }) {
         <span title={fullStamp(m.created_at)}>· {stamp(m.created_at)}</span>
         {m.target_type === 'subtask' && subtask(m.target_id) && <span className="rounded bg-white px-1 text-violet-700 ring-1 ring-violet-200">on “{subtask(m.target_id)}”</span>}
       </div>
-      <p className="mt-0.5 text-sm whitespace-pre-wrap text-slate-800">{m.body}</p>
+      <p className="mt-0.5 text-sm whitespace-pre-wrap text-slate-800"><LinkText text={m.body} /></p>
     </div>
   );
   return <div className="mb-2 space-y-1.5">{comments.map((m) => <div key={m.id} className="space-y-1">{one(m)}{m.replies.map((x) => one(x, true))}</div>)}</div>;

@@ -4,6 +4,7 @@
 //   due today       flashing red, down-pointing arrow
 //   due in 1–3 days yellow, right-pointing arrow
 //   due later       green, right-pointing arrow
+//   greenfield      a green rounded square with three dots: an ongoing step with no due date on purpose
 // With no date, it's judged by age instead: green for its first week, yellow in its second, dark gray after that.
 import { todayIso, shortDate } from './format.js';
 
@@ -12,6 +13,7 @@ const daysBetween = (from, to) => Math.round((Date.parse(`${to}T00:00:00Z`) - Da
 
 export function nextStepState(step, today = todayIso()) {
   if (!step) return { tone: 'yellow', arrow: 'none', label: 'No next step' };
+  if (step.greenfield) return { tone: 'green', arrow: 'dots', label: 'Greenfield: ongoing, no due date' };
   if (step.due_date) {
     const days = daysBetween(today, step.due_date);
     const due = shortDate(step.due_date);

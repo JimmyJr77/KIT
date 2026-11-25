@@ -5,6 +5,7 @@ import { useApi } from '../lib/data.js';
 import { fullName, shortDate, todayIso } from '../lib/format.js';
 import SidePanel from './SidePanel.jsx';
 import { StatTile, ViewCard, BarList, compact, fullMoney } from './Charts.jsx';
+import LinkText from './LinkText.jsx';
 
 const longDate = (iso) => shortDate(iso, { month: 'short', day: 'numeric', year: 'numeric' });
 const RANGES = [['year', 'This year'], ['12m', 'Last 12 months'], ['quarter', 'This quarter'], ['all', 'All time'], ['custom', 'Custom range']];
@@ -107,7 +108,7 @@ function EntryList({ entries, canManage, onEdit }) {
               <tr key={e.id} className="border-b border-slate-100 align-top last:border-0">
                 <td className="px-3 py-2 whitespace-nowrap text-slate-600">{longDate(e.spent_on)}</td>
                 <td className="px-3 py-2">
-                  <div className="font-medium text-slate-800">{e.description}</div>
+                  <div className="font-medium text-slate-800"><LinkText text={e.description} /></div>
                   <div className="text-xs text-slate-500">{[e.category, e.vendor].filter(Boolean).join(' · ')}</div>
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-600">

@@ -15,6 +15,7 @@ import UserCombobox from '../components/UserCombobox.jsx';
 import MultiSelect from '../components/MultiSelect.jsx';
 import { DrawerShell } from './TicketPlanning.jsx';
 import { TYPE_ICONS } from './TicketActivities.jsx';
+import LinkText from '../components/LinkText.jsx';
 
 const money = (n) => usd(n).replace('.00', '');
 const wonOn = (utc) => (utc ? shortDate(parseUtc(utc).toLocaleDateString('en-CA'), { month: 'short', day: 'numeric', year: 'numeric' }) : '');
@@ -700,7 +701,7 @@ function ProjectNotes({ program: p, onChange, onError }) {
                     <button type="button" className="btn-primary px-2 py-1 text-xs" disabled={busy} onClick={() => call(() => api.put(`/delivery/notes/${n.id}`, { body: editing.body })).then(() => setEditing(null))}>Save</button>
                   </div>
                 </div>
-              ) : <p className="mt-0.5 whitespace-pre-wrap text-slate-800">{n.body}</p>}
+              ) : <p className="mt-0.5 whitespace-pre-wrap text-slate-800"><LinkText text={n.body} /></p>}
             </li>
           ))}
         </ul>

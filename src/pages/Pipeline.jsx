@@ -337,7 +337,7 @@ function Column({ column, onOpen, onOpenStep, dragId, now, last = false, width =
         <div className="flex items-baseline gap-1.5">
           <h2 className={`text-sm font-semibold ${column.key === NO_STAGE ? 'text-slate-500 italic' : 'text-slate-800'}`}>{column.label}</h2>
           <span className="text-xs text-slate-400">{column.tickets.length}</span>
-          {column.alias && <span className="rounded-full bg-violet-50 px-1.5 py-px text-[10px] font-medium whitespace-nowrap text-violet-700" title={`Your alias of ${column.alias.stage}. Only you see this column; for everyone else, and in reports, these tickets are in ${column.alias.stage}.`}>{column.alias.stage}</span>}
+          {column.alias && <span className="rounded-full bg-violet-50 px-1.5 py-px text-[10px] font-medium whitespace-nowrap text-violet-700" title={`Your own stage, part of ${column.alias.stage}. Only you see this column; for everyone else, and in reports, these tickets are in ${column.alias.stage}.`}>{column.alias.stage}</span>}
         </div>
         <span className="flex min-w-0 items-center gap-1">
           <span className="truncate text-xs font-medium text-emerald-700 tabular-nums">{total ? money(total) : ''}</span>

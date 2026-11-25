@@ -7,6 +7,7 @@ import { todayIso } from '../lib/format.js';
 import TicketTimeline from '../pages/TicketTimeline.jsx';
 import { TYPE_ICONS, WaitingIcon, when } from '../pages/TicketActivities.jsx';
 import { DataTable, StatTile } from './Charts.jsx';
+import LinkText from './LinkText.jsx';
 
 // Kept for the person signed in (see lib/stored.js), starting from what this browser had before.
 const usePref = (key, initial) => useStored(key.replace(/^kit\./, ''), initial, { valid: (v) => typeof v === 'string', legacy: key });
@@ -185,7 +186,7 @@ function Subtasks({ a, busy, run }) {
         <li key={s.id} className="flex items-start gap-2">
           <input type="checkbox" className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-brand-600" checked={s.done} disabled={busy}
             onChange={() => run(api.put(`/activities/subtasks/${s.id}`, { done: !s.done }))} aria-label={`Mark “${s.text}” ${s.done ? 'not done' : 'done'}`} />
-          <span className={`min-w-0 text-xs ${s.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{s.text}</span>
+          <span className={`min-w-0 text-xs ${s.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}><LinkText text={s.text} /></span>
         </li>
       ))}
     </ul>

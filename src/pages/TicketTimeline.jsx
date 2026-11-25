@@ -15,6 +15,7 @@ import { canEditTicket } from '../lib/ticketAccess.js';
 import TicketDetailsBox from './TicketDetailsBox.jsx';
 import ProcessTimeline from '../components/ProcessTimeline.jsx';
 import { nextGate } from '../lib/process.js';
+import LinkText from '../components/LinkText.jsx';
 
 const FILTERS = [
   ['all', 'Everything', () => true],
@@ -487,7 +488,7 @@ function Event({ event: e, ticket, onChanged, onOpenActivity, notePick }) {
                 </summary>
                 <div className="border-t border-slate-100 px-3 py-2">
                   {e.email.cc && <p className="mb-1 text-[11px] text-slate-500">Cc: {e.email.cc}</p>}
-                  <p className="text-sm break-words whitespace-pre-wrap text-slate-700">{e.email.body || 'No message body.'}</p>
+                  <p className="text-sm break-words whitespace-pre-wrap text-slate-700"><LinkText text={e.email.body || 'No message body.'} /></p>
                 </div>
               </details>
             </>

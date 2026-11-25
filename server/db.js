@@ -1128,6 +1128,9 @@ addColumn('ticket_tasks', 'goals', 'TEXT');
 addColumn('ticket_tasks', 'flagged', 'INTEGER NOT NULL DEFAULT 0');
 // The ball is in the client's court: shown on the ticket and its priority card, and left out of completion rates.
 addColumn('ticket_tasks', 'waiting_client', 'INTEGER NOT NULL DEFAULT 0');
+// Greenfield: an ongoing step that has no due date on purpose (a relationship kept warm, a standing check-in). It's one
+// or the other: a greenfield activity has no due date, and giving it one takes greenfield off.
+addColumn('ticket_tasks', 'greenfield', 'INTEGER NOT NULL DEFAULT 0');
 db.exec(`
 -- The people (contacts) taking part in an activity: Pipedrive's participants.
 CREATE TABLE IF NOT EXISTS task_participants (
@@ -1911,6 +1914,11 @@ CREATE TABLE IF NOT EXISTS main.label_deletes (
     setSetting('google_solution_tag_removed', '1');
   }
   keep({ name: GOOGLE_DEAL_TAG, color: 'yellow', kind: 'solution' });
+  // Teaming, in pink: an ordinary tag (it can be renamed, recolored or deleted), added once. One already there is left as it is.
+  if (!getSetting('teaming_tag_added')) {
+    db.prepare(`INSERT OR IGNORE INTO main.labels (name, color, position) VALUES ('Teaming', 'pink', (SELECT COALESCE(MAX(position) + 1, 0) FROM main.labels))`).run();
+    setSetting('teaming_tag_added', '1');
+  }
 }
 // Nothing already on a ticket is retagged: these are new options, and people choose which tickets get them.
 

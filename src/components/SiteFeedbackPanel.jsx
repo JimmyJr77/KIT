@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { MessageSquareText, Archive, ArchiveRestore, Trash2, Check } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { fullName, stamp, fullStamp } from '../lib/format.js';
+import LinkText from './LinkText.jsx';
 
 const FILTERS = [
   ['open', 'Open'],
@@ -83,7 +84,7 @@ export default function SiteFeedbackPanel({ feedback }) {
                     {' · '}<span title={fullStamp(f.created_at)}>{stamp(f.created_at)}</span>
                     {f.path && <>{' · '}<Link to={f.path} className="font-mono text-brand-600 hover:underline">{f.path}</Link></>}
                   </div>
-                  <p className={`mt-1 text-sm whitespace-pre-wrap ${done ? 'text-slate-500 line-through decoration-slate-300' : 'text-slate-700'}`}>{f.message}</p>
+                  <p className={`mt-1 text-sm whitespace-pre-wrap ${done ? 'text-slate-500 line-through decoration-slate-300' : 'text-slate-700'}`}><LinkText text={f.message} /></p>
                   {(done || archived) && (
                     <div className="mt-1 text-[11px] text-slate-400">
                       {done && <span title={fullStamp(f.done_at)}>Done {f.done_by ? `by ${fullName(f.done_by)} ` : ''}{stamp(f.done_at)}</span>}

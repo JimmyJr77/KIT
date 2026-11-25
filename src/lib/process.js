@@ -96,6 +96,9 @@ export const STAFFING_EVENTS = [
       ['past_performance', 'Past performance volume', 'Relevant contracts as the RFP asks for them: scope, size, recency, customer references'],
       ['price', 'Price / cost volume', 'Pricing by CLIN and period, the basis of estimate and pricing narrative, with CEO pricing approval'],
     ] },
+  // Anything a solution architect is staffed to that isn't one of the above: the Request says what it is. It can come at
+  // any stage, has no blocks of its own, and needs no approval.
+  { type: 'Other', tag: 'Other', phase: 'Qualify & Gate', about: 'Any other work a solution architect is staffed to; the request says what’s needed', fields: [] },
 ];
 // Milestones recorded before staffing events replaced them. They keep their type; new ones can't be made.
 const EARLIER = [
@@ -143,12 +146,12 @@ export const criticalityOf = (key) => CRITICALITY.find((c) => c.key === key) || 
 
 /**
  * The staffing events a ticket can be dropped into when dragged out of its stage on the board, by the stage its reports
- * count it as. Stages not named here offer every one.
+ * count it as. Stages not named here offer every one. Other is offered in every stage.
  */
 export const BUCKETS_BY_STAGE = {
-  Prospecting: ['RFI Response', 'White Paper', 'Initial Gate Review'],
-  Qualified: ['RFI Response', 'White Paper'],
-  Capture: ['RFI Response', 'White Paper', 'Final Gate Review', 'Statement of Objectives', 'Statement of Work', 'Rough Order of Magnitude', 'Proposal'],
+  Prospecting: ['RFI Response', 'White Paper', 'Initial Gate Review', 'Other'],
+  Qualified: ['RFI Response', 'White Paper', 'Other'],
+  Capture: ['RFI Response', 'White Paper', 'Final Gate Review', 'Statement of Objectives', 'Statement of Work', 'Rough Order of Magnitude', 'Proposal', 'Other'],
 };
 /**
  * The review gate a ticket is headed for next, by the stage its reports count it as: the Initial Gate Review out of
@@ -174,6 +177,11 @@ export const SA_RESPONSES = [
   { key: 'deny', label: 'Deny', tone: 'text-red-700' },
   { key: 'more_info', label: 'Need more info', tone: 'text-amber-700' },
 ];
+/**
+ * Whether a staffing event's Solution Architect Response ends in approve / deny / need more info: only the reviews where a
+ * decision is taken (`gate`). An RFI response, a white paper, an SOO, an SOW or a proposal is written and answered, not approved.
+ */
+export const needsApproval = (type) => !!milestoneOf(type).gate;
 /** The process_field of a link or document attached to the Solution Architect Response. */
 export const SA_FIELD = 'sa_response';
 /** The process_field of a link or document attached to the Request (BD Notes on an Initial Gate Review). */
@@ -316,7 +324,7 @@ export const DECISIONS = ['Proceed', 'Revise', 'No-Bid'];
  */
 export const REVIEW_AREAS = [
   { key: 'strategy', label: 'SVP of Growth & Leadership', short: 'Leadership', about: 'Gate decisions and final approval', at: ['Initial Gate Review', 'Final Gate Review'] },
-  { key: 'technical', label: 'Solution Architect & Technical', short: 'Technical', about: 'Feasibility, capabilities and gaps; technical input and validation', at: ['RFI Response', 'White Paper', 'Initial Gate Review', 'Statement of Objectives', 'Statement of Work', 'Proposal', 'RFP', 'Color Team Review'] },
+  { key: 'technical', label: 'Solution Architect & Technical', short: 'Technical', about: 'Feasibility, capabilities and gaps; technical input and validation', at: ['RFI Response', 'White Paper', 'Initial Gate Review', 'Statement of Objectives', 'Statement of Work', 'Proposal', 'RFP', 'Color Team Review', 'Other'] },
   { key: 'pricing', label: 'Pricing / Finance', short: 'Pricing', about: 'ROM, pricing and Green Team', at: ['Initial Gate Review', 'Rough Order of Magnitude', 'Final Gate Review'] },
   { key: 'support', label: 'Proposal Manager, Coordinator & Contributors', short: 'Proposal team', about: 'Workspace, outline, drafting and reviews', at: ['RFP', 'Statement of Work', 'Color Team Review', 'Final Gate Review', 'Proposal'] },
 ];
