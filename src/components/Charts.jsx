@@ -47,8 +47,9 @@ const VIEWS = [['table', 'Table', Table2], ['bar', 'Bar chart', BarChart3], ['ti
 /**
  * A titled card that shows the same numbers as a table, a bar chart or a timeline, whichever the viewer picks. Pass the
  * views it has: `table` (DataTable props), `bar` and `timeline` (elements). It opens on `initial`, else the bar chart.
+ * `actions` sit beside the view switch.
  */
-export function ViewCard({ title, subtitle, table, bar, timeline, initial, footer, className = '' }) {
+export function ViewCard({ title, subtitle, table, bar, timeline, initial, footer, actions, className = '' }) {
   const has = { table: !!table, bar: !!bar, timeline: !!timeline };
   const [view, setView] = useState(has[initial] ? initial : has.bar ? 'bar' : has.timeline ? 'timeline' : 'table');
   return (
@@ -58,6 +59,7 @@ export function ViewCard({ title, subtitle, table, bar, timeline, initial, foote
           <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
           {subtitle && <p className="text-xs text-slate-500">{subtitle}</p>}
         </div>
+        {actions}
         <div className="flex shrink-0 rounded-md bg-white p-0.5 ring-1 ring-slate-200" role="radiogroup" aria-label={`Show ${title} as`}>
           {VIEWS.filter(([k]) => has[k]).map(([k, label, Icon]) => (
             <button key={k} type="button" role="radio" aria-checked={view === k} title={label} aria-label={label} onClick={() => setView(k)}

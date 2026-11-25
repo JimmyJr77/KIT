@@ -303,6 +303,41 @@ export function trends({ from, to, interval = 'month', by = 'stage', f = {} }) {
   return { points, interval, by, series: [...series.values()] };
 }
 
+/**
+ * New entries into a stage, month by month: for each of `points` (month ends, as trends() gives them), the pipeline
+ * tickets that came into `stage` for the first time that month, and their value as it stood at the point. A ticket
+ * counts once, in the month it first got there, and only if it hadn't been further along before: one moved back into
+ * the stage from a later one isn't a new entry. What happened to it afterwards (moved on, won, lost) doesn't take it out.
+ */
+export function newInStage({ points, stage, f = {} }) {
+  const history = db.prepare(`SELECT h.* FROM ticket_history h JOIN tickets t ON t.id = h.ticket_id WHERE ${inBooks()} ORDER BY h.ticket_id, h.changed_at, h.id`).all();
+  const stager = reportStager();
+  const byTicket = new Map();
+  history.forEach((h) => {
+    h.pipeline_status = stager.ofTicket(h.ticket_id, h.pipeline_status);
+    if (!byTicket.has(h.ticket_id)) byTicket.set(h.ticket_id, []);
+    byTicket.get(h.ticket_id).push(h);
+  });
+  const later = new Set([...OPEN_STAGES.slice(OPEN_STAGES.indexOf(stage) + 1), ...CLOSED_STAGES]);
+  const at = new Map(points.map((p, i) => [p.slice(0, 7), i]));
+  const values = points.map(() => 0);
+  const counts = points.map(() => 0);
+  byTicket.forEach((rows) => {
+    const first = rows.findIndex((r) => r.pipeline_status === stage);
+    if (first < 0 || rows.slice(0, first).some((r) => later.has(r.pipeline_status))) return;
+    const i = at.get(rows[first].changed_at.slice(0, 7));
+    if (i == null) return;
+    // The ticket as it stood at the point: a value filled in later that month counts.
+    const cutoff = `${points[i]} 23:59:59`;
+    let state = rows[first];
+    for (const r of rows.slice(first)) { if (r.changed_at <= cutoff) state = r; else break; }
+    if (!matches(state, f)) return;
+    values[i] += state.value || 0;
+    counts[i] += 1;
+  });
+  return { values, counts };
+}
+
 /** Book-to-bill per quarter, three ways: conventional (that quarter), trailing twelve months, and funded (obligations ÷ billed). */
 export function bookToBillSeries(deals, qs) {
   const funding = deals.flatMap((p) => p.fundings);

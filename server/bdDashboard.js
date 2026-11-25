@@ -13,7 +13,7 @@ import { hasTag } from './leads.js';
 import { weekStartFor } from './routes/priorities.js';
 import {
   bids, contracts, expected, byStage, qualifiedBy, bookingsByQuarter, backlog, bookToBill, bookToBillSeries, fundedTtm, pipelineByPerson,
-  targets, qualifiedTargets, quartersTarget, trailingQuarters, trends, quarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES, isOpen, isWon,
+  targets, qualifiedTargets, quartersTarget, trailingQuarters, trends, newInStage, quarters, quarterRange, localToday, QUALIFIED_STAGES, OPEN_STAGES, isOpen, isWon,
 } from './financials.js';
 import { spendEntries, spendFor } from './marketingSpend.js';
 import { mondayOf, moveCounts } from './tacticalReport.js';
@@ -257,7 +257,9 @@ export function bdDashboard(s, basis = 'calendar') {
       tagged: taggedByStage(list.filter(isOpen)),
       googleWon: googleWon(list),
       // Top of the funnel: the open value sitting in Prospecting at the end of each of the last 12 months, and today.
-      prospecting: { points: tr.points, values: tr.series.find((x) => x.key === 'Prospecting')?.values || tr.points.map(() => 0) },
+      // `added` is what came in new each month: first-time entries only, not tickets moved back from a later stage.
+      prospecting: { points: tr.points, values: tr.series.find((x) => x.key === 'Prospecting')?.values || tr.points.map(() => 0),
+        added: newInStage({ points: tr.points, stage: 'Prospecting', f: { director: s.director, territory: s.territory } }) },
       travelVariance: travelVariance(s, today),
     },
     basis: t4q ? 't4q' : 'calendar',

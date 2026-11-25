@@ -301,29 +301,48 @@ function TaggedByStage({ tagged }) {
 }
 
 /**
- * Top of the funnel: the value of the open pipeline tickets in Prospecting at the end of each month (the last point is
- * today), as a table with the change on the month before, a bar chart or a line.
+ * Top of the funnel, month by month (the last point is today), as a table, a bar chart or a line. Two readings: Total,
+ * the value of the open pipeline tickets sitting in Prospecting at each month's end, with the change on the month
+ * before; and Net new, the value of the tickets that came into Prospecting for the first time that month (one moved
+ * back from a later stage isn't counted again).
  */
 function ProspectingByMonth({ trend }) {
+  const [show, setShow] = useState('total');
   if (!trend?.points.length) return null;
-  const { points, values } = trend;
+  const { points, added } = trend;
+  const net = show === 'new' && !!added;
+  const values = net ? added.values : trend.values;
   const today = todayIso();
   const month = (d) => shortDate(d, { month: 'short', year: '2-digit' });
   const labels = points.map((d, i) => (i === points.length - 1 && d === today ? 'Now' : month(d)));
   const rows = points.map((d, i) => {
     const before = i ? values[i - 1] : null;
-    return { month: i === points.length - 1 && d === today ? `${month(d)} (so far)` : month(d), value: values[i], change: before == null ? null : values[i] - before,
+    return { month: i === points.length - 1 && d === today ? `${month(d)} (so far)` : month(d), value: values[i], count: added?.counts[i], change: before == null ? null : values[i] - before,
       rate: before ? (values[i] - before) / before : null };
   });
   const last = rows[rows.length - 1];
+  const label = net ? 'Net new in Prospecting' : 'Prospecting';
   return (
     <ViewCard className="mt-4" title="Prospecting value, month over month" initial="timeline"
-      subtitle={`Top of the funnel: the total value of open pipeline tickets in Prospecting at each month's end. ${compact(last.value)} today${last.change == null ? '' : `, ${signed(last.change)} on last month`}.`}
-      table={{ columns: [{ key: 'month', label: 'Month' }, { key: 'value', label: 'Prospecting value', align: 'right', format: fullMoney },
-        { key: 'change', label: 'Change', align: 'right', format: (v) => (v == null ? '—' : <span className={v < -0.5 ? 'text-red-700' : v > 0.5 ? 'text-emerald-700' : ''}>{signed(v)}</span>) },
-        { key: 'rate', label: '% change', align: 'right', format: (v) => (v == null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v * 100).toFixed(1)}%`) }], rows }}
-      bar={<StackedColumns categories={labels} height={150} series={[{ key: 'p', label: 'Prospecting', color: SERIES[0], values }]} />}
-      timeline={<LineChart points={points} labels={labels} height={180} series={[{ key: 'p', label: 'Prospecting', values }]} />} />
+      subtitle={net
+        ? `Top of the funnel: the value of the pipeline tickets that came into Prospecting for the first time each month. One moved back from a later stage isn't counted again. ${compact(last.value)} across ${plural(last.count, 'new PL ticket')} so far this month.`
+        : `Top of the funnel: the total value of open pipeline tickets in Prospecting at each month's end. ${compact(last.value)} today${last.change == null ? '' : `, ${signed(last.change)} on last month`}.`}
+      actions={added && (
+        <div className="flex h-7 shrink-0 rounded-md bg-white p-0.5 text-xs ring-1 ring-slate-200" role="radiogroup" aria-label="Show Prospecting as">
+          {[['total', 'Total'], ['new', 'Net new']].map(([k, l]) => (
+            <button key={k} type="button" role="radio" aria-checked={show === k} onClick={() => setShow(k)}
+              className={`rounded px-2 ${show === k ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}>{l}</button>
+          ))}
+        </div>
+      )}
+      table={{ columns: net
+        ? [{ key: 'month', label: 'Month' }, { key: 'count', label: 'New PL tickets', align: 'right' }, { key: 'value', label: 'Net new value', align: 'right', format: fullMoney }]
+        : [{ key: 'month', label: 'Month' }, { key: 'value', label: 'Prospecting value', align: 'right', format: fullMoney },
+          { key: 'change', label: 'Change', align: 'right', format: (v) => (v == null ? '—' : <span className={v < -0.5 ? 'text-red-700' : v > 0.5 ? 'text-emerald-700' : ''}>{signed(v)}</span>) },
+          { key: 'rate', label: '% change', align: 'right', format: (v) => (v == null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v * 100).toFixed(1)}%`) }],
+        rows, foot: net ? { month: 'All months', count: added.counts.reduce((a, b) => a + b, 0), value: values.reduce((a, b) => a + b, 0) } : undefined }}
+      bar={<StackedColumns categories={labels} height={150} series={[{ key: 'p', label, color: SERIES[net ? 2 : 0], values }]} />}
+      timeline={<LineChart points={points} labels={labels} height={180} series={[{ key: 'p', label, values }]} />} />
   );
 }
 
