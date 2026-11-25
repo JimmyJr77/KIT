@@ -1,4 +1,5 @@
-// Activities are a ticket's priorities, in order (ticket_tasks.position): the top open one is the ticket's next step.
+// Activities are a ticket's priorities, in order: the top open one is the ticket's next step. The order is the default one
+// (activityOrderSql) until someone sets their own by hand, which ticket_tasks.position keeps.
 // A priority card is one activity placed in someone's week, and keeps the activity's subject, due date, subtasks and
 // done state as its own title, due date, checklist and completion, so everything that reads cards keeps working.
 import { db, json } from './db.js';
@@ -9,8 +10,33 @@ export const ACTIVITY_PRIORITIES = ['High', 'Medium', 'Low'];
 /** Where a new activity goes on its ticket: the bottom. */
 export const nextPosition = (ticketId) => db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM ticket_tasks WHERE ticket_id = ?').get(ticketId).p;
 
+/**
+ * ORDER BY terms putting a ticket's activities (alias `k`) in its priority order. By default: weekly priorities first, the
+ * current week's on top and later weeks under it; then the rest by due date, the nearest (or longest overdue) first, and
+ * the ones with no date last. A ticket whose order was set by hand (tickets.activity_order_manual) keeps that order.
+ * A weekly priority is an activity on a priority board this week or a coming one (weeks start within the last seven days).
+ */
+export function activityOrderSql(k = 'k') {
+  const manual = `(SELECT ot.activity_order_manual FROM tickets ot WHERE ot.id = ${k}.ticket_id)`;
+  const week = `(SELECT MIN(pc.week_start) FROM priority_cards pc WHERE pc.activity_id = ${k}.id AND pc.archived_at IS NULL AND pc.week_start >= date('now', 'localtime', '-6 days'))`;
+  const auto = (sql, held) => `CASE WHEN ${manual} THEN ${held} ELSE ${sql} END`;
+  return [
+    auto(0, `${k}.position`),
+    auto(`${week} IS NULL`, 0), auto(`COALESCE(${week}, '')`, "''"),
+    auto(`${k}.due_date IS NULL`, 0), auto(`COALESCE(${k}.due_date, '') || ' ' || COALESCE(${k}.due_time, '99:99')`, "''"),
+    `${k}.position`, `${k}.id`,
+  ].join(', ');
+}
+
 /** Open activity ids on a ticket, top priority first. */
-export const openOrder = (ticketId) => db.prepare('SELECT id FROM ticket_tasks WHERE ticket_id = ? AND done = 0 ORDER BY position, id').all(ticketId).map((k) => k.id);
+export const openOrder = (ticketId) => db.prepare(`SELECT k.id FROM ticket_tasks k WHERE k.ticket_id = ? AND k.done = 0 ORDER BY ${activityOrderSql()}`).all(ticketId).map((k) => k.id);
+/** Whether a ticket's activities are in an order someone set by hand, rather than the default one. */
+export const orderIsManual = (ticketId) => !!db.prepare('SELECT activity_order_manual AS m FROM tickets WHERE id = ?').get(ticketId)?.m;
+/** Back to the default order: weekly priorities, then the nearest due date. */
+export function useDefaultOrder(ticketId) {
+  db.prepare('UPDATE tickets SET activity_order_manual = 0 WHERE id = ?').run(ticketId);
+  syncMilestone(ticketId);
+}
 
 /** An open activity's place among its ticket's open activities (1 = the next step), or null when it's done. */
 export function rankOf(activityId) {
@@ -19,7 +45,10 @@ export function rankOf(activityId) {
   return openOrder(k.ticket_id).indexOf(Number(activityId)) + 1 || null;
 }
 
-/** Put a ticket's open activities in this order (ids not listed keep their place after them); done ones follow. */
+/**
+ * Put a ticket's open activities in this order (ids not listed keep their place after them); done ones follow. The ticket's
+ * order is then one set by hand, and stays as it's put until it's sent back to the default.
+ */
 export function setOrder(ticketId, ids) {
   const open = openOrder(ticketId);
   const wanted = ids.map(Number).filter((id) => open.includes(id));
@@ -27,14 +56,17 @@ export function setOrder(ticketId, ids) {
   const done = db.prepare('SELECT id FROM ticket_tasks WHERE ticket_id = ? AND done = 1 ORDER BY position, id').all(ticketId).map((k) => k.id);
   const set = db.prepare('UPDATE ticket_tasks SET position = ? WHERE id = ?');
   [...order, ...done].forEach((id, i) => set.run(i, id));
+  db.prepare('UPDATE tickets SET activity_order_manual = 1 WHERE id = ?').run(ticketId);
   syncMilestone(ticketId);
 }
 
 /**
  * Some of a ticket's activities, in the order given, take the places those same activities held: the rest of the list
- * doesn't move. This is how reordering priorities on the board reorders them on their ticket.
+ * doesn't move. This is how reordering priorities on the board reorders them on their ticket, where the ticket's order is
+ * one set by hand: a ticket in the default order stays in it.
  */
 export function reorderWithin(ticketId, ids) {
+  if (!orderIsManual(ticketId)) return false;
   const open = openOrder(ticketId);
   const moving = ids.map(Number).filter((id) => open.includes(id));
   if (moving.length < 2) return false;
@@ -87,7 +119,7 @@ export function setSubtasksFromChecklist(activityId, list, userId) {
 
 /** The win assessment's "Next milestone" follows the ticket's next step. */
 export function syncMilestone(ticketId) {
-  const next = db.prepare('SELECT text FROM ticket_tasks WHERE ticket_id = ? AND done = 0 ORDER BY position, id LIMIT 1').get(ticketId);
+  const next = db.prepare(`SELECT k.text FROM ticket_tasks k WHERE k.ticket_id = ? AND k.done = 0 ORDER BY ${activityOrderSql()} LIMIT 1`).get(ticketId);
   const t = db.prepare('SELECT assessment FROM tickets WHERE id = ?').get(ticketId);
   if (!next || !t) return;
   const a = json.parse(t.assessment, {});
@@ -98,4 +130,4 @@ export function syncMilestone(ticketId) {
 
 /** SQL for a ticket's next step as JSON (or null), for ticket lists. `t` is the tickets alias. */
 export const NEXT_STEP_SQL = `(SELECT json_object('id', k.id, 'subject', k.text, 'due_date', k.due_date, 'due_time', k.due_time, 'created_at', k.created_at, 'waiting_client', k.waiting_client, 'greenfield', k.greenfield)
-  FROM ticket_tasks k WHERE k.ticket_id = t.id AND k.done = 0 ORDER BY k.position, k.id LIMIT 1)`;
+  FROM ticket_tasks k WHERE k.ticket_id = t.id AND k.done = 0 ORDER BY ${activityOrderSql()} LIMIT 1)`;

@@ -4,7 +4,7 @@
 // yet won, lost or archived), except this week's priorities, which are whatever is on the person's cards.
 import { Router } from 'express';
 import { db } from '../db.js';
-import { openOrder, subtasksOf } from '../activities.js';
+import { openOrder, subtasksOf, activityOrderSql } from '../activities.js';
 import { localToday } from '../financials.js';
 import { addDays } from '../../src/lib/travelCalc.js';
 import { priorityAccounts } from './priorityAccounts.js';
@@ -20,7 +20,7 @@ function tasks(where, params, withDone) {
       u.first_name || ' ' || u.last_name AS who, t.opportunity_title AS ticket, t.organization, t.pipeline_status AS stage
     FROM ticket_tasks k JOIN tickets t ON t.id = k.ticket_id LEFT JOIN users u ON u.id = k.assignee_id
     WHERE ${where} ${withDone ? '' : 'AND k.done = 0'}
-    ORDER BY k.done, CASE WHEN k.done THEN k.done_at END DESC, k.position, k.id`).all(...params);
+    ORDER BY k.done, CASE WHEN k.done THEN k.done_at END DESC, ${activityOrderSql()}`).all(...params);
   const subs = subtasksOf(rows.map((a) => a.id)).filter((x) => withDone || !x.done);
   const nextSteps = new Map();
   const nextOf = (ticket) => {

@@ -1128,6 +1128,9 @@ addColumn('ticket_tasks', 'goals', 'TEXT');
 addColumn('ticket_tasks', 'flagged', 'INTEGER NOT NULL DEFAULT 0');
 // The ball is in the client's court: shown on the ticket and its priority card, and left out of completion rates.
 addColumn('ticket_tasks', 'waiting_client', 'INTEGER NOT NULL DEFAULT 0');
+// A ticket's open activities are in the default order (weekly priorities first, then the nearest due date; see
+// activityOrderSql in activities.js) until someone drags them into an order of their own: then ticket_tasks.position holds.
+addColumn('tickets', 'activity_order_manual', 'INTEGER NOT NULL DEFAULT 0');
 // Greenfield: an ongoing step that has no due date on purpose (a relationship kept warm, a standing check-in). It's one
 // or the other: a greenfield activity has no due date, and giving it one takes greenfield off.
 addColumn('ticket_tasks', 'greenfield', 'INTEGER NOT NULL DEFAULT 0');

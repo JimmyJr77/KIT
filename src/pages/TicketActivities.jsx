@@ -42,7 +42,8 @@ const overdue = (a) => !a.done && a.due_date && a.due_date < today();
 
 /**
  * The Activity section on a ticket: calls, meetings, lunches and so on, as in Pipedrive. Open activities are the
- * ticket's priorities, in order: drag them to reorder, and the top one is the ticket's next step. Each is a primary task
+ * ticket's priorities, in order: weekly priorities first (this week's on top), then the nearest due date, unless someone
+ * drags them into an order of their own. The top one is the ticket's next step. Each is a primary task
  * with its subtasks under it, to check off and add to right here; select one to open all its details and comments.
  */
 export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialId }) {
@@ -88,7 +89,12 @@ export function ActivitiesDrawer({ ticket, onClose, onChanged, onDirty, initialI
         {open.length > 0 && (
           <section>
             <h4 className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">To do, in priority order</h4>
-            <p className="mb-1.5 text-[11px] text-slate-400">Drag to reorder. The top one is this {ticket.ticket_type === 'account' ? 'account' : 'ticket'}’s next step.</p>
+            <p className="mb-1.5 text-[11px] text-slate-400">
+              {data.manual_order
+                ? <>In the order set by hand. <button type="button" className="font-medium text-brand-700 hover:underline" onClick={async () => { await api.put('/activities/order', { ticket_id: ticket.id, auto: true }); changed(); }}>Back to the default order</button>. </>
+                : 'Weekly priorities first, this week’s on top, then the nearest due date. Drag to set your own order. '}
+              The top one is this {ticket.ticket_type === 'account' ? 'account' : 'ticket'}’s next step.
+            </p>
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={open.map((a) => a.id)} strategy={verticalListSortingStrategy}>
                 <ol className="space-y-1.5">

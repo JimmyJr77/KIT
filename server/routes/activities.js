@@ -7,7 +7,7 @@ import { db } from '../db.js';
 import { recordWork, recordTicketUpdate } from '../worklog.js';
 import { awardTokens } from '../race.js';
 import {
-  ACTIVITY_TYPES, ACTIVITY_PRIORITIES, nextPosition, openOrder, setOrder, subtasksOf, mirrorCards, syncMilestone,
+  ACTIVITY_TYPES, ACTIVITY_PRIORITIES, nextPosition, openOrder, setOrder, subtasksOf, mirrorCards, syncMilestone, activityOrderSql, orderIsManual, useDefaultOrder,
 } from '../activities.js';
 import { COMMENT_SQL, commentOut } from './tickets.js';
 import { queueDelete } from '../services/pipedrive.js';
@@ -88,12 +88,15 @@ const setParticipants = (id, ids) => {
   [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter(Boolean))].forEach((c) => add.run(id, c));
 };
 
-/** ?ticket=ID: one ticket's activities. Open ones in priority order (the first is the next step), then done ones, latest first. */
+/**
+ * ?ticket=ID: one ticket's activities. Open ones in priority order (the first is the next step), then done ones, latest
+ * first. `manual_order` says the open ones are in an order set by hand rather than the default.
+ */
 r.get('/', (req, res) => {
   const ticket = Number(req.query.ticket);
   if (!ticket) return res.status(400).json({ error: 'Which ticket?' });
-  const rows = db.prepare(`${SELECT} WHERE k.ticket_id = ? ORDER BY k.done, CASE WHEN k.done THEN k.done_at END DESC, k.position, k.id`).all(ticket);
-  res.json({ activities: withDetails(rows), types: ACTIVITY_TYPES, priorities: ACTIVITY_PRIORITIES });
+  const rows = db.prepare(`${SELECT} WHERE k.ticket_id = ? ORDER BY k.done, CASE WHEN k.done THEN k.done_at END DESC, ${activityOrderSql()}`).all(ticket);
+  res.json({ activities: withDetails(rows), manual_order: orderIsManual(ticket), types: ACTIVITY_TYPES, priorities: ACTIVITY_PRIORITIES });
 });
 
 /** One activity with the comments on it and its subtasks (each with its replies), oldest first. */
@@ -129,11 +132,14 @@ r.post('/', (req, res) => {
   res.json({ activity: one(id) });
 });
 
-/** Body: { ticket_id, ids }. The ticket's open activities in this order; the first is its next step. */
+/**
+ * Body: { ticket_id, ids }. The ticket's open activities in this order, set by hand; the first is its next step.
+ * { ticket_id, auto: true } instead puts them back in the default order (weekly priorities, then the nearest due date).
+ */
 r.put('/order', (req, res) => {
   const ticketId = Number(req.body?.ticket_id);
   if (!db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(ticketId)) return res.status(404).json({ error: 'Ticket not found' });
-  db.transaction(() => { setOrder(ticketId, Array.isArray(req.body?.ids) ? req.body.ids : []); touch(ticketId); })();
+  db.transaction(() => { if (req.body?.auto) useDefaultOrder(ticketId); else setOrder(ticketId, Array.isArray(req.body?.ids) ? req.body.ids : []); touch(ticketId); })();
   res.json({ ok: true });
 });
 
