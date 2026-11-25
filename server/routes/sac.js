@@ -7,7 +7,7 @@ import { db, json } from '../db.js';
 import { reportStager, listPipelines } from '../pipelines.js';
 import { canEditTicket } from '../../src/lib/ticketAccess.js';
 import { ticketEditDenied } from './tickets.js';
-import { addStaffingEvent, staffFromTags, gateFlagger, gateOut, gateRule } from '../staffing.js';
+import { addStaffingEvent, staffFromTags, gateFlagger, gateOut, gateRule, mayApproveForSa } from '../staffing.js';
 import { PROCESS_TYPES, cleanReviews } from '../../src/lib/process.js';
 
 const r = Router();
@@ -59,7 +59,7 @@ const solutionArchitects = () => db.prepare(`SELECT DISTINCT u.id, u.first_name,
   JOIN user_teams ut ON ut.user_id = u.id JOIN teams tm ON tm.id = ut.team_id
   WHERE tm.name = 'Technical Solutioning' AND u.active = 1 ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE`).all();
 
-r.get('/', (req, res) => res.json({ rows: list(req.user, { done: req.query.done === '1' }), can_rank_master: ranksMaster(req.user), architects: solutionArchitects() }));
+r.get('/', (req, res) => res.json({ rows: list(req.user, { done: req.query.done === '1' }), can_rank_master: ranksMaster(req.user), can_approve_for_sa: mayApproveForSa(req.user), architects: solutionArchitects() }));
 
 /**
  * What the board needs to offer buckets: the stage each pipeline's stages count as in reports (a KIT-added stage blended

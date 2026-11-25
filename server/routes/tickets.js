@@ -19,7 +19,7 @@ import { queueDelete } from '../services/pipedrive.js';
 import { fieldsOf, customDealFields, fieldValue } from '../services/pipedriveFields.js';
 import { PROCESS_TYPES, DECISIONS, SA_RESPONSES, SHARED_FIELDS, cleanReviews, cleanFields, cleanQualification, GATE_OVERRIDES, gateDecision, gateRuleText, QUALIFICATION, milestoneOf, needsApproval } from '../../src/lib/process.js';
 import { listObstacles, strategyText } from '../strategy.js';
-import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTags, gateFlagger, gateOut, mayOverrideGate, ensureGateDraft, gateRule, saveGateRule, mayEditGateRule } from '../staffing.js';
+import { addStaffingEvent, queueFromTags, isCriticality, settleTag, staffFromTags, gateFlagger, gateOut, mayOverrideGate, ensureGateDraft, gateRule, saveGateRule, mayEditGateRule, mayApproveForSa } from '../staffing.js';
 import { NEXT_STEP_SQL } from '../activities.js';
 import { canEditTicket, ownerOnlyMessage } from '../../src/lib/ticketAccess.js';
 import { focusTickets } from '../focus.js';
@@ -897,7 +897,7 @@ export function listProcess(ticketId) {
 
 r.get('/:id/process', (req, res) => {
   if (!ticketRow(req.params.id)) return res.status(404).json({ error: 'Ticket not found' });
-  res.json({ steps: listProcess(req.params.id), types: PROCESS_TYPES, gate_rule: gateRuleText(gateRule()) });
+  res.json({ steps: listProcess(req.params.id), types: PROCESS_TYPES, gate_rule: gateRuleText(gateRule()), can_approve_for_sa: mayApproveForSa(req.user) });
 });
 
 /** Body: { step_type, step_date? (the due date), criticality? }. Staffs the ticket: the event is made, the ticket tagged for it, and it joins the SAC list. */
@@ -962,12 +962,13 @@ r.put('/process/:pid', (req, res) => {
     if (b.submit && draft) { draft = false; done = false; saResponse = null; }
     if (done) draft = false;
     if (b.recall && !done) draft = true; // taken back from the SAC list to work on: a draft again
-    // The Technical Fit is approved on a named architect's behalf: nobody approves it with no solution architect picked.
+    // The Technical Fit is approved on a named architect's behalf: nobody approves it with no solution architect picked,
+    // apart from an admin or a BD team lead, who can approve in the architect's place.
     // With the last architect taken off it, an approval made on their behalf goes too.
     const hadArchitects = cleanReviews(json.parse(p.reviews, {})).technical.people.length > 0;
     const hasArchitects = cleanReviews(b.reviews !== undefined ? b.reviews : json.parse(p.reviews, {})).technical.people.length > 0;
-    if (saResponse === 'approve' && !hasArchitects) {
-      if (p.sa_response !== 'approve') return res.status(400).json({ error: 'Pick the solution architect who approved the Technical Fit before approving it' });
+    if (saResponse === 'approve' && !hasArchitects && !mayApproveForSa(req.user)) {
+      if (p.sa_response !== 'approve') return res.status(400).json({ error: 'Pick the solution architect who approved the Technical Fit before approving it. Only an admin or a BD team lead approves in their place.' });
       if (hadArchitects) saResponse = null;
     }
     const gate = gateDecision({ step_type: type, qualification: b.qualification !== undefined ? b.qualification : json.parse(p.qualification, {}), sa_response: saResponse, gate_override: override, draft }, gateRule());

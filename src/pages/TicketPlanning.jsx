@@ -254,13 +254,14 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpe
   const [date, setDate] = useState('');
   const [criticality, setCriticality] = useState(() => defaultCriticality(ticket.pipeline_status)); // As Available from Prospecting
   const [openId, setOpenId] = useState(initialOpen);
+  const [canApproveForSa, setCanApproveForSa] = useState(false); // an admin or a BD team lead: approves a Technical Fit with no architect named
   const [gateRule, setGateRule] = useState(''); // what makes a qualified lead, in a sentence (set in the pipeline's settings)
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const dirty = useRef(false);
   const setDirty = (v) => { dirty.current = v; onDirty?.(v); };
   useEffect(() => {
-    api.get(`/tickets/${ticket.id}/process`).then((d) => { setSteps(d.steps); setGateRule(d.gate_rule || ''); }).catch((e) => setError(e.message));
+    api.get(`/tickets/${ticket.id}/process`).then((d) => { setSteps(d.steps); setGateRule(d.gate_rule || ''); setCanApproveForSa(!!d.can_approve_for_sa); }).catch((e) => setError(e.message));
     api.get('/users').then((d) => setUsers(d.users));
   }, [ticket.id]);
   // A Prospecting lead opens on its Initial Gate Review form, unless something else was asked for.
@@ -341,7 +342,7 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpe
         {sorted && sorted.length > 0 && (
           <ol className="relative space-y-3 before:absolute before:top-3 before:bottom-3 before:left-[11px] before:w-px before:bg-slate-200">
             {sorted.map((s) => (
-              <ProcessStep key={s.id} step={s} open={openId === s.id} onToggle={() => toggle(s.id)} byId={byId} userOptions={userOptions} users={users} gateRule={gateRule}
+              <ProcessStep key={s.id} step={s} open={openId === s.id} onToggle={() => toggle(s.id)} byId={byId} userOptions={userOptions} users={users} gateRule={gateRule} canApproveForSa={canApproveForSa}
                 onDirty={setDirty} apply={apply}
                 onDeleted={() => { setDirty(false); setOpenId(null); }} />
             ))}
@@ -352,7 +353,7 @@ function ProcessDrawer({ ticket, onClose, onChanged, onDirty, openId: initialOpe
   );
 }
 
-function ProcessStep({ step: s, open, onToggle, byId, userOptions, users, gateRule, onDirty, apply, onDeleted }) {
+function ProcessStep({ step: s, open, onToggle, byId, userOptions, users, gateRule, canApproveForSa, onDirty, apply, onDeleted }) {
   const { user } = useAuth();
   const def = milestoneOf(s.step_type);
   const involved = REVIEW_AREAS.filter((a) => s.reviews[a.key].people.length || s.reviews[a.key].notes);
@@ -403,7 +404,7 @@ function ProcessStep({ step: s, open, onToggle, byId, userOptions, users, gateRu
           </div>
           {open ? <ChevronDown size={15} className="mt-0.5 shrink-0 text-slate-400" /> : <ChevronRight size={15} className="mt-0.5 shrink-0 text-slate-300" />}
         </button>
-        {open && <ProcessStepEditor step={s} user={user} userOptions={userOptions} users={users} gateRule={gateRule} onDirty={onDirty} apply={apply} onDeleted={onDeleted} />}
+        {open && <ProcessStepEditor step={s} user={user} userOptions={userOptions} users={users} gateRule={gateRule} canApproveForSa={canApproveForSa} onDirty={onDirty} apply={apply} onDeleted={onDeleted} />}
       </div>
     </li>
   );
@@ -533,7 +534,7 @@ function QualificationTest({ test: q, value, onChange }) {
  * A staffing event open for editing. What it is, when it's due, how critical and a gate's decision are the ticket owner's
  * (or an admin's); the request, the blocks of work, who was there and done are anyone's, so solution architects answer here.
  */
-function ProcessStepEditor({ step: s, user, userOptions, users, gateRule, onDirty, apply, onDeleted }) {
+function ProcessStepEditor({ step: s, user, userOptions, users, gateRule, canApproveForSa, onDirty, apply, onDeleted }) {
   const { readOnly } = useContext(TicketAccess);
   const [form, setForm] = useState(() => stepForm(s));
   const [saved, setSaved] = useState(() => JSON.stringify(stepForm(s)));
@@ -553,7 +554,7 @@ function ProcessStepEditor({ step: s, user, userOptions, users, gateRule, onDirt
   // On an Initial Gate Review the Technical Fit is approved on a named architect's behalf: with none left, the approval goes.
   const setPeople = (area, v) => setForm((f) => ({
     ...f,
-    sa_response: area === 'technical' && !v.length && f.sa_response === 'approve' && milestoneOf(f.step_type).qualifies ? '' : f.sa_response,
+    sa_response: area === 'technical' && !v.length && f.sa_response === 'approve' && milestoneOf(f.step_type).qualifies && !canApproveForSa ? '' : f.sa_response,
     reviews: { ...f.reviews, [area]: { ...f.reviews[area], people: v, approved: f.reviews[area].approved.filter((id) => v.includes(id)) } },
   }));
   const def = milestoneOf(form.step_type);
@@ -690,8 +691,8 @@ function ProcessStepEditor({ step: s, user, userOptions, users, gateRule, onDirt
         {needsApproval(s.step_type) && (
           <>
             <SaChecks className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-brand-100 pt-2" value={form.sa_response} onChange={(v) => set('sa_response', v)} about={s.step_type}
-              blocked={def.qualifies && !architects.length ? { approve: NEEDS_ARCHITECT } : {}} />
-            {def.qualifies && !architects.length && form.sa_response !== 'approve' && <p className="mt-1 text-[11px] text-slate-500">To approve, first pick the solution architect at the top of this form.</p>}
+              blocked={def.qualifies && !architects.length && !canApproveForSa ? { approve: NEEDS_ARCHITECT } : {}} />
+            {def.qualifies && !architects.length && form.sa_response !== 'approve' && <p className="mt-1 text-[11px] text-slate-500">{canApproveForSa ? 'No solution architect is picked: as an admin or a BD team lead, you can approve in their place.' : 'To approve, first pick the solution architect at the top of this form. An admin or a BD team lead can approve in their place.'}</p>}
             {/* Whoever ticks Approve does it on the named architect's behalf; a saved approval keeps the name of who ticked it. */}
             {def.qualifies && form.sa_response === 'approve' && (
               <SaApprovedNote className="mt-1" architects={architects} by={s.sa_response === 'approve' && s.sa_response_by ? s.sa_response_by : users.find((u) => u.id === user.id) || user} />

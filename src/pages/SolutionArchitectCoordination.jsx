@@ -47,11 +47,12 @@ export default function SolutionArchitectCoordination() {
   const { user } = useAuth();
   const [rows, setRows] = useState(null);
   const [canRankMaster, setCanRankMaster] = useState(false);
+  const [canApproveForSa, setCanApproveForSa] = useState(false); // an admin or a BD team lead: approves a Technical Fit with no architect named
   const [error, setError] = useState('');
   const [open, setOpen] = useState(null); // { ticket_id, id } of the event whose pane is open, or { ticket_id, staff } to staff a ticket
   const [showDone, setShowDone] = useStored('sac.done', false, { valid: (v) => typeof v === 'boolean' });
   const [architects, setArchitects] = useState([]); // the solution architects who can be staffed
-  const take = (d) => { setRows(d.rows); setCanRankMaster(!!d.can_rank_master); setArchitects(d.architects || []); };
+  const take = (d) => { setRows(d.rows); setCanRankMaster(!!d.can_rank_master); if ('can_approve_for_sa' in d) setCanApproveForSa(!!d.can_approve_for_sa); setArchitects(d.architects || []); };
   const load = () => api.get(`/sac${showDone ? '?done=1' : ''}`).then(take).catch((e) => setError(e.message));
   useEffect(() => { setRows(null); load(); }, [showDone]); // eslint-disable-line react-hooks/exhaustive-deps
   // A request written in a row is the Request block of that event's form: the list reloads, and a pane open on the same
@@ -159,7 +160,7 @@ export default function SolutionArchitectCoordination() {
                   )}
                   {rows?.length > 0 && !shown.length && <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">No staffing events match.</td></tr>}
                   {shown.map((r, i) => (
-                    <Row key={r.id} row={r} n={i + 1} draggable={canDrag && (scope === 'all' || r.mine)} selected={open?.id === r.id} user={user} architects={architects}
+                    <Row key={r.id} row={r} n={i + 1} draggable={canDrag && (scope === 'all' || r.mine)} selected={open?.id === r.id} user={user} architects={architects} canApproveForSa={canApproveForSa}
                       onOpen={() => setOpen({ ticket_id: r.ticket_id, id: r.id })} run={run} onRequestSaved={requestSaved} />
                   ))}
                 </tbody>
@@ -174,7 +175,7 @@ export default function SolutionArchitectCoordination() {
   );
 }
 
-function Row({ row: r, n, draggable, selected, onOpen, run, architects, onRequestSaved }) {
+function Row({ row: r, n, draggable, selected, onOpen, run, architects, onRequestSaved, canApproveForSa }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: r.id, disabled: !draggable });
   const def = milestoneOf(r.step_type);
   const stop = (e) => e.stopPropagation();
@@ -251,7 +252,7 @@ function Row({ row: r, n, draggable, selected, onOpen, run, architects, onReques
       <td className="px-3 py-3" onClick={stop}>
         {needsApproval(r.step_type) ? (
           <SaChecks className="space-y-1" value={r.sa_response} disabled={!!r.completed_at} about={`${r.step_type} for ${r.title}`}
-            blocked={def.qualifies && !r.architects.length ? { approve: NEEDS_ARCHITECT } : {}}
+            blocked={def.qualifies && !r.architects.length && !canApproveForSa ? { approve: NEEDS_ARCHITECT } : {}}
             onChange={(v) => saved(api.put(`/tickets/process/${r.id}`, { sa_response: v })).catch((e) => alert(e.message))} />
         ) : <span className="text-xs text-slate-400" title="Only gate reviews and estimates are approved or denied">No approval needed</span>}
         {def.qualifies && r.sa_response === 'approve' && <SaApprovedNote className="mt-1 whitespace-normal" by={r.sa_response_by} architects={r.architects} />}

@@ -28,18 +28,19 @@ export function SaChecks({ value, onChange, disabled = false, about = '', classN
 }
 
 /** Why an Initial Gate Review's Technical Fit can't be approved yet: no solution architect is named on it. */
-export const NEEDS_ARCHITECT = 'Pick the solution architect who approved it first';
+export const NEEDS_ARCHITECT = 'Pick the solution architect who approved it first. An admin or a BD team lead can approve in their place.';
 
 /**
  * Under an approved Technical Fit: who ticked Approve (`by`) and the solution architects named on the review, whose approval
- * it is. An architect who ticks it themselves is just "Approved by".
+ * it is. An architect who ticks it themselves is just "Approved by". With no architect named, it was approved in the
+ * architect's place (by an admin or a BD team lead).
  */
 export function SaApprovedNote({ by, architects, className = '' }) {
   if (!by) return null;
   const name = (u) => [u.first_name, u.last_name].filter(Boolean).join(' ');
   const others = architects.filter((u) => u.id !== by.id).map(name);
   const list = others.length > 1 ? `${others.slice(0, -1).join(', ')} and ${others[others.length - 1]}` : others[0];
-  return <p className={`text-[11px] text-emerald-800 ${className}`}>Approved by <span className="font-semibold">{name(by)}</span>{list && <> on behalf of <span className="font-semibold">{list}</span></>}</p>;
+  return <p className={`text-[11px] text-emerald-800 ${className}`}>Approved by <span className="font-semibold">{name(by)}</span>{list ? <> on behalf of <span className="font-semibold">{list}</span></> : !architects.length && ' in place of the solution architect'}</p>;
 }
 
 /** The response's links and documents. A link opens where it lives; a document downloads. `canRemove(file)` shows its remove button. */

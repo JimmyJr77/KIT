@@ -141,6 +141,11 @@ export function saveGateRule(input) {
   setSetting('gate_rule', json.str(rule));
   return rule;
 }
+/**
+ * Whether this person can approve an Initial Gate Review's Technical Fit in the solution architect's place, with no
+ * architect named on it: an admin or a BD team lead.
+ */
+export const mayApproveForSa = (user) => mayEditGateRule(user);
 /** Whether this person can change what makes a qualified lead: an admin or a BD team lead. */
 export function mayEditGateRule(user) {
   if (!user) return false;
